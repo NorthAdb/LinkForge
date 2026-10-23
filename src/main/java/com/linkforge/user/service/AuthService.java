@@ -15,6 +15,7 @@ import com.linkforge.user.mapper.TenantMapper;
 import com.linkforge.user.mapper.UserAccountMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -31,6 +32,7 @@ public class AuthService {
     private final JwtService jwtService;
     private final RedisRateLimiter rateLimiter;
     private final LinkForgeProperties properties;
+    private final MeterRegistry meterRegistry;
 
     public LoginResponse login(LoginRequest request) {
         Tenant tenant = tenantMapper.selectOne(new LambdaQueryWrapper<Tenant>()
@@ -57,6 +59,7 @@ public class AuthService {
         LinkForgeProperties.RateLimit limit = properties.getRateLimit();
         String key = limit.getKeyPrefix() + "register:" + ClientIps.resolve(httpRequest, limit.isTrustXff());
         if (!rateLimiter.tryAcquire(key, limit.getRegisterMax(), limit.getRegisterWindowSeconds())) {
+            meterRegistry.counter("linkforge.ratelimit.rejected", "entry", "register").increment();
             throw new BizException(429, "too many requests, retry later");
         }
 
