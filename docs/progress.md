@@ -297,8 +297,42 @@ docker compose start rabbitmq && sleep 10 && curl -s http://localhost:8080/actua
 - 复现命令不变（见上），全量测试期望 **41/41 绿**；`bash scripts/mq-drill.sh` 期望 DRILL OK；对账 SQL 期望相等。
 
 自审中评估后**不改**的两点（记录供审计人参断）：
-- 跳转路径每次仍读 DB 行做禁用/过期判定（缓存只省 URL 字段）：这是**主动选择**——只信缓存会让禁用/过期在 TTL 内放行 302，正确性优先于该读优化；P4 压测时再量化。
-- 未鉴权访问管理接口返回 403（Spring Security 默认）而非 401：不影响验收语义（跨用户一律 404 才是关键路径），改 entry point 属锦上添花，P4/P5 再议。
+- 跳转路径每次仍读 DB 行做禁用/过期判定（缓存只省 URL 字段）：这是**主动选择**——只信缓存会让禁用/过期在 TTL 内放行 302，正确性优先于该读优化；P4 压测时再量化。（审计 L8 同判，留 P4 bench 量化。）
+- 未鉴权访问管理接口返回 403（Spring Security 默认）而非 401：**R2 已改为统一 401 JSON**（见追加迭代），本条已过时。
+
+---
+
+## 审计修复轮（依据《LinkForge-P0-P3-内审报告》，2026-10-24）
+
+审计结论：P0–P3 基线带条件通过；建议开 P4 前先修 M1。本轮处置如下。
+
+### 已修（feat 分支 fix/audit-p0-p3）
+
+| ID | 审计问题 | 修复 | 证据 |
+|----|----------|------|------|
+| M1 | URL 校验过弱：CRLF URL 创建 200、跳转 500、先记账后炸 | create/update 增加控制字符拒绝 + `URI` 严格解析（400）；跳转对存量脏目标先校验后记账，非法 → 410 且不写 click_log 不进缓存 | `LinkLifecycleTest` 新增 3 例（CRLF/空格/NUL 创建 400、PATCH 非法 400、脏行 410+零点击+零缓存）；**审计攻击串原样重放实测 400**（原 200/500） |
+| M2 | 注册非事务，可能留孤儿租户占名 | `register` 加 `@Transactional`（租户+用户同事务） | `RegisterFlowTest.concurrentSameTenantNameLeavesSingleTenantAndUser`：并发同名注册恰一 200 一 409，库中 1 租户 1 用户 |
+| M5 | 幂等 pending 超时后强行二建（同键两码） | 轮询未 settle → 503「retry later」，不再 doCreate | `stalePendingKeyReturns503InsteadOfSecondLink`：预置 pending 键 → 503 + 0 新链 |
+| L6 | progress 陈旧句（403 已被 R2 改 401） | 上文已加注 | — |
+| L7 | 保留字 `api`/`r` 死代码（长度 <4 永远 pattern 先拦） | 从 RESERVED_CODES 移除，集合只留 ≥4 字符 | CustomCodeTest 回归绿 |
+| L3/L4 | health 细节/Swagger/控制台匿名可达（本地 Demo 取向） | README 配置要点新增「公网部署前须收紧」清单 | 文档 |
+| L5 | Linux 复现缺 host 网络说明 | README 新增「Linux 复现提示」（--network host + 127.0.0.1 / 172.17.0.1），注明审计环境已按此复现 | 文档 |
+| L9 | IPv4/IPv6 双限流桶 | README 限流段注明为预期现象 | 文档 |
+| M3 | 关 sync 后发布失败不可追平 | README 关同步段改为 ⚠️ 醒目警告（无 outbox、必须先对账、接受降级边界） | 文档 |
+
+### 搁置到 P4（按运营者指示，与审计优先级建议一致）
+
+- L1 GitHub Actions CI（JDK17 + mvn test）
+- M4 Testcontainers 或等价测试隔离（当前集成测试绑定共享 Compose）
+- L2 Flyway/Liquibase 或 scripts/migrate.sh
+- L8 跳转缓存不省 DB 读的 bench 量化（决定是否版本号缓存）
+- L11 CI 中用 secrets 覆盖测试默认口令
+- bench.md 压测数字、架构图、简历条目（P4 主体工作）
+
+### 验证
+
+- `mvn -B test` → **Tests run: 46, Failures: 0, Errors: 0**（41 + 新增 5）
+- `bash scripts/smoke.sh` → SMOKE OK；审计 M1 攻击串真机重放 → **400**；对账 211=211 闭合
 
 ### 审计材料（更新）
 

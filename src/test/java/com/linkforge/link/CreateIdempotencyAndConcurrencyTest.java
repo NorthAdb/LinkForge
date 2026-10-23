@@ -2,9 +2,12 @@ package com.linkforge.link;
 
 import com.linkforge.AbstractIntegrationTest;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -26,6 +29,9 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 })
 @ActiveProfiles("test")
 class CreateIdempotencyAndConcurrencyTest extends AbstractIntegrationTest {
+
+    @Autowired
+    private StringRedisTemplate redis;
 
     @Test
     void idempotencyKeyReplaysSameLink() throws Exception {
@@ -109,5 +115,27 @@ class CreateIdempotencyAndConcurrencyTest extends AbstractIntegrationTest {
         String token = registerForToken();
         String url = "https://example.com/nokey-" + System.currentTimeMillis();
         assertNotEquals(createLink(token, url), createLink(token, url));
+    }
+
+    @Test
+    void stalePendingKeyReturns503InsteadOfSecondLink() throws Exception {
+        var reg = postJson("/api/auth/register", om.writeValueAsString(Map.of(
+                "tenantName", unique("t"), "username", unique("u"), "password", "it-pass-123456")), null);
+        long userId = body(reg).path("data").path("userId").asLong();
+        String token = body(reg).path("data").path("token").asText();
+
+        // simulate a winner that vanished between SETNX and writing its final code
+        redis.opsForValue().set("linkforge:rl:it-p3:idem:" + userId + ":it-stale",
+                "pending", Duration.ofSeconds(60));
+
+        var resp = postJsonWithHeader("/api/links",
+                om.writeValueAsString(Map.of("originalUrl", "https://example.com/stale")),
+                token, "Idempotency-Key", "it-stale");
+        assertEquals(503, resp.getStatusCode().value(), resp.getBody());
+        assertEquals(503, body(resp).path("code").asInt());
+
+        var list = get("/api/links?page=1&size=100", token);
+        assertEquals(0, body(list).path("data").path("total").asLong(),
+                "no second link may be minted behind a stuck pending key");
     }
 }

@@ -19,6 +19,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 
@@ -52,9 +53,11 @@ public class AuthService {
     }
 
     /**
-     * Open registration: each request creates a brand-new tenant and its first user.
-     * The unique index on tenant name is the concurrency backstop for the 409 check.
+     * Open registration: each request creates a brand-new tenant and its first user in
+     * one transaction, so a failed user insert cannot leave an orphan tenant squatting
+     * on the unique name. The unique index is the 409 backstop under races.
      */
+    @Transactional
     public LoginResponse register(RegisterRequest request, HttpServletRequest httpRequest) {
         LinkForgeProperties.RateLimit limit = properties.getRateLimit();
         String key = limit.getKeyPrefix() + "register:" + ClientIps.resolve(httpRequest, limit.isTrustXff());
