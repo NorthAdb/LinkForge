@@ -11,7 +11,11 @@
 | P0 | 落地卫生 | feat/p0-hygiene | ✅ 完成（见下） |
 | P1 | 短链闭环 | feat/p1-links | ✅ 完成（见下） |
 | P2 | 异步分析 | feat/p2-async-stats | ✅ 完成（见下） |
-| P3 | 可靠性 | feat/p3-reliability | ✅ 完成（见下，本轮终点） |
+| P3 | 可靠性 | feat/p3-reliability | ✅ 完成（见下） |
+| 自审 | R1 缺陷修复 | fix/self-review-p0-p3 | ✅ 完成（见下） |
+| 追加 | R2 生命周期+自定义短码 | feat/rev2-lifecycle | ✅ 完成（见「追加迭代」） |
+| 追加 | R3 点击明细/UV/CSV | feat/rev3-analytics | ✅ 完成（见「追加迭代」） |
+| 追加 | R4 可观测/OpenAPI/控制台 | feat/rev4-polish | ✅ 完成（见「追加迭代」） |
 
 ## 环境与工具事实（审计人须知）
 
@@ -253,6 +257,45 @@ docker compose start rabbitmq && sleep 10 && curl -s http://localhost:8080/actua
 
 自审后全套验证：`mvn -B test` → **Tests run: 27, Failures: 0, Errors: 0**（新增 1 个 XFF 用例）；`bash scripts/smoke.sh` → SMOKE OK；`/actuator/health` 200；对账等式闭合。
 
+---
+
+## 追加迭代 R2–R4（运营者 2026-10-24 授权：审计前由开发侧继续功能迭代）
+
+> 原计划「P3 后停轮待审」，运营者 2026-10-24 指示先在开发侧多轮迭代功能再交审计。P4 工程化项（CI、bench.md 压测数字、简历条目）**仍留待审计后**；AI 仍不做。审计基线：P0–P3 终态 103a199、自审终态 447dfdb，可单独核对。
+
+### R2 生命周期补全 + 自定义短码（D6 的 P5 项提前，9307a19）
+
+- `DELETE /api/links/{code}` 逻辑删除（短码因 uk_code 永久保留不可复用，已文档化）；`POST /{code}/enable` 与 disable 对称；`PATCH` 支持改 `expireAt`（仅未来时间）
+- `customCode`：4-16 位 `[A-Za-z0-9_-]`、保留字黑名单（api/r/actuator/health/auth/export 等）、被占用（含跨用户、含已删除码）→ 409；随机码与自定义码共用唯一索引，并发安全
+- 未鉴权访问管理接口从 403 改为统一 401 JSON
+- 测试：CustomCodeTest×5（占用/非法/保留字/删除后保留/跨用户隔离）+ LinkLifecycle 新增 4 例 → **36/36 绿**
+
+### R3 访问分析增强（391e5f2）
+
+- `GET /api/links/{code}/clicks`：点击明细（时间/IP/UA/Referer，新到旧分页，仅链主）
+- stats 增加精确 UV：按天 `COUNT(DISTINCT ip)` 与窗口总 UV，全部来自 D7 同步明细（不需要近似算法；README 已注明关同步后该能力仅覆盖历史数据）
+- `GET /api/links/export`：本人短链 CSV（UTF-8 BOM、逗号/引号转义、上限 1 万行）
+- 测试：StatsApiTest 新增 UV+明细用例、CsvExportTest×2（隔离与转义）→ **39/39 绿**（R3 时点）
+
+### R4 可观测 + OpenAPI + 极简控制台（c1ecd46）
+
+- Micrometer 业务计数器：`linkforge.links.created`、`linkforge.redirects`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`；`/actuator/metrics/**` 需 Bearer（不扩大匿名面）
+- springdoc 2.6.0：`/v3/api-docs` + `/swagger-ui/index.html`（放行文档路径）
+- D4 允许的**纯静态极简控制台**（单文件 vanilla JS，非 SPA）：登录/注册、建链（自定义码+过期时间）、分页列表、启停/删除、点击与 UV 统计、CSV 入口；`http://localhost:8080/`
+- 测试：ObservabilityTest×2（计数器值断言、api-docs/swagger/静态页可达）→ **41/41 绿**
+- 真机验证：SMOKE OK；`/` 返回控制台；swagger-ui 200 且 api-docs 列出全部端点；`linkforge.redirects` 计数与冒烟跳转数一致
+
+### 追加迭代后的对账与终态
+
+- 对账等式持续成立（R4 冒烟后实测 detail=188 == aggregate=188）
+- 全套测试 **41/41 绿**（Docker JDK17）；冒烟 SMOKE OK；应用运行中
+
+### 审计材料（R2–R4 后更新）
+
+- 仓库：https://github.com/NorthAdb/LinkForge（分支 main，**追加迭代后终态 commit：c1ecd46**）
+- 审计分层：P0–P3 首轮终态 103a199 → 自审修复终态 447dfdb → 追加迭代 R2/R3/R4（9307a19 / 391e5f2 / c1ecd46）。审计人可任选基线层次核对；R2 的自定义短码属 P5 项提前实施（运营者 2026-10-24 授权），请按 P5 验收口径（字符集/保留字/唯一冲突）审。
+- 复现命令不变（见上），全量测试期望 **41/41 绿**；`bash scripts/mq-drill.sh` 期望 DRILL OK；对账 SQL 期望相等。
+
 自审中评估后**不改**的两点（记录供审计人参断）：
 - 跳转路径每次仍读 DB 行做禁用/过期判定（缓存只省 URL 字段）：这是**主动选择**——只信缓存会让禁用/过期在 TTL 内放行 302，正确性优先于该读优化；P4 压测时再量化。
 - 未鉴权访问管理接口返回 403（Spring Security 默认）而非 401：不影响验收语义（跨用户一律 404 才是关键路径），改 entry point 属锦上添花，P4/P5 再议。
@@ -262,7 +305,7 @@ docker compose start rabbitmq && sleep 10 && curl -s http://localhost:8080/actua
 - 仓库：https://github.com/NorthAdb/LinkForge（分支 main，**自审后终态 commit：447dfdb**；P0–P3 首轮终态合并 103a199）
 - 复现环境：Windows + Docker Desktop + Git Bash；`cp .env.example .env && docker compose up -d`（等三容器 healthy，mysql 首次初始化约 5 分钟）
 - 复现命令清单（按序执行，全部应绿）：
-  1. `MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD":/app -v linkforge_m2:/root/.m2 -w/app -e SPRING_DATASOURCE_URL="jdbc:mysql://host.docker.internal:3306/linkforge?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false" -e SPRING_DATASOURCE_PASSWORD=linkforge_pass -e SPRING_DATA_REDIS_HOST=host.docker.internal -e SPRING_RABBITMQ_HOST=host.docker.internal -e SPRING_RABBITMQ_PASSWORD=linkforge_pass -e JWT_SECRET=test-secret-at-least-32-characters-long!! maven:3.9-eclipse-temurin-17 mvn -B test`（期望 27/27 绿）
+  1. `MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD":/app -v linkforge_m2:/root/.m2 -w/app -e SPRING_DATASOURCE_URL="jdbc:mysql://host.docker.internal:3306/linkforge?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false" -e SPRING_DATASOURCE_PASSWORD=linkforge_pass -e SPRING_DATA_REDIS_HOST=host.docker.internal -e SPRING_RABBITMQ_HOST=host.docker.internal -e SPRING_RABBITMQ_PASSWORD=linkforge_pass -e JWT_SECRET=test-secret-at-least-32-characters-long!! maven:3.9-eclipse-temurin-17 mvn -B test`（期望 41/41 绿；447dfdb 时点为 27/27）
   2. 构建并启动：同上镜像 `mvn -B -DskipTests package` → `set -a && . ./.env && set +a && java -jar target/linkforge-0.0.1-SNAPSHOT.jar`
   3. `bash scripts/smoke.sh`（期望 SMOKE OK）
   4. `bash scripts/mq-drill.sh`（期望 DRILL OK：断 MQ 302 不丢、恢复追平）
