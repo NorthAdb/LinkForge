@@ -1,5 +1,6 @@
 package com.linkforge.stats.mapper;
 
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.linkforge.stats.entity.ClickDaily;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
@@ -10,7 +11,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 @Mapper
-public interface ClickDailyMapper {
+public interface ClickDailyMapper extends BaseMapper<ClickDaily> {
 
     @Insert("INSERT INTO lf_click_daily(tenant_id, link_id, code, stat_date, clicks) "
             + "VALUES(#{tenantId}, #{linkId}, #{code}, #{statDate}, 1) "

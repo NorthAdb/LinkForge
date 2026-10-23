@@ -34,7 +34,10 @@ class RateLimitTest extends AbstractIntegrationTest {
     void redirectBeyondPerIpLimitReturns429() throws Exception {
         String token = registerForToken();
         String code = createLink(token, "https://example.com/rl-redirect");
-        for (int i = 0; i < 3; i++) {
+        var spoofed = getWithHeader("/r/" + code, null, "X-Forwarded-For", "9.9.9.9");
+        assertEquals(302, spoofed.getStatusCode().value(),
+                "a spoofed XFF must not buy an extra window by default: " + spoofed.getBody());
+        for (int i = 0; i < 2; i++) {
             var ok = get("/r/" + code, null);
             assertEquals(302, ok.getStatusCode().value(), "redirect " + i);
         }

@@ -32,7 +32,7 @@ public class ClickRecordService {
      */
     public void recordClick(ShortLink link, HttpServletRequest request) {
         LocalDateTime now = LocalDateTime.now();
-        String ip = ClientIps.resolve(request);
+        String ip = ClientIps.resolve(request, properties.getRateLimit().isTrustXff());
         String ua = truncate(request.getHeader("User-Agent"), 512);
         String referer = truncate(request.getHeader("Referer"), 512);
 

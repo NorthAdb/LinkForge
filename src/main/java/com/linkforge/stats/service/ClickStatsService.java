@@ -35,30 +35,27 @@ public class ClickStatsService {
     }
 
     /**
-     * Idempotent consume. The dedup insert runs in its own short transaction and a
-     * DuplicateKeyException there means the eventId already counted; catching it inside
-     * the outer flow is safe because no outer transaction is poisoned.
+     * Idempotent consume. Dedup insert and daily increment share one short
+     * transaction, so a crash between them can neither double count nor silently
+     * drop a click. A duplicate key inside the callback is a plain skip: MySQL
+     * rolls back only the failed statement.
      */
     public boolean consume(ClickEvent event) {
-        boolean isNew = Boolean.TRUE.equals(dedupTx.execute(status -> {
+        LocalDate date = event.getClickedAt() != null
+                ? event.getClickedAt().toLocalDate()
+                : LocalDate.now();
+        return Boolean.TRUE.equals(dedupTx.execute(status -> {
             try {
                 ConsumedEvent row = new ConsumedEvent();
                 row.setEventId(event.getEventId());
                 row.setConsumedAt(LocalDateTime.now());
                 consumedEventMapper.insert(row);
-                return true;
             } catch (DuplicateKeyException ex) {
                 return false;
             }
+            clickDailyMapper.incrementClick(event.getTenantId(), event.getLinkId(), event.getCode(), date);
+            return true;
         }));
-        if (!isNew) {
-            return false;
-        }
-        LocalDate date = event.getClickedAt() != null
-                ? event.getClickedAt().toLocalDate()
-                : LocalDate.now();
-        clickDailyMapper.incrementClick(event.getTenantId(), event.getLinkId(), event.getCode(), date);
-        return true;
     }
 
     public LinkStatsResponse stats(Long linkId, String code, int days) {

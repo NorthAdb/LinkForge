@@ -43,6 +43,10 @@
 | 17 | P3 | 缓存失效升级为「写穿 + 1s 延迟双删」；P1 的删除式失效测试同步改为写穿断言 | 清除并发旧值回填；最终一致窗口 ~1s 明确可测 |
 | 18 | P3 | management 配置从 dev-profile 文档移到基础文档 | 原先 test profile 下整段失效，health 组件细节不显示（HealthEndpointTest 抓到） |
 | 19 | P3 | RegisterRateLimitTest 窗口 2s→10s + 每次运行前清计数键 | 2s 窗口在负载下跨窗口翻转造成偶发 200；测试须确定性可重跑 |
+| 20 | 自审 | ClientIps 默认不信任 X-Forwarded-For，新增 `LINKFORGE_TRUST_XFF`（默认 false） | 该头可伪造，直连场景可无限绕开三个按 IP 限流；仅可信反代后开启。新增 RateLimitTest 伪造头用例与 XffTrustTest 独立窗口用例 |
+| 21 | 自审 | RedisRateLimiter 的 EXPIRE 纳入降级保护，失败时尽力删键 | 原实现 INCR 有保护而 EXPIRE 裸奔：Redis 抖动会 500，且「INCR 成功 EXPIRE 失败」留下永不过期的键造成永久 429 |
+| 22 | 自审 | consume() 的去重插入与聚合计数并入同一短事务 | 原两事务间崩溃窗口会少计且对账器永久跳过该行；MySQL 语句级回滚语义下合并安全 |
+| 23 | 自审 | 合成统计测试自清理（@AfterEach 删 daily/consumed 行）；历史污染一次性 TRUNCATE 后由对账器从明细重建 | 自审实测对账等式 87≠118（合成事件无对应明细），审计命令会当场翻车；重建后 104=104=104 实证闭合 |
 
 ---
 
@@ -234,13 +238,31 @@ docker compose start rabbitmq && sleep 10 && curl -s http://localhost:8080/actua
 - 已知缺口（仅限 P4/P5 范围项）：CI（GitHub Actions）、bench.md 压测数字、测试矩阵归档（当前集成测试已覆盖 P1–P3 关键路径但未做 Testcontainers 化）、简历条目、自定义短码/CSV/极简页/OpenAPI（P5）
 - 明确未做（按约束）：前端、AI、自定义短码、云部署、Sa-Token、RocketMQ
 
-### 审计材料（发给实习JAVA_AI）
+## 自审迭代记录（P3 停轮后、移交审计前）
 
-- 仓库：https://github.com/NorthAdb/LinkForge（分支 main，**P0–P3 终态 commit：103a199**）
-- 各阶段分支：feat/p0-hygiene / feat/p1-links / feat/p2-async-stats / feat/p3-reliability（均已推远端）
+按审计人视角自查一轮，发现并修复 4 个真实缺陷、2 处文档问题；全部有测试或实测证据。
+
+| # | 发现 | 严重度 | 修复与证据 |
+|---|------|--------|-----------|
+| F1 | X-Forwarded-For 被无条件信任，伪造该头可绕开注册/跳转两个按 IP 限流（无限开租户） | 高 | `LINKFORGE_TRUST_XFF` 默认 false 只取 socket 地址；RateLimitTest 加入伪造头用例（4th 仍 429）、新增 XffTrustTest（trust=true 时独立窗口） |
+| F2 | RedisRateLimiter 的 EXPIRE 无降级保护：Redis 抖动时请求 500；「INCR 成功 EXPIRE 失败」留下永不过期键 → 达到阈值后永久 429 | 高 | EXPIRE 纳入 try，失败尽力删键自愈；degrade-open 语义补全 |
+| F3 | ClickStatsService.consume 去重插入与聚合计数分属两事务，中间崩溃少计且对账器永久跳过 | 中 | 两语句并入同一短事务（MySQL 语句级回滚语义下安全）；ClickIdempotencyTest 复跑全绿 |
+| F4 | 合成统计测试数据打穿对账等式：实测 detail=87 vs aggregate=118，审计命令第 6 条会当场失败 | 高 | 测试 @AfterEach 自清理；历史污染 TRUNCATE 后对账器从明细重建，实测 104=104=104、reconciler 日志 `reconciled 104 click rows`；随后冒烟再跑仍 106=106 |
+| F5 | README 两处陈旧文案（stats 包注释仍写 stub 消费者；「下一期」表仍把幂等/限流/异步列为未做） | 低 | 已改为现状（P0–P3 已交付、P4/P5 待审计后另定） |
+| F6 | 存量数据卷无迁移说明（lf_click_daily/lf_consumed_event 仅新卷自动建表） | 低 | README 增补迁移注记（CREATE TABLE IF NOT EXISTS 幂等可重跑） |
+
+自审后全套验证：`mvn -B test` → **Tests run: 27, Failures: 0, Errors: 0**（新增 1 个 XFF 用例）；`bash scripts/smoke.sh` → SMOKE OK；`/actuator/health` 200；对账等式闭合。
+
+自审中评估后**不改**的两点（记录供审计人参断）：
+- 跳转路径每次仍读 DB 行做禁用/过期判定（缓存只省 URL 字段）：这是**主动选择**——只信缓存会让禁用/过期在 TTL 内放行 302，正确性优先于该读优化；P4 压测时再量化。
+- 未鉴权访问管理接口返回 403（Spring Security 默认）而非 401：不影响验收语义（跨用户一律 404 才是关键路径），改 entry point 属锦上添花，P4/P5 再议。
+
+### 审计材料（更新）
+
+- 仓库：https://github.com/NorthAdb/LinkForge（分支 main，**自审后 commit 见 git log 最新**，P0–P3 终态合并 103a199 + 自审修复提交）
 - 复现环境：Windows + Docker Desktop + Git Bash；`cp .env.example .env && docker compose up -d`（等三容器 healthy，mysql 首次初始化约 5 分钟）
 - 复现命令清单（按序执行，全部应绿）：
-  1. `MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD":/app -v linkforge_m2:/root/.m2 -w/app -e SPRING_DATASOURCE_URL="jdbc:mysql://host.docker.internal:3306/linkforge?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false" -e SPRING_DATASOURCE_PASSWORD=linkforge_pass -e SPRING_DATA_REDIS_HOST=host.docker.internal -e SPRING_RABBITMQ_HOST=host.docker.internal -e SPRING_RABBITMQ_PASSWORD=linkforge_pass -e JWT_SECRET=test-secret-at-least-32-characters-long!! maven:3.9-eclipse-temurin-17 mvn -B test`（期望 26/26 绿）
+  1. `MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD":/app -v linkforge_m2:/root/.m2 -w/app -e SPRING_DATASOURCE_URL="jdbc:mysql://host.docker.internal:3306/linkforge?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false" -e SPRING_DATASOURCE_PASSWORD=linkforge_pass -e SPRING_DATA_REDIS_HOST=host.docker.internal -e SPRING_RABBITMQ_HOST=host.docker.internal -e SPRING_RABBITMQ_PASSWORD=linkforge_pass -e JWT_SECRET=test-secret-at-least-32-characters-long!! maven:3.9-eclipse-temurin-17 mvn -B test`（期望 27/27 绿）
   2. 构建并启动：同上镜像 `mvn -B -DskipTests package` → `set -a && . ./.env && set +a && java -jar target/linkforge-0.0.1-SNAPSHOT.jar`
   3. `bash scripts/smoke.sh`（期望 SMOKE OK）
   4. `bash scripts/mq-drill.sh`（期望 DRILL OK：断 MQ 302 不丢、恢复追平）
