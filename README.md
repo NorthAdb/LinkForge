@@ -47,6 +47,8 @@ com.linkforge
 
 ## 快速开始
 
+前置：JDK 17、Maven 3.9+、Docker Desktop。没有本地 Maven 或 JDK17 时，编译可走下方 Docker 镜像路径。
+
 ### 1. 启动依赖（Docker Compose）
 
 在仓库根目录执行。Compose 不再内置数据库或 MQ 口令，必须先有 `.env`：
@@ -63,6 +65,13 @@ Compose 读取 `MYSQL_ROOT_PASSWORD`、`MYSQL_PASSWORD`、`RABBITMQ_PASSWORD`（
 
 ```bash
 mvn -q -DskipTests package
+```
+
+无本地 Maven / JDK17 时，用 Docker 里的 JDK17 Maven 构建（Windows PowerShell 把 `$PWD` 换成 `${PWD}`）：
+
+```bash
+docker run --rm -v "$PWD":/app -v linkforge_m2:/root/.m2 -w /app \
+  maven:3.9-eclipse-temurin-17 mvn -B package
 ```
 
 ### 3. 运行应用
@@ -108,8 +117,14 @@ curl -s -X POST http://localhost:8080/api/links \
   -H 'Content-Type: application/json' \
   -d '{"originalUrl":"https://example.com","title":"demo"}'
 
-# 302 跳转（把 CODE 换成返回的 code）
-curl -sI http://localhost:8080/r/CODE
+# 302 跳转（把 CODE 换成返回的 code；用 GET，`-I` 发 HEAD 会被安全链按未鉴权拒绝 403）
+curl -s -D - -o /dev/null http://localhost:8080/r/CODE
+```
+
+一键冒烟（仓库根目录执行，自动做 health → 登录 → 建链 → 302 → Redis 校验，口令读 `.env`）：
+
+```bash
+bash scripts/smoke.sh
 ```
 
 ## MVP 已实现接口
