@@ -143,15 +143,19 @@ bash scripts/mq-drill.sh
 | GET | `/actuator/health` | Actuator |
 | POST | `/api/auth/login` | JWT 登录 |
 | POST | `/api/auth/register` | 开放注册（新建租户+用户，返回 JWT；按 IP 限流） |
-| POST | `/api/links` | 创建短链（需 Bearer Token；可选 `expireAt`，必须为未来时间；可选 `Idempotency-Key` 请求头实现幂等重放） |
+| POST | `/api/links` | 创建短链（需 Bearer Token；可选 `expireAt` 未来时间、可选 `customCode` 自定义短码 4-16 位 `[A-Za-z0-9_-]`、可选 `Idempotency-Key` 头幂等重放） |
 | GET | `/api/links?page=&size=` | 分页列表（仅本人创建的链，size 1..100 默认 20） |
 | GET | `/api/links/{code}` | 详情：目标 URL、状态、过期时间、创建/更新时间 |
-| PATCH | `/api/links/{code}` | 改目标 URL / 备注；成功后删除 Redis 缓存 |
-| POST | `/api/links/{code}/disable` | 禁用；成功后删除 Redis 缓存 |
+| PATCH | `/api/links/{code}` | 改目标 URL / 备注 / 过期时间（未来）；成功后写穿缓存 + 延迟双删 |
+| POST | `/api/links/{code}/disable` | 禁用；缓存失效 |
+| POST | `/api/links/{code}/enable` | 重新启用（过期时间不受影响） |
+| DELETE | `/api/links/{code}` | 逻辑删除；**短码永久保留不可复用**（uk_code） |
 | GET | `/api/links/{code}/stats?days=7` | 点击统计（仅链主）：总量 + 按天序列，days 1..90 |
 | GET | `/r/{code}` | 302 跳转；Redis 缓存优先，未命中回源 MySQL；同步写 `lf_click_log` |
 
-**错误码语义（已写死）**：跳转遇 **禁用或不存在 → 404**，**过期 → 410**；管理接口的越权访问统一 **404**（不泄露他人短码存在性）；注册租户名冲突 **409**；触发限流 **429**。
+**错误码语义（已写死）**：跳转遇 **禁用或不存在 → 404**，**过期 → 410**；管理接口的越权访问统一 **404**（不泄露他人短码存在性）；未携带/无效凭证 **401**；注册租户名冲突 **409**、自定义短码被占用 **409**；触发限流 **429**。
+
+**自定义短码**：`customCode` 需 4-16 位字母/数字/下划线/连字符，保留字（api、r、actuator、health、auth 等）不可用；已被占用（含已删除链占用的码）返回 409。随机码与自定义码共用 `uk_code` 唯一索引，并发安全。
 
 **限流（P3）**：注册按 IP 5 次/10 分钟；创建按用户 30 次/分钟；公开跳转按 IP 300 次/分钟。全部为 Redis 固定窗口，超限 429，阈值见下方环境变量。限流器在 Redis 故障时放行（degrade open）。客户端 IP 默认取 socket 地址、**不信任** `X-Forwarded-For`（该头可伪造、会被用来绕限流）；仅在可信反向代理后部署时设 `LINKFORGE_TRUST_XFF=true`。
 

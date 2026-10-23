@@ -9,6 +9,7 @@ import com.linkforge.link.dto.UpdateShortLinkRequest;
 import com.linkforge.link.service.ShortLinkService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -53,6 +54,18 @@ public class ShortLinkController {
     @PostMapping("/{code}/disable")
     public ApiResponse<Void> disable(@PathVariable String code) {
         shortLinkService.disable(code);
+        return ApiResponse.ok();
+    }
+
+    @PostMapping("/{code}/enable")
+    public ApiResponse<Void> enable(@PathVariable String code) {
+        shortLinkService.enable(code);
+        return ApiResponse.ok();
+    }
+
+    @DeleteMapping("/{code}")
+    public ApiResponse<Void> delete(@PathVariable String code) {
+        shortLinkService.delete(code);
         return ApiResponse.ok();
     }
 }

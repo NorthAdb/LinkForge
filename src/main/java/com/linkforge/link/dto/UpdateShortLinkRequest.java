@@ -3,6 +3,8 @@ package com.linkforge.link.dto;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
+import java.time.LocalDateTime;
+
 @Data
 public class UpdateShortLinkRequest {
 
@@ -11,4 +13,7 @@ public class UpdateShortLinkRequest {
 
     @Size(max = 128, message = "title too long")
     private String title;
+
+    /** Optional; must be in the future when present. Cannot be cleared. */
+    private LocalDateTime expireAt;
 }

@@ -16,6 +16,10 @@ public class CreateShortLinkRequest {
     @Size(max = 128, message = "title too long")
     private String title;
 
+    /** Optional user-chosen code: 4-16 chars of [A-Za-z0-9_-], not a reserved word. */
+    @Size(max = 16, message = "customCode too long")
+    private String customCode;
+
     /** Optional; must be in the future when present. */
     private LocalDateTime expireAt;
 }
