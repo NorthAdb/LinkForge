@@ -129,6 +129,8 @@ curl -s -D - -o /dev/null http://localhost:8080/r/CODE
 bash scripts/smoke.sh
 ```
 
+启动应用后打开 <http://localhost:8080/> 即是**极简控制台**（纯静态单页：登录/注册、建链（支持自定义码与过期时间）、列表、启停/删除、点击与 UV 统计、CSV 导出入口）。接口文档在 <http://localhost:8080/swagger-ui/index.html>（springdoc 生成）。
+
 MQ 宕机演练（基线聚合 → 停 Rabbit 全部 302 → 恢复后追平）：
 
 ```bash
@@ -207,6 +209,7 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 - `LINKFORGE_IDEMPOTENCY_TTL_SECONDS` 创建幂等键保留时长（默认 86400 秒）
 - `LINKFORGE_TRUST_XFF` 是否信任 X-Forwarded-For（默认 false，仅在可信反代后开启）
 - `/actuator/health` 展示组件细节（db / redis / rabbit / diskSpace），依赖 DOWN 时整体 503
+- `/actuator/metrics/**` 暴露业务计数器（`linkforge.links.created`、`linkforge.redirects`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`），需 Bearer Token
 
 ## 许可证
 

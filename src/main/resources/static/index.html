@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LinkForge</title>
+<style>
+  :root { --line: #e2e5ea; --muted: #6b7280; --accent: #2563eb; --bg: #f7f8fa; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.6 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; background: var(--bg); color: #111827; }
+  header { background: #fff; border-bottom: 1px solid var(--line); padding: 14px 24px; display: flex; justify-content: space-between; align-items: center; }
+  header h1 { font-size: 18px; margin: 0; }
+  header .who { color: var(--muted); }
+  main { max-width: 960px; margin: 24px auto; padding: 0 16px; display: flex; flex-direction: column; gap: 20px; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 16px 20px; }
+  .card h2 { font-size: 15px; margin: 0 0 12px; }
+  label { display: block; color: var(--muted); font-size: 12px; margin: 8px 0 2px; }
+  input { width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  button { padding: 7px 14px; border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 6px; cursor: pointer; font: inherit; }
+  button.ghost { background: #fff; color: var(--accent); }
+  button.danger { border-color: #dc2626; background: #fff; color: #dc2626; }
+  button:disabled { opacity: .5; cursor: default; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; word-break: break-all; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  .row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .row-actions button { padding: 3px 8px; font-size: 12px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+  .msg { margin-top: 10px; font-size: 13px; }
+  .msg.err { color: #dc2626; }
+  .msg.ok { color: #059669; }
+  .stats-line { color: var(--muted); font-size: 12px; }
+  a { color: var(--accent); }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>LinkForge <span style="color:var(--muted);font-size:12px">多租户短链 · 极简控制台</span></h1>
+  <div><span class="who" id="who"></span> <button class="ghost hidden" id="logout" onclick="logout()">退出</button></div>
+</header>
+<main>
+  <section class="card" id="authCard">
+    <h2>登录 / 注册</h2>
+    <div class="grid2">
+      <div>
+        <label>租户名</label><input id="tenant" placeholder="demo">
+        <label>用户名</label><input id="user" placeholder="admin">
+        <label>密码</label><input id="pass" type="password" placeholder="至少 8 位（注册）；登录用你的密码">
+      </div>
+      <div style="display:flex;flex-direction:column;justify-content:flex-end;gap:8px">
+        <button onclick="login()">登录</button>
+        <button class="ghost" onclick="register()">注册新租户（会创建全新租户与用户）</button>
+      </div>
+    </div>
+    <div class="msg" id="authMsg"></div>
+  </section>
+
+  <section class="card hidden" id="mainCard">
+    <h2>创建短链</h2>
+    <div class="grid2">
+      <div>
+        <label>目标 URL（http/https）</label><input id="url" placeholder="https://example.com/very/long/path">
+        <label>备注（可选）</label><input id="title" placeholder="备注">
+      </div>
+      <div>
+        <label>自定义短码（可选，4-16 位字母数字_-）</label><input id="customCode" placeholder="留空随机">
+        <label>过期时间（可选）</label><input id="expireAt" type="datetime-local">
+      </div>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+      <button onclick="createLink()">创建</button>
+      <a href="#" id="exportLink" onclick="this.href='/api/links/export';return true;">导出 CSV</a>
+      <span class="stats-line">幂等：同 Idempotency-Key 重复提交会返回同一短码</span>
+    </div>
+    <div class="msg" id="createMsg"></div>
+
+    <h2 style="margin-top:20px">我的短链</h2>
+    <table>
+      <thead><tr><th>短码</th><th>目标 / 状态</th><th>过期</th><th>操作</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="stats-line" style="margin-top:8px">
+      <button class="ghost" style="padding:3px 8px;font-size:12px" onclick="loadLinks()">刷新</button>
+      第 <span id="pageNo">1</span> 页 · <button class="ghost" style="padding:3px 8px;font-size:12px" onclick="turnPage(-1)">上一页</button> <button class="ghost" style="padding:3px 8px;font-size:12px" onclick="turnPage(1)">下一页</button>
+    </div>
+    <div class="msg" id="listMsg"></div>
+  </section>
+</main>
+<script>
+let token = '', page = 1, idemSeq = 0;
+const $ = id => document.getElementById(id);
+const setMsg = (id, text, ok) => { const el = $(id); el.textContent = text || ''; el.className = 'msg ' + (ok ? 'ok' : 'err'); };
+
+async function api(method, path, body, raw) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  if (method === 'POST' && path === '/api/links') headers['Idempotency-Key'] = 'ui-' + Date.now() + '-' + (++idemSeq);
+  const resp = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const text = await resp.text();
+  let json = {}; try { json = JSON.parse(text); } catch (e) { return { status: resp.status, raw: text, headers: resp.headers }; }
+  if (!resp.ok && !(raw && resp.ok)) return { status: resp.status, error: json.message || text, code: json.code };
+  return { status: resp.status, data: json.data, raw: text };
+}
+
+async function login() {
+  const r = await api('POST', '/api/auth/login', { tenantName: $('tenant').value.trim(), username: $('user').value.trim(), password: $('pass').value });
+  if (r.error) return setMsg('authMsg', '登录失败：' + r.error, false);
+  token = r.data.token; afterAuth(r.data.username + '@' + r.data.tenantName);
+}
+async function register() {
+  const r = await api('POST', '/api/auth/register', { tenantName: $('tenant').value.trim(), username: $('user').value.trim(), password: $('pass').value });
+  if (r.error) return setMsg('authMsg', '注册失败：' + r.error, false);
+  token = r.data.token; afterAuth(r.data.username + '@' + r.data.tenantName);
+}
+function afterAuth(who) {
+  $('who').textContent = who; $('logout').classList.remove('hidden');
+  $('authCard').classList.add('hidden'); $('mainCard').classList.remove('hidden');
+  loadLinks();
+}
+function logout() { token = ''; location.reload(); }
+
+async function createLink() {
+  const body = { originalUrl: $('url').value.trim() };
+  if ($('title').value.trim()) body.title = $('title').value.trim();
+  if ($('customCode').value.trim()) body.customCode = $('customCode').value.trim();
+  if ($('expireAt').value) body.expireAt = $('expireAt').value + ':00';
+  const r = await api('POST', '/api/links', body);
+  if (r.error) return setMsg('createMsg', '创建失败：' + r.error + (r.code === 429 ? '（触发限流，稍后再试）' : ''), false);
+  setMsg('createMsg', '已创建：' + location.origin + r.data.shortPath, true);
+  $('url').value = ''; $('customCode').value = ''; $('expireAt').value = '';
+  loadLinks();
+}
+
+async function loadLinks() {
+  const r = await api('GET', '/api/links?page=' + page + '&size=10');
+  if (r.error) return setMsg('listMsg', '加载失败：' + r.error, false);
+  const rows = r.data.records.map(l => `<tr>
+    <td><a href="/r/${l.code}" target="_blank">${l.code}</a></td>
+    <td><div>${esc(l.originalUrl)}</div><div class="stats-line">状态 ${l.status === 1 ? '启用' : '禁用'}</div><div class="stats-line" id="st-${l.code}"></div></td>
+    <td>${l.expireAt ? l.expireAt.replace('T', ' ') : '-'}</td>
+    <td><div class="row-actions">
+      <button class="ghost" onclick="copy('${l.code}')">复制</button>
+      <button class="ghost" onclick="showStats('${l.code}')">统计</button>
+      <button class="ghost" onclick="toggle('${l.code}', ${l.status === 1})">${l.status === 1 ? '禁用' : '启用'}</button>
+      <button class="danger" onclick="del('${l.code}')">删除</button>
+    </div></td></tr>`).join('');
+  $('rows').innerHTML = rows || '<tr><td colspan="4" class="stats-line">还没有短链</td></tr>';
+  $('pageNo').textContent = page;
+}
+function turnPage(d) { page = Math.max(1, page + d); loadLinks(); }
+
+async function showStats(code) {
+  const r = await api('GET', `/api/links/${code}/stats?days=7`);
+  const el = $('st-' + code);
+  if (r.error) { el.textContent = '统计加载失败'; return; }
+  const days = r.data.daily.slice(-7).map(d => `${d.date.slice(5)}:${d.clicks}/UV${d.uv}`).join('  ');
+  el.textContent = `总点击 ${r.data.totalClicks} · 总 UV ${r.data.totalUv} | ${days}`;
+}
+async function toggle(code, isActive) {
+  const r = await api('POST', `/api/links/${code}/${isActive ? 'disable' : 'enable'}`);
+  if (r.error) return setMsg('listMsg', (isActive ? '禁用' : '启用') + '失败：' + r.error, false);
+  loadLinks();
+}
+async function del(code) {
+  if (!confirm('删除 ' + code + '？短码将永久保留不可复用。')) return;
+  const r = await api('DELETE', `/api/links/${code}`);
+  if (r.error) return setMsg('listMsg', '删除失败：' + r.error, false);
+  loadLinks();
+}
+function copy(code) { navigator.clipboard.writeText(location.origin + '/r/' + code); }
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+</script>
+</body>
+</html>

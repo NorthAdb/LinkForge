@@ -20,6 +20,7 @@ import jakarta.annotation.PreDestroy;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -55,6 +56,7 @@ public class ShortLinkService {
     private final LinkForgeProperties properties;
     private final ClickRecordService clickRecordService;
     private final RedisRateLimiter rateLimiter;
+    private final MeterRegistry meterRegistry;
 
     private final ScheduledExecutorService evictor = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "cache-evictor");
@@ -72,6 +74,7 @@ public class ShortLinkService {
         LinkForgeProperties.RateLimit rl = properties.getRateLimit();
         String rlKey = rl.getKeyPrefix() + "create:user:" + user.getUserId();
         if (!rateLimiter.tryAcquire(rlKey, rl.getCreateMax(), rl.getCreateWindowSeconds())) {
+            meterRegistry.counter("linkforge.ratelimit.rejected", "entry", "create").increment();
             throw new BizException(429, "too many requests, retry later");
         }
 
@@ -163,6 +166,7 @@ public class ShortLinkService {
         }
 
         cacheUrl(link.getCode(), url);
+        meterRegistry.counter("linkforge.links.created").increment();
         if (idemKey != null) {
             stringRedisTemplate.opsForValue().set(idemKey, link.getCode(),
                     Duration.ofSeconds(properties.getRateLimit().getIdempotencyTtlSeconds()));
@@ -301,6 +305,7 @@ public class ShortLinkService {
         LinkForgeProperties.RateLimit rl = properties.getRateLimit();
         String rlKey = rl.getKeyPrefix() + "redirect:ip:" + ClientIps.resolve(request, rl.isTrustXff());
         if (!rateLimiter.tryAcquire(rlKey, rl.getRedirectMax(), rl.getRedirectWindowSeconds())) {
+            meterRegistry.counter("linkforge.ratelimit.rejected", "entry", "redirect").increment();
             throw new BizException(429, "too many requests, retry later");
         }
 
@@ -319,6 +324,7 @@ public class ShortLinkService {
             cacheUrl(code, originalUrl);
         }
         clickRecordService.recordClick(link, request);
+        meterRegistry.counter("linkforge.redirects").increment();
         return originalUrl;
     }
 
