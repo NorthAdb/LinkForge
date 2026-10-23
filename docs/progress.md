@@ -10,7 +10,7 @@
 |------|------|------|------|
 | P0 | 落地卫生 | feat/p0-hygiene | ✅ 完成（见下） |
 | P1 | 短链闭环 | feat/p1-links | ✅ 完成（见下） |
-| P2 | 异步分析 | feat/p2-async-stats | 未开始 |
+| P2 | 异步分析 | feat/p2-async-stats | ✅ 完成（见下） |
 | P3 | 可靠性 | feat/p3-reliability | 未开始 |
 
 ## 环境与工具事实（审计人须知）
@@ -33,6 +33,11 @@
 | 7 | P1 | 测试用 TestRestTemplate 默认工厂不支持 PATCH，基类切 JdkClientHttpRequestFactory（JDK HttpClient） | 不加依赖，保留 PATCH 语义；服务端本身接受 PATCH |
 | 8 | P1 | resolveAndRecord 简化为「总是读 DB 行做状态/过期判定，缓存只省 URL 字段」 | 原实现缓存命中路径重复查询且检查分裂；行为等价、可读性更好。注意：跳转路径的缓存目前并不省掉 DB 读，P3 做缓存失效加固时一并评估 |
 | 9 | P1 | RedisRateLimiter 在 Redis 异常时放行（degrade open） | 注册是公开入口，限流器故障不应把注册打死；P3 复审该策略 |
+| 10 | P2 | eventId 确定性设计：`log-{click_log.id}`，实时消费与对账重放共用 | 同一点击天然幂等互斥；MQ 宕机丢失的发布由对账器补齐，聚合必追平 |
+| 11 | P2 | 幂等键用「独立事务 INSERT + 捕获 DuplicateKeyException」，弃用 `ON DUPLICATE KEY UPDATE` 探测 | 实测 MySQL Connector/J 默认返回 matched rows，重复键探测永远当新事件（ClickIdempotencyTest 抓到） |
+| 12 | P2 | Jackson2JsonMessageConverter 注入 Spring ObjectMapper | 转换器自建 ObjectMapper 无 JavaTimeModule，含 LocalDateTime 的事件全进死信（MqEndToEndTest 抓到） |
+| 13 | P2 | @MapperScan 从 "com.linkforge" 收窄到三个 mapper 包 | 广扫描把 ClickEventPublisher 接口代理成 MyBatis mapper，publish() 变 Invalid bound statement；stub 时代 async 恒关所以从未触发 |
+| 14 | P2 | 消费错误不回队，配 DLX/DLQ（linkforge.click.dlq） | 毒消息热循环无意义；死信留现场可查 |
 
 ---
 
@@ -123,3 +128,48 @@ bash scripts/smoke.sh
 
 - 2026-10-23：三段棘轮（注册限流 → CRUD/生命周期 → 隔离测试+冒烟+文档）全部内联完成；中途修复：application-test.yml 冒号值未引号导致 YAML 解析失败；测试 PATCH 请求工厂切换；重打包时旧 app 进程锁 jar（先停进程再打包）。
 - 2026-10-23：验收全绿，commit 并合回 main 推送。
+
+---
+
+## P2 异步分析
+
+范围：真实 RabbitMQ 消费者、ClickEvent 契约（eventId）、消费幂等、按天聚合 stats API（仅链主）、断 MQ 演练、D7 双写开关。不做前端/AI/自定义短码。
+
+### 退出条件勾选
+
+- [x] (a) 真实消费者落地；ClickEvent 含 eventId 等契约；消费幂等
+  - `ClickEventConsumer`（@RabbitListener，错误进 DLQ 不回队）替换 stub；`ClickEvent` 字段：eventId/tenantId/linkId/code/userId(可空)/ip/userAgent/referer/clickedAt
+  - 幂等：`lf_consumed_event` 唯一索引 + 独立事务 INSERT 捕获 DuplicateKeyException；`ClickIdempotencyTest.sameEventIdCountsOnceAcrossReplays`：同 eventId 投递 3 次聚合计数恒为 1
+  - `MqEndToEndTest`：真实发布→消费→聚合→stats API 全链路（3+2 次跳转逐一追平）
+- [x] (b) stats API 仅链主可查，有租户隔离测试
+  - `GET /api/links/{code}/stats?days=`（days 1..90，默认 7；总量 + 补零按天序列）；复用 ShortLinkService.detail 做所有权判定
+  - `StatsApiTest.statsVisibleOnlyToOwner`：链主 200 且数值正确，他人 404
+- [x] (c) 断 MQ 演练：跳转仍 302，恢复后聚合追平
+  - `scripts/mq-drill.sh` 实跑输出（N=8, M=6）：`PASS baseline: 8 clicks aggregated via live MQ` → 停 rabbit → `PASS outage: 6 redirects stayed 302 with MQ down` → 恢复 → `PASS recovery: stats converged to 14 (reconcile caught up)` → `DRILL OK`
+- [x] (d) D7=A：双写保留 + 配置开关 + 对账文档
+  - `LINKFORGE_ASYNC_CLICK_ENABLED`（默认 true）/ `LINKFORGE_SYNC_CLICK_ENABLED`（默认 true）/ `LINKFORGE_MQ_RECONCILE_FIXED_DELAY_MS`（默认 30s）
+  - README「点击统计管道（D7 双写）」写明对账 SQL 与关同步前提；`ClickLogReconciler` 自动追平
+- [x] (e) mvn test 绿 + commit/push + 本节写满
+  - `Tests run: 19, Failures: 0, Errors: 0, Skipped: 0`，BUILD SUCCESS（Docker JDK17）
+
+### 验收证据
+
+测试矩阵（19）：P1 全部 15 个 + ClickIdempotencyTest×2、StatsApiTest×1、MqEndToEndTest×1。
+
+```bash
+# 全量测试（同 P1 命令）
+mvn -B test  # → Tests run: 19, Failures: 0, Errors: 0  BUILD SUCCESS
+
+# 断链演练（应用跑 P2 jar、compose 在跑）
+bash scripts/mq-drill.sh
+# → PASS baseline / PASS outage / PASS recovery / DRILL OK
+
+# 手工对账
+docker exec linkforge-mysql mysql -ulinkforge -plinkforge_pass linkforge -e \
+ "SELECT (SELECT COUNT(*) FROM lf_click_log) detail, (SELECT IFNULL(SUM(clicks),0) FROM lf_click_daily) aggregate;"
+```
+
+### P2 执行记录
+
+- 2026-10-23：DDL（lf_click_daily / lf_consumed_event）进 schema.sql 并对运行库执行。三处真实缺陷被测试抓住并修复：matched-rows 幂等探测失效（决策 11）、MQ 消息转换器日期类型死信（决策 12）、MapperScan 吞接口（决策 13）。
+- 2026-10-23：P1 冒烟回归 SMOKE OK；mq-drill DRILL OK；验收勾满，commit 并合回 main 推送。
