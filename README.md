@@ -161,7 +161,7 @@ bash scripts/mq-drill.sh
 
 **自定义短码**：`customCode` 需 4-16 位字母/数字/下划线/连字符，保留字（api、r、actuator、health、auth 等）不可用；已被占用（含已删除链占用的码）返回 409。随机码与自定义码共用 `uk_code` 唯一索引，并发安全。
 
-**限流（P3）**：注册按 IP 5 次/10 分钟；创建按用户 30 次/分钟；公开跳转按 IP 300 次/分钟。全部为 Redis 固定窗口，超限 429，阈值见下方环境变量。限流器在 Redis 故障时放行（degrade open）。客户端 IP 默认取 socket 地址、**不信任** `X-Forwarded-For`（该头可伪造、会被用来绕限流）；仅在可信反向代理后部署时设 `LINKFORGE_TRUST_XFF=true`。
+**限流（P3）**：注册按 IP 5 次/10 分钟；创建按用户 30 次/分钟；公开跳转按 IP 300 次/分钟。全部为 Redis 固定窗口，超限 429，阈值见下方环境变量。限流器在 Redis 故障时放行（degrade open）。客户端 IP 默认取 socket 地址、**不信任** `X-Forwarded-For`（该头可伪造、会被用来绕限流）；仅在可信反向代理后部署时设 `LINKFORGE_TRUST_XFF=true`。同一客户端经 IPv4/IPv6 两个协议访问会各占一个计数桶（本机 `127.0.0.1` 与 `::1` 并存属预期现象）。
 
 **缓存一致性（P3）**：更新短链时**写穿**（立即写入新值）并安排 1 秒后的延迟双删，清除并发读旧库行回填的脏值；禁用同理（先删 + 延迟双删）。最终一致窗口约 1 秒，上限为 TTL（默认 3600 秒）。过期链路不依赖缓存（每次跳转都校验 DB 行状态）。
 
@@ -186,7 +186,7 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
        (SELECT IFNULL(SUM(clicks),0) FROM lf_click_daily) AS aggregate;
 ```
 
-**何时可关同步**：连续观察 `detail == aggregate` 且 MQ 稳定后，设 `LINKFORGE_SYNC_CLICK_ENABLED=false` 切纯异步。注意：关同步后新点击的 eventId 退化为随机 UUID（不再有 click_log id），对账器只负责收敛历史行；**精确 UV 与点击明细依赖同步明细表，关同步后这两个能力只覆盖历史数据**。MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.click.dlx` / `linkforge.click.dlq`）。
+**何时可关同步**：⚠️ **关同步（`LINKFORGE_SYNC_CLICK_ENABLED=false`）后，MQ 发布失败的点击无法由对账器追平**（无 outbox，新点击 eventId 为随机 UUID 且无明细行）；精确 UV / 点击明细也只覆盖历史数据。关之前必须：连续观察 `detail == aggregate`、确认 MQ 稳定、并接受上述边界；纯异步 + 可追平需要 outbox 改造（未实现）。保持默认双写。MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.click.dlx` / `linkforge.click.dlq`）。
 
 **存量库迁移注记**：`lf_click_daily` / `lf_consumed_event` 两张表只会在**全新数据卷**上由 schema.sql 自动创建；已有旧卷的库需手动执行 `src/main/resources/db/schema.sql` 中对应的两段 `CREATE TABLE IF NOT EXISTS`（幂等，可重复跑）。
 
@@ -210,6 +210,9 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 - `LINKFORGE_TRUST_XFF` 是否信任 X-Forwarded-For（默认 false，仅在可信反代后开启）
 - `/actuator/health` 展示组件细节（db / redis / rabbit / diskSpace），依赖 DOWN 时整体 503
 - `/actuator/metrics/**` 暴露业务计数器（`linkforge.links.created`、`linkforge.redirects`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`），需 Bearer Token
+- **公网部署前须收紧**（当前面向本地 Demo 全开放）：`management.endpoint.health.show-details` 改 `when_authorized`、设 `springdoc.api-docs.enabled=false` 关闭 Swagger、下线 `static/index.html` 控制台或加访问控制
+
+**Linux 复现提示**：Linux 无 `host.docker.internal`。测试/运行容器改用 `--network host`，并把 `SPRING_DATASOURCE_URL` / `SPRING_DATA_REDIS_HOST` / `SPRING_RABBITMQ_HOST` 指向 `127.0.0.1`（Compose 端口已映射到宿主机）；或指向 docker0 网桥 IP（通常 `172.17.0.1`）。审计环境（Debian 13 + Docker 26）已按此路径完整复现 41/41 绿。
 
 ## 许可证
 

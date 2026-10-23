@@ -1,6 +1,11 @@
 package com.linkforge.link;
 
 import com.linkforge.AbstractIntegrationTest;
+import com.linkforge.link.entity.ShortLink;
+import com.linkforge.link.mapper.ShortLinkMapper;
+import com.linkforge.stats.entity.ClickLog;
+import com.linkforge.stats.mapper.ClickLogMapper;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -25,12 +30,61 @@ class LinkLifecycleTest extends AbstractIntegrationTest {
     @Autowired
     private StringRedisTemplate redis;
 
+    @Autowired
+    private ShortLinkMapper shortLinkMapper;
+
+    @Autowired
+    private ClickLogMapper clickLogMapper;
+
     @Test
     void createRejectsNonHttpUrl() throws Exception {
         String token = registerForToken();
         var resp = postJson("/api/links",
                 om.writeValueAsString(Map.of("originalUrl", "ftp://example.com/x")), token);
         assertEquals(400, resp.getStatusCode().value(), resp.getBody());
+    }
+
+    @Test
+    void createRejectsControlCharAndMalformedUrls() throws Exception {
+        String token = registerForToken();
+        String[][] bad = {
+                {"https://example.com/a\r\nInjected: yes", "CRLF must be rejected at create"},
+                {"https://example.com/a b", "space must be rejected at create"},
+                {"https://example.com/\u0000x", "NUL must be rejected at create"}};
+        for (String[] pair : bad) {
+            var resp = postJson("/api/links", om.writeValueAsString(Map.of("originalUrl", pair[0])), token);
+            assertEquals(400, resp.getStatusCode().value(), pair[1] + ": " + resp.getBody());
+        }
+    }
+
+    @Test
+    void updateRejectsInvalidUrl() throws Exception {
+        String token = registerForToken();
+        String code = createLink(token, "https://example.com/valid-first");
+        var resp = patchJson("/api/links/" + code,
+                om.writeValueAsString(Map.of("originalUrl", "https://example.com/a\r\nb")), token);
+        assertEquals(400, resp.getStatusCode().value(), resp.getBody());
+    }
+
+    @Test
+    void invalidLegacyTargetReturns410WithoutCountingClick() throws Exception {
+        String token = registerForToken();
+        String code = createLink(token, "https://example.com/legacy-ok");
+        ShortLink link = shortLinkMapper.selectOne(new LambdaQueryWrapper<ShortLink>()
+                .eq(ShortLink::getCode, code));
+        link.setOriginalUrl("https://example.com/a\r\nInjected: yes");
+        shortLinkMapper.updateById(link);
+        redis.delete(KEY_PREFIX + code);
+
+        var resp = get("/r/" + code, null);
+        assertEquals(410, resp.getStatusCode().value(),
+                "legacy dirty target must be 410, never 500: " + resp.getBody());
+
+        Long clicks = clickLogMapper.selectCount(new LambdaQueryWrapper<ClickLog>()
+                .eq(ClickLog::getLinkId, link.getId()));
+        assertEquals(0, clicks, "an invalid target must not be counted as a click");
+        assertFalse(Boolean.TRUE.equals(redis.hasKey(KEY_PREFIX + code)),
+                "an invalid target must not be cached");
     }
 
     @Test

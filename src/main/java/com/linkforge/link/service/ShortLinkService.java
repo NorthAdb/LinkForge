@@ -25,6 +25,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.net.URI;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -47,8 +48,9 @@ public class ShortLinkService {
     private static final int CODE_ATTEMPTS = 16;
     private static final long STALE_WRITEBACK_CLEAR_MS = 1000;
     private static final Pattern CUSTOM_CODE_PATTERN = Pattern.compile("^[A-Za-z0-9_-]{4,16}$");
+    /** All >=4 chars: shorter reserved words never pass the length rule anyway. */
     private static final Set<String> RESERVED_CODES = Set.of(
-            "api", "r", "actuator", "health", "auth", "login", "register", "links",
+            "actuator", "health", "auth", "login", "register", "links",
             "export", "stats", "swagger", "docs", "static", "index");
 
     private final ShortLinkMapper shortLinkMapper;
@@ -96,7 +98,9 @@ public class ShortLinkService {
                     return resolved;
                 }
             }
-            return doCreate(request, user, idemKey);
+            // The winner has not settled its code; forcing a second create could mint
+            // two links under one Idempotency-Key, so the caller retries instead.
+            throw new BizException(503, "idempotent create still in progress, retry later");
         }
         return doCreate(request, user, null);
     }
@@ -320,6 +324,9 @@ public class ShortLinkService {
         }
 
         String originalUrl = cached != null && !cached.isBlank() ? cached : link.getOriginalUrl();
+        if (!isRenderableUrl(originalUrl)) {
+            throw new BizException(410, "short link target is invalid");
+        }
         if (cached == null || cached.isBlank()) {
             cacheUrl(code, originalUrl);
         }
@@ -348,6 +355,36 @@ public class ShortLinkService {
     private static void requireHttpUrl(String url) {
         if (!(url.startsWith("http://") || url.startsWith("https://"))) {
             throw new BizException("originalUrl must start with http:// or https://");
+        }
+        for (int i = 0; i < url.length(); i++) {
+            char c = url.charAt(i);
+            if (c < 0x20 || c == 0x7f) {
+                throw new BizException("originalUrl must not contain control characters");
+            }
+        }
+        try {
+            URI.create(url);
+        } catch (IllegalArgumentException ex) {
+            throw new BizException("originalUrl is not a valid URI");
+        }
+    }
+
+    /** Guards against legacy rows with malformed targets: never 500, never count the click. */
+    private static boolean isRenderableUrl(String url) {
+        if (url == null || url.isBlank()) {
+            return false;
+        }
+        for (int i = 0; i < url.length(); i++) {
+            char c = url.charAt(i);
+            if (c < 0x20 || c == 0x7f) {
+                return false;
+            }
+        }
+        try {
+            URI.create(url);
+            return true;
+        } catch (IllegalArgumentException ex) {
+            return false;
         }
     }
 
