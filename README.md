@@ -150,7 +150,9 @@ bash scripts/mq-drill.sh
 | POST | `/api/links/{code}/disable` | 禁用；缓存失效 |
 | POST | `/api/links/{code}/enable` | 重新启用（过期时间不受影响） |
 | DELETE | `/api/links/{code}` | 逻辑删除；**短码永久保留不可复用**（uk_code） |
-| GET | `/api/links/{code}/stats?days=7` | 点击统计（仅链主）：总量 + 按天序列，days 1..90 |
+| GET | `/api/links/{code}/stats?days=7` | 点击统计（仅链主）：总量、**精确 UV**（按 IP 去重，来自同步明细）+ 按天序列，days 1..90 |
+| GET | `/api/links/{code}/clicks?page=&size=` | 点击明细（仅链主）：时间/IP/UA/Referer，新到旧分页 |
+| GET | `/api/links/export` | 导出本人全部短链 CSV（UTF-8 BOM，逗号/引号转义） |
 | GET | `/r/{code}` | 302 跳转；Redis 缓存优先，未命中回源 MySQL；同步写 `lf_click_log` |
 
 **错误码语义（已写死）**：跳转遇 **禁用或不存在 → 404**，**过期 → 410**；管理接口的越权访问统一 **404**（不泄露他人短码存在性）；未携带/无效凭证 **401**；注册租户名冲突 **409**、自定义短码被占用 **409**；触发限流 **429**。
@@ -182,7 +184,7 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
        (SELECT IFNULL(SUM(clicks),0) FROM lf_click_daily) AS aggregate;
 ```
 
-**何时可关同步**：连续观察 `detail == aggregate` 且 MQ 稳定后，设 `LINKFORGE_SYNC_CLICK_ENABLED=false` 切纯异步。注意：关同步后新点击的 eventId 退化为随机 UUID（不再有 click_log id），对账器只负责收敛历史行。MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.click.dlx` / `linkforge.click.dlq`）。
+**何时可关同步**：连续观察 `detail == aggregate` 且 MQ 稳定后，设 `LINKFORGE_SYNC_CLICK_ENABLED=false` 切纯异步。注意：关同步后新点击的 eventId 退化为随机 UUID（不再有 click_log id），对账器只负责收敛历史行；**精确 UV 与点击明细依赖同步明细表，关同步后这两个能力只覆盖历史数据**。MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.click.dlx` / `linkforge.click.dlq`）。
 
 **存量库迁移注记**：`lf_click_daily` / `lf_consumed_event` 两张表只会在**全新数据卷**上由 schema.sql 自动创建；已有旧卷的库需手动执行 `src/main/resources/db/schema.sql` 中对应的两段 `CREATE TABLE IF NOT EXISTS`（幂等，可重复跑）。
 

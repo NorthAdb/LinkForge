@@ -9,6 +9,8 @@ import com.linkforge.link.dto.UpdateShortLinkRequest;
 import com.linkforge.link.service.ShortLinkService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -38,6 +40,13 @@ public class ShortLinkController {
     public ApiResponse<PageResponse<ShortLinkDetail>> list(@RequestParam(defaultValue = "1") int page,
                                                            @RequestParam(defaultValue = "20") int size) {
         return ApiResponse.ok(shortLinkService.list(page, size));
+    }
+
+    @GetMapping(value = "/export", produces = "text/csv;charset=UTF-8")
+    public ResponseEntity<String> export() {
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=links.csv")
+                .body(shortLinkService.exportOwnCsv());
     }
 
     @GetMapping("/{code}")

@@ -10,4 +10,5 @@ import java.time.LocalDate;
 public class DailyClicks {
     private LocalDate date;
     private long clicks;
+    private long uv;
 }

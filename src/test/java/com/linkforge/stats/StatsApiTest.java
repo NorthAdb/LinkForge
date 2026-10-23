@@ -1,9 +1,12 @@
 package com.linkforge.stats;
 
 import com.linkforge.AbstractIntegrationTest;
+import com.linkforge.link.dto.ShortLinkDetail;
 import com.linkforge.stats.entity.ClickDaily;
+import com.linkforge.stats.entity.ClickLog;
 import com.linkforge.stats.entity.ConsumedEvent;
 import com.linkforge.stats.mapper.ClickDailyMapper;
+import com.linkforge.stats.mapper.ClickLogMapper;
 import com.linkforge.stats.mapper.ConsumedEventMapper;
 import com.linkforge.stats.mq.ClickEvent;
 import com.linkforge.stats.service.ClickStatsService;
@@ -36,11 +39,21 @@ class StatsApiTest extends AbstractIntegrationTest {
     @Autowired
     private ConsumedEventMapper consumedEventMapper;
 
+    @Autowired
+    private ClickLogMapper clickLogMapper;
+
     private final List<String> syntheticEventIds = new ArrayList<>();
     private final List<String> syntheticCodes = new ArrayList<>();
+    private final List<Long> syntheticLogIds = new ArrayList<>();
 
     @AfterEach
     void cleanSyntheticStats() {
+        if (!syntheticLogIds.isEmpty()) {
+            clickLogMapper.delete(new LambdaQueryWrapper<ClickLog>().in(ClickLog::getId, syntheticLogIds));
+            for (Long id : syntheticLogIds) {
+                syntheticEventIds.add("log-" + id);
+            }
+        }
         if (!syntheticEventIds.isEmpty()) {
             consumedEventMapper.delete(new LambdaQueryWrapper<ConsumedEvent>()
                     .in(ConsumedEvent::getEventId, syntheticEventIds));
@@ -49,6 +62,18 @@ class StatsApiTest extends AbstractIntegrationTest {
             clickDailyMapper.delete(new LambdaQueryWrapper<ClickDaily>()
                     .in(ClickDaily::getCode, syntheticCodes));
         }
+    }
+
+    private void insertClick(long linkId, String code, String ip, LocalDateTime at) {
+        ClickLog row = new ClickLog();
+        row.setTenantId(1L);
+        row.setLinkId(linkId);
+        row.setCode(code);
+        row.setIp(ip);
+        row.setUserAgent("it-ua");
+        row.setClickedAt(at);
+        clickLogMapper.insert(row);
+        syntheticLogIds.add(row.getId());
     }
 
     @Test
@@ -87,5 +112,39 @@ class StatsApiTest extends AbstractIntegrationTest {
 
         var foreign = get("/api/links/" + code + "/stats", tokenB);
         assertEquals(404, foreign.getStatusCode().value(), "stats must be owner-only: " + foreign.getBody());
+    }
+
+    @Test
+    void uvIsExactDistinctIpAndClicksDetailIsOwnerScoped() throws Exception {
+        String tokenA = registerForToken();
+        String tokenB = registerForToken();
+        String code = createLink(tokenA, "https://example.com/uv-" + System.currentTimeMillis());
+        syntheticCodes.add(code);
+        long linkId = body(get("/api/links/" + code, tokenA)).path("data").path("id").asLong();
+
+        LocalDateTime now = LocalDateTime.now();
+        insertClick(linkId, code, "1.1.1.1", now);
+        insertClick(linkId, code, "1.1.1.1", now.minusMinutes(1));
+        insertClick(linkId, code, "2.2.2.2", now.minusMinutes(2));
+        insertClick(linkId, code, "3.3.3.3", now.minusDays(1));
+
+        var stats = get("/api/links/" + code + "/stats?days=2", tokenA);
+        assertEquals(200, stats.getStatusCode().value(), stats.getBody());
+        var data = body(stats).path("data");
+        assertEquals(3, data.path("totalUv").asLong(), "distinct ips across the window");
+        var daily = data.path("daily");
+        assertEquals(2, daily.size());
+        assertEquals(2, daily.get(1).path("uv").asLong(), "today distinct ips");
+        assertEquals(1, daily.get(0).path("uv").asLong(), "yesterday distinct ips");
+
+        var clicks = get("/api/links/" + code + "/clicks?page=1&size=2", tokenA);
+        assertEquals(200, clicks.getStatusCode().value(), clicks.getBody());
+        var clickData = body(clicks).path("data");
+        assertEquals(4, clickData.path("total").asLong());
+        assertEquals(2, clickData.path("records").size());
+        assertEquals("1.1.1.1", clickData.path("records").get(0).path("ip").asText(), "newest first");
+
+        var foreignClicks = get("/api/links/" + code + "/clicks", tokenB);
+        assertEquals(404, foreignClicks.getStatusCode().value(), "clicks must be owner-only");
     }
 }
