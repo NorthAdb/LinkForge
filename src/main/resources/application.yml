@@ -1,0 +1,80 @@
+spring:
+  application:
+    name: linkforge
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+
+---
+spring:
+  config:
+    activate:
+      on-profile: dev
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/linkforge?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false}
+    username: ${SPRING_DATASOURCE_USERNAME:linkforge}
+    password: ${SPRING_DATASOURCE_PASSWORD:linkforge_pass}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:localhost}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+      password: ${SPRING_DATA_REDIS_PASSWORD:}
+  rabbitmq:
+    host: ${SPRING_RABBITMQ_HOST:localhost}
+    port: ${SPRING_RABBITMQ_PORT:5672}
+    username: ${SPRING_RABBITMQ_USERNAME:linkforge}
+    password: ${SPRING_RABBITMQ_PASSWORD:linkforge_pass}
+    listener:
+      simple:
+        # Match MVP default: sync click log; enable when async-click-enabled=true
+        auto-startup: ${LINKFORGE_MQ_LISTENER_AUTO_STARTUP:false}
+  jackson:
+    time-zone: Asia/Shanghai
+    serialization:
+      write-dates-as-timestamps: false
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+server:
+  port: ${SERVER_PORT:8080}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when_authorized
+
+linkforge:
+  jwt:
+    secret: ${JWT_SECRET:linkforge-dev-secret-change-me-at-least-32-chars}
+    expire-hours: ${JWT_EXPIRE_HOURS:24}
+  short-link:
+    # Redis key: linkforge:code:{code} -> originalUrl
+    cache-ttl-seconds: 3600
+    code-length: 7
+  mq:
+    # true: publish click events to RabbitMQ (consumer may be stub)
+    # false: only sync write click log (MVP default path still works)
+    async-click-enabled: false
+  bootstrap:
+    enabled: true
+    tenant-name: demo
+    username: admin
+    password: admin123
+
+logging:
+  level:
+    com.linkforge: INFO
+    com.baomidou.mybatisplus: WARN

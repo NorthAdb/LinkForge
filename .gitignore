@@ -1,0 +1,41 @@
+# Maven / Java
+target/
+!.mvn/wrapper/maven-wrapper.jar
+*.class
+*.jar
+*.war
+*.ear
+*.log
+hs_err_pid*
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+*.swp
+*.swo
+.project
+.classpath
+.settings/
+.factorypath
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env / secrets
+.env
+*.pem
+*.p12
+*.jks
+
+# Spring
+application-local.yml
+application-local.yaml
+
+# Misc
+*.tmp
+*.bak
+.cache/
