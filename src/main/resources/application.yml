@@ -73,6 +73,10 @@ linkforge:
     tenant-name: ${LINKFORGE_BOOTSTRAP_TENANT:demo}
     username: ${LINKFORGE_BOOTSTRAP_USERNAME:admin}
     password: ${LINKFORGE_BOOTSTRAP_PASSWORD}
+  rate-limit:
+    register-max: ${LINKFORGE_REGISTER_MAX:5}
+    register-window-seconds: ${LINKFORGE_REGISTER_WINDOW_SECONDS:600}
+    key-prefix: ${LINKFORGE_RATELIMIT_KEY_PREFIX:linkforge:rl:}
 
 logging:
   level:

@@ -3,6 +3,8 @@ package com.linkforge.common.exception;
 import com.linkforge.common.result.ApiResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -14,9 +16,9 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(BizException.class)
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
-    public ApiResponse<Void> handleBiz(BizException ex) {
-        return ApiResponse.fail(ex.getCode(), ex.getMessage());
+    public ResponseEntity<ApiResponse<Void>> handleBiz(BizException ex) {
+        int status = ex.getCode() >= 400 && ex.getCode() <= 599 ? ex.getCode() : 400;
+        return ResponseEntity.status(status).body(ApiResponse.fail(ex.getCode(), ex.getMessage()));
     }
 
     @ExceptionHandler({MethodArgumentNotValidException.class, BindException.class})
@@ -29,6 +31,12 @@ public class GlobalExceptionHandler {
             msg = be.getBindingResult().getFieldError().getDefaultMessage();
         }
         return ApiResponse.fail(400, msg);
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public ApiResponse<Void> handleUnreadable(Exception ex) {
+        return ApiResponse.fail(400, "malformed request body");
     }
 
     @ExceptionHandler(Exception.class)

@@ -9,7 +9,7 @@
 | 阶段 | 主题 | 分支 | 状态 |
 |------|------|------|------|
 | P0 | 落地卫生 | feat/p0-hygiene | ✅ 完成（见下） |
-| P1 | 短链闭环 | feat/p1-links | 未开始 |
+| P1 | 短链闭环 | feat/p1-links | ✅ 完成（见下） |
 | P2 | 异步分析 | feat/p2-async-stats | 未开始 |
 | P3 | 可靠性 | feat/p3-reliability | 未开始 |
 
@@ -27,6 +27,12 @@
 | 1 | P0 | 构建走 Docker maven:3.9-eclipse-temurin-17，缓存卷 linkforge_m2 | 本机无 mvn 且 JDK 为 21；镜像保证 JDK17 工具链可复现 |
 | 2 | P0 | 新增 scripts/smoke.sh（curl+grep，无 python/jq 依赖） | README 原冒烟依赖 python3，Windows Git Bash 不保证有；冒烟须可重复、可审计 |
 | 3 | P0 | 两份方案 md 只留本地（.git/info/exclude），不进仓库 | 它们是互动 Page 的离线副本，仓库只收验收与交付材料 |
+| 4 | P1 | poteto-agent 子代理委派两次被服务端拦截（unusual activity），P1 改为总控内联实现 | 子代理通道当时不可用；不阻塞主线 |
+| 5 | P1 | 引入 mybatis-plus-jsqlparser（官方模块）+ PaginationInnerInterceptor | 分页 list 必需；MybatisPlusConfig 原注释已预留此路径，不算换栈 |
+| 6 | P1 | 注册 = 自助创建全新租户+首个用户，租户名唯一索引兜底 409（不用先查再插） | 免竞态；隔离叙事清晰（每个注册者一个租户） |
+| 7 | P1 | 测试用 TestRestTemplate 默认工厂不支持 PATCH，基类切 JdkClientHttpRequestFactory（JDK HttpClient） | 不加依赖，保留 PATCH 语义；服务端本身接受 PATCH |
+| 8 | P1 | resolveAndRecord 简化为「总是读 DB 行做状态/过期判定，缓存只省 URL 字段」 | 原实现缓存命中路径重复查询且检查分裂；行为等价、可读性更好。注意：跳转路径的缓存目前并不省掉 DB 读，P3 做缓存失效加固时一并评估 |
+| 9 | P1 | RedisRateLimiter 在 Redis 异常时放行（degrade open） | 注册是公开入口，限流器故障不应把注册打死；P3 复审该策略 |
 
 ---
 
@@ -72,3 +78,48 @@ Compose 日志扫描：三容器 `grep -icE '\[error\]|fatal'` 均为 0。
 - 2026-10-23：仓库基线 9423145（PR #1 合并提交）。compose up 三件套、Docker JDK17 构建、冒烟脚本编写完成。
 - 2026-10-23：发现并修复冒烟脚本缺陷：`curl -sI` 发 HEAD，SecurityConfig 仅对 GET 放行 `/r/**`，HEAD 403。改为 `curl -s -D - -o /dev/null`（GET），README 同步修正。这是脚本问题不是应用缺陷，安全语义未动。
 - 2026-10-23：冒烟全绿（SMOKE OK），DB/Redis 落库核对一致，日志零错误，密钥扫描干净。P0 收尾提交。
+
+---
+
+## P1 短链闭环
+
+范围：开放注册（限流）与 bootstrap 共存（D3=C）；短链 list/detail/update/disable/expire；租户隔离测试；缓存一致性。不做自定义短码（D6=P5）、不做前端。
+
+### 退出条件勾选
+
+- [x] (a) 开放注册（限流）与 bootstrap 共存；短链 list/detail/update/disable/expire 齐全
+  - `POST /api/auth/register`（新建租户+用户、BCrypt、返回 JWT、按 IP 固定窗口限流默认 5/600s、409 冲突、429 超限）；BootstrapDataLoader 未动，冒烟中 admin 登录与 register 同场通过
+  - CRUD：`GET /api/links`（分页，MyBatis-Plus PaginationInnerInterceptor）、`GET /api/links/{code}`、`PATCH /api/links/{code}`、`POST /api/links/{code}/disable`；创建支持可选 `expireAt`（过去时间 400）
+- [x] (b) 租户隔离集成测试：跨用户访问必须失败（非 200）
+  - `TenantIsolationTest.crossUserAccessIsRejectedEverywhere`：B 读/改/禁 A 的 code 全部 404；B 的列表不含 A 的 code；A 侧不受影响仍 302/200。全绿
+- [x] (c) 禁用/过期后缓存与 DB 一致，跳转不再 302 到原目标；过期状态码 README 写死
+  - 测试 `disableStopsRedirectAndEvictsCache`（禁用→Redis 键删除→跳转 404）、`updateChangesUrlEvictsCacheAndRedirectFollows`（改 URL→键删除→跳转 Location 变新值→键回填新值）、`expiredLinkReturns410`（+2s 过期→410）
+  - README 已写死：**禁用/不存在 → 404，过期 → 410**，越权统一 404
+- [x] (d) 真实执行 mvn test 退出码 0；curl 冒烟通过
+  - Docker JDK17 `mvn -B test` → `Tests run: 15, Failures: 0, Errors: 0, Skipped: 0`，BUILD SUCCESS（连续两轮全绿）
+  - `bash scripts/smoke.sh` → SMOKE OK：health / admin 登录 / 建链 / 302+Location / Redis 键 / **register** / 建链→详情→PATCH→Location 跟新 / disable→404
+- [x] (e) commit + gh 直推 main（不开 PR）；本节已写满
+
+### 验收证据（命令 + 输出摘要）
+
+```bash
+# 集成测试（需 compose 三件套在跑）
+MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD":/app -v linkforge_m2:/root/.m2 -w /app \
+  -e SPRING_DATASOURCE_URL="jdbc:mysql://host.docker.internal:3306/linkforge?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false" \
+  -e SPRING_DATASOURCE_PASSWORD=linkforge_pass -e SPRING_DATA_REDIS_HOST=host.docker.internal \
+  -e SPRING_RABBITMQ_HOST=host.docker.internal -e SPRING_RABBITMQ_PASSWORD=linkforge_pass \
+  -e JWT_SECRET=test-secret-at-least-32-characters-long!! \
+  maven:3.9-eclipse-temurin-17 mvn -B test
+# → Tests run: 15, Failures: 0, Errors: 0, Skipped: 0 / BUILD SUCCESS
+
+# 冒烟（应用跑 P1 jar 后）
+bash scripts/smoke.sh
+# → PASS health/login/create/redirect/redis cache/register/lifecycle create+detail+update/disable->404；SMOKE OK
+```
+
+测试矩阵：RegisterFlowTest×5（可用 token、租户重名 409、弱口令 400、非法字符 400、坏 JSON 400）、RegisterRateLimitTest×1（第 3 次 429）、LinkLifecycleTest×8（URL 协议校验、过期时间校验、分页与归属、详情、更新+缓存失效+跳转跟随、禁用+缓存失效+404、过期 410、空更新 400）、TenantIsolationTest×1（跨用户全覆盖）。
+
+### P1 执行记录
+
+- 2026-10-23：三段棘轮（注册限流 → CRUD/生命周期 → 隔离测试+冒烟+文档）全部内联完成；中途修复：application-test.yml 冒号值未引号导致 YAML 解析失败；测试 PATCH 请求工厂切换；重打包时旧 app 进程锁 jar（先停进程再打包）。
+- 2026-10-23：验收全绿，commit 并合回 main 推送。

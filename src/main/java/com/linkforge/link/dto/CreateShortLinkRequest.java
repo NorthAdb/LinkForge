@@ -4,6 +4,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
+import java.time.LocalDateTime;
+
 @Data
 public class CreateShortLinkRequest {
 
@@ -13,4 +15,7 @@ public class CreateShortLinkRequest {
 
     @Size(max = 128, message = "title too long")
     private String title;
+
+    /** Optional; must be in the future when present. */
+    private LocalDateTime expireAt;
 }

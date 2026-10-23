@@ -13,6 +13,7 @@ public class LinkForgeProperties {
     private ShortLink shortLink = new ShortLink();
     private Mq mq = new Mq();
     private Bootstrap bootstrap = new Bootstrap();
+    private RateLimit rateLimit = new RateLimit();
 
     @Data
     public static class Jwt {
@@ -39,5 +40,13 @@ public class LinkForgeProperties {
         private String username = "admin";
         /** Required via LINKFORGE_BOOTSTRAP_PASSWORD. No default in source. */
         private String password;
+    }
+
+    @Data
+    public static class RateLimit {
+        /** Fixed-window per-IP limit for open registration. */
+        private int registerMax = 5;
+        private int registerWindowSeconds = 600;
+        private String keyPrefix = "linkforge:rl:";
     }
 }

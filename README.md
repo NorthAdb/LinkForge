@@ -22,11 +22,13 @@
 
 ## 鉴权策略
 
-采用 **固定 bootstrap 租户 + JWT 登录**（不做公开注册）。启动时由 `BootstrapDataLoader` 幂等写入。口令不写在源码里，只从环境变量读取：
+**bootstrap 演示账号 + 开放注册共存**（D3）。两条路径：
 
-- `LINKFORGE_BOOTSTRAP_TENANT`（默认 `demo`）
-- `LINKFORGE_BOOTSTRAP_USERNAME`（默认 `admin`）
-- `LINKFORGE_BOOTSTRAP_PASSWORD`（必填，无默认值）
+1. **bootstrap**：启动时由 `BootstrapDataLoader` 幂等写入演示租户。口令不写在源码里，只从环境变量读取：
+   - `LINKFORGE_BOOTSTRAP_TENANT`（默认 `demo`）
+   - `LINKFORGE_BOOTSTRAP_USERNAME`（默认 `admin`）
+   - `LINKFORGE_BOOTSTRAP_PASSWORD`（必填，无默认值）
+2. **开放注册** `POST /api/auth/register`：自助创建一个全新租户及其首个用户，成功即返回 JWT。邀请码**未启用**（无邀请码逻辑）。注册按 IP 固定窗口限流，默认 5 次 / 10 分钟，超限 429；阈值可用 `LINKFORGE_REGISTER_MAX` / `LINKFORGE_REGISTER_WINDOW_SECONDS` 调整。
 
 本地示例值只在 `.env.example`。
 
@@ -127,17 +129,24 @@ curl -s -D - -o /dev/null http://localhost:8080/r/CODE
 bash scripts/smoke.sh
 ```
 
-## MVP 已实现接口
+## 已实现接口
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/health` | 应用健康（无需鉴权） |
 | GET | `/actuator/health` | Actuator |
 | POST | `/api/auth/login` | JWT 登录 |
-| POST | `/api/links` | 创建短链（需 Bearer Token） |
+| POST | `/api/auth/register` | 开放注册（新建租户+用户，返回 JWT；按 IP 限流） |
+| POST | `/api/links` | 创建短链（需 Bearer Token；可选 `expireAt`，必须为未来时间） |
+| GET | `/api/links?page=&size=` | 分页列表（仅本人创建的链，size 1..100 默认 20） |
+| GET | `/api/links/{code}` | 详情：目标 URL、状态、过期时间、创建/更新时间 |
+| PATCH | `/api/links/{code}` | 改目标 URL / 备注；成功后删除 Redis 缓存 |
+| POST | `/api/links/{code}/disable` | 禁用；成功后删除 Redis 缓存 |
 | GET | `/r/{code}` | 302 跳转；Redis 缓存优先，未命中回源 MySQL；同步写 `lf_click_log` |
 
-跳转路径缓存键：`linkforge:code:{code}`。  
+**错误码语义（已写死）**：跳转遇 **禁用或不存在 → 404**，**过期 → 410**；管理接口的越权访问统一 **404**（不泄露他人短码存在性）；注册租户名冲突 **409**；触发限流 **429**。
+
+跳转路径缓存键：`linkforge:code:{code}`。更新/禁用会主动删除该键，下一次跳转回源后重建。  
 MQ：默认 `linkforge.mq.async-click-enabled=false`（只同步写库）。打开后会额外投递到 RabbitMQ，消费者目前为 **stub 打日志**。
 
 ## MVP vs 后续
@@ -153,6 +162,7 @@ MQ：默认 `linkforge.mq.async-click-enabled=false`（只同步写库）。打�
 见 `src/main/resources/application.yml`。口令与 `JWT_SECRET` 只有环境变量，没有写在 yml 或 Java 默认值里。本地示例见 `.env.example`。
 
 - `linkforge.mq.async-click-enabled` 控制是否发 MQ
+- `LINKFORGE_REGISTER_MAX` / `LINKFORGE_REGISTER_WINDOW_SECONDS` 注册限流阈值（默认 5 / 600 秒）
 
 ## 许可证
 
