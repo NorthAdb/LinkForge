@@ -181,14 +181,55 @@ public class ShortLinkService {
 
     public PageResponse<ShortLinkDetail> list(int page, int size) {
         AuthUser user = requireUser();
-        long current = Math.max(1, page);
-        long pageSize = size < 1 || size > 100 ? 20 : size;
+        return pageOwn(user.getUserId(), Math.max(1, page), size < 1 || size > 100 ? 20 : size);
+    }
+
+    private PageResponse<ShortLinkDetail> pageOwn(Long userId, long current, long pageSize) {
         Page<ShortLink> result = shortLinkMapper.selectPage(new Page<>(current, pageSize),
                 new LambdaQueryWrapper<ShortLink>()
-                        .eq(ShortLink::getCreatedBy, user.getUserId())
+                        .eq(ShortLink::getCreatedBy, userId)
                         .orderByDesc(ShortLink::getId));
         List<ShortLinkDetail> records = result.getRecords().stream().map(ShortLinkService::toDetail).toList();
         return new PageResponse<>(records, result.getTotal(), result.getCurrent(), result.getSize(), result.getPages());
+    }
+
+    /** CSV of every own link, capped at 10k rows; BOM keeps Excel happy with UTF-8. */
+    public String exportOwnCsv() {
+        AuthUser user = requireUser();
+        StringBuilder sb = new StringBuilder("\uFEFFcode,original_url,title,status,expire_at,created_at\n");
+        int exported = 0;
+        long page = 1;
+        while (exported < 10000) {
+            PageResponse<ShortLinkDetail> chunk = pageOwn(user.getUserId(), page++, 500);
+            for (ShortLinkDetail link : chunk.getRecords()) {
+                sb.append(csvRow(link));
+                exported++;
+            }
+            if (chunk.getRecords().isEmpty() || chunk.getCurrent() >= chunk.getPages()) {
+                break;
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String csvRow(ShortLinkDetail l) {
+        return String.join(",",
+                csv(l.getCode()),
+                csv(l.getOriginalUrl()),
+                csv(l.getTitle()),
+                csv(l.getStatus() == null ? "" : String.valueOf(l.getStatus())),
+                csv(l.getExpireAt() == null ? "" : l.getExpireAt().toString()),
+                csv(l.getCreatedAt() == null ? "" : l.getCreatedAt().toString())) + "\n";
+    }
+
+    private static String csv(String value) {
+        if (value == null || value.isEmpty()) {
+            return "";
+        }
+        if (value.contains(",") || value.contains("\"") || value.contains("\n") || value.contains("\r")) {
+            return '"' + value.replace("\"", "\"\"") + '"';
+        }
+        return value;
     }
 
     public ShortLinkDetail detail(String code) {

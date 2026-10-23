@@ -10,5 +10,6 @@ import java.util.List;
 public class LinkStatsResponse {
     private String code;
     private long totalClicks;
+    private long totalUv;
     private List<DailyClicks> daily;
 }
