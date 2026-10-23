@@ -236,7 +236,8 @@ docker compose start rabbitmq && sleep 10 && curl -s http://localhost:8080/actua
 
 ### 审计材料（发给实习JAVA_AI）
 
-- 仓库：https://github.com/NorthAdb/LinkForge（分支 main）
+- 仓库：https://github.com/NorthAdb/LinkForge（分支 main，**P0–P3 终态 commit：103a199**）
+- 各阶段分支：feat/p0-hygiene / feat/p1-links / feat/p2-async-stats / feat/p3-reliability（均已推远端）
 - 复现环境：Windows + Docker Desktop + Git Bash；`cp .env.example .env && docker compose up -d`（等三容器 healthy，mysql 首次初始化约 5 分钟）
 - 复现命令清单（按序执行，全部应绿）：
   1. `MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD":/app -v linkforge_m2:/root/.m2 -w/app -e SPRING_DATASOURCE_URL="jdbc:mysql://host.docker.internal:3306/linkforge?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false" -e SPRING_DATASOURCE_PASSWORD=linkforge_pass -e SPRING_DATA_REDIS_HOST=host.docker.internal -e SPRING_RABBITMQ_HOST=host.docker.internal -e SPRING_RABBITMQ_PASSWORD=linkforge_pass -e JWT_SECRET=test-secret-at-least-32-characters-long!! maven:3.9-eclipse-temurin-17 mvn -B test`（期望 26/26 绿）
