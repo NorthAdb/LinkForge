@@ -11,7 +11,7 @@
 | P0 | 落地卫生 | feat/p0-hygiene | ✅ 完成（见下） |
 | P1 | 短链闭环 | feat/p1-links | ✅ 完成（见下） |
 | P2 | 异步分析 | feat/p2-async-stats | ✅ 完成（见下） |
-| P3 | 可靠性 | feat/p3-reliability | 未开始 |
+| P3 | 可靠性 | feat/p3-reliability | ✅ 完成（见下，本轮终点） |
 
 ## 环境与工具事实（审计人须知）
 
@@ -38,6 +38,11 @@
 | 12 | P2 | Jackson2JsonMessageConverter 注入 Spring ObjectMapper | 转换器自建 ObjectMapper 无 JavaTimeModule，含 LocalDateTime 的事件全进死信（MqEndToEndTest 抓到） |
 | 13 | P2 | @MapperScan 从 "com.linkforge" 收窄到三个 mapper 包 | 广扫描把 ClickEventPublisher 接口代理成 MyBatis mapper，publish() 变 Invalid bound statement；stub 时代 async 恒关所以从未触发 |
 | 14 | P2 | 消费错误不回队，配 DLX/DLQ（linkforge.click.dlq） | 毒消息热循环无意义；死信留现场可查 |
+| 15 | P3 | 创建幂等用 Redis `SETNX pending→code` 两段式（5s pending 超时 + 24h 终值） | 并发同键只建一条；胜者崩溃 5 秒后自愈 |
+| 16 | P3 | 短码分配改为「随机 + uk_code 唯一索引兜底 + DuplicateKey 重试」，删掉先查后插 | 唯一索引才是并发正确性来源，先查后插只是微优化且有 TOCTOU |
+| 17 | P3 | 缓存失效升级为「写穿 + 1s 延迟双删」；P1 的删除式失效测试同步改为写穿断言 | 清除并发旧值回填；最终一致窗口 ~1s 明确可测 |
+| 18 | P3 | management 配置从 dev-profile 文档移到基础文档 | 原先 test profile 下整段失效，health 组件细节不显示（HealthEndpointTest 抓到） |
+| 19 | P3 | RegisterRateLimitTest 窗口 2s→10s + 每次运行前清计数键 | 2s 窗口在负载下跨窗口翻转造成偶发 200；测试须确定性可重跑 |
 
 ---
 
@@ -173,3 +178,71 @@ docker exec linkforge-mysql mysql -ulinkforge -plinkforge_pass linkforge -e \
 
 - 2026-10-23：DDL（lf_click_daily / lf_consumed_event）进 schema.sql 并对运行库执行。三处真实缺陷被测试抓住并修复：matched-rows 幂等探测失效（决策 11）、MQ 消息转换器日期类型死信（决策 12）、MapperScan 吞接口（决策 13）。
 - 2026-10-23：P1 冒烟回归 SMOKE OK；mq-drill DRILL OK；验收勾满，commit 并合回 main 推送。
+
+---
+
+## P3 可靠性（本轮终点）
+
+范围：限流（创建按用户 / 跳转按 IP）、缓存失效加固、创建幂等、并发不撞码、Actuator 健康组件。不做前端/AI/自定义短码；不开始 P4/P5。
+
+### 退出条件勾选
+
+- [x] (a) 创建按用户限流、跳转按 IP 限流，超限 429，配置可环境变量调整
+  - 键：`{prefix}create:user:{userId}`（默认 30/60s）、`{prefix}redirect:ip:{ip}`（默认 300/60s）；`LINKFORGE_CREATE_RATE_*` / `LINKFORGE_REDIRECT_RATE_*` 可调
+  - `RateLimitTest`：同类 props 下第 4 次创建 → 429、第 4 次跳转 → 429（HTTP 状态与 body code 双断言）
+- [x] (b) update/disable/expire 后缓存失效，更新后跳转 Location 约定窗口内一致
+  - 写穿 + 1 秒延迟双删；`LinkLifecycleTest.updateWritesThroughCacheAndRedirectFollows`：PATCH 后缓存立即为新值 → 跳转 Location 即变 → 1.3s 后（双删已触发）再跳转仍为新值且缓存重建为新值；`disableStopsRedirectAndEvictsCache`：禁用即删键 + 跳转 404；`expiredLinkReturns410`：过期 410（不依赖缓存，每次校验 DB）
+- [x] (c) 创建幂等 + 并发创建不撞码（测试证据）
+  - `CreateIdempotencyAndConcurrencyTest`：同 `Idempotency-Key` 串行重放同码且仅 1 行；4 线程并发同键 → 全部同码、仅 1 行；10 线程 30 次并发无键创建 → 30 个互异短码、总数 30；无键两次创建 → 两码
+- [x] (d) Actuator health 覆盖 db/redis/mq，Compose 下可观察 UP/DOWN
+  - `HealthEndpointTest`：components.db/redis/rabbit 全 UP
+  - 实机证据（P3 jar + Compose）：全 UP `{"status":"UP","components":{"db":{"status":"UP"...},"rabbit":{"status":"UP","details":{"version":"3.13.7"}},"redis":{"status":"UP","details":{"version":"7.4.11"}}}}`；`docker compose stop rabbitmq` 后 → 整体 **503**、`rabbit: DOWN (AmqpConnectException: Connection refused)`；恢复后 → **UP/200**
+- [x] (e) mvn test 绿 + 冒烟通过 + commit/push + 本节写满
+  - `Tests run: 26, Failures: 0, Errors: 0, Skipped: 0`，BUILD SUCCESS（Docker JDK17）
+  - `bash scripts/smoke.sh` → SMOKE OK（P3 jar 回归全过）
+
+### 验收证据
+
+测试矩阵（26）：P0-P2 全部 19 个 + RateLimitTest×2、CreateIdempotencyAndConcurrencyTest×4、HealthEndpointTest×1（LinkLifecycle 更新用例改为写穿断言）。
+
+```bash
+# 全量测试（同前）
+mvn -B test            # → Tests run: 26, Failures: 0, Errors: 0  BUILD SUCCESS
+# 冒烟
+bash scripts/smoke.sh  # → SMOKE OK
+# 健康组件 UP/DOWN 演示
+curl -s http://localhost:8080/actuator/health                       # status UP, db/redis/rabbit UP
+docker compose stop rabbitmq && sleep 3 && curl -i http://localhost:8080/actuator/health  # 503 + rabbit DOWN
+docker compose start rabbitmq && sleep 10 && curl -s http://localhost:8080/actuator/health # 恢复 UP
+# 并发不撞码（测试内实证，也可用 HTTP 工具复压）
+# 见 CreateIdempotencyAndConcurrencyTest.parallelCreatesYieldDistinctCodes
+```
+
+### P3 执行记录
+
+- 2026-10-23：限流泛化 + 幂等创建 + 撞码重试 + 写穿双删 + health 细节全量实现；修复 health 配置作用域（决策 18）与限流测试窗口偶发（决策 19）。
+- 2026-10-23：26/26 全绿；冒烟回归 SMOKE OK；health UP/DOWN/UP 实证完成；P3 收尾合并推送。
+
+---
+
+## 本轮交付终态（P0–P3 完成）
+
+> **P0–P3 完成，待实习JAVA_AI 审计后再定 P4/P5。**
+
+- 最新 main commit SHA：见下方「审计材料」
+- 全部验收命令输出摘要：见各阶段「验收证据」
+- 已知缺口（仅限 P4/P5 范围项）：CI（GitHub Actions）、bench.md 压测数字、测试矩阵归档（当前集成测试已覆盖 P1–P3 关键路径但未做 Testcontainers 化）、简历条目、自定义短码/CSV/极简页/OpenAPI（P5）
+- 明确未做（按约束）：前端、AI、自定义短码、云部署、Sa-Token、RocketMQ
+
+### 审计材料（发给实习JAVA_AI）
+
+- 仓库：https://github.com/NorthAdb/LinkForge（分支 main）
+- 复现环境：Windows + Docker Desktop + Git Bash；`cp .env.example .env && docker compose up -d`（等三容器 healthy，mysql 首次初始化约 5 分钟）
+- 复现命令清单（按序执行，全部应绿）：
+  1. `MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD":/app -v linkforge_m2:/root/.m2 -w/app -e SPRING_DATASOURCE_URL="jdbc:mysql://host.docker.internal:3306/linkforge?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false" -e SPRING_DATASOURCE_PASSWORD=linkforge_pass -e SPRING_DATA_REDIS_HOST=host.docker.internal -e SPRING_RABBITMQ_HOST=host.docker.internal -e SPRING_RABBITMQ_PASSWORD=linkforge_pass -e JWT_SECRET=test-secret-at-least-32-characters-long!! maven:3.9-eclipse-temurin-17 mvn -B test`（期望 26/26 绿）
+  2. 构建并启动：同上镜像 `mvn -B -DskipTests package` → `set -a && . ./.env && set +a && java -jar target/linkforge-0.0.1-SNAPSHOT.jar`
+  3. `bash scripts/smoke.sh`（期望 SMOKE OK）
+  4. `bash scripts/mq-drill.sh`（期望 DRILL OK：断 MQ 302 不丢、恢复追平）
+  5. `curl -s http://localhost:8080/actuator/health`（db/redis/rabbit 组件可见；停 rabbitmq 后 503）
+  6. 对账：`SELECT (SELECT COUNT(*) FROM lf_click_log) detail, (SELECT IFNULL(SUM(clicks),0) FROM lf_click_daily) aggregate;`（应相等）
+- 审计关注点对照：正确性与租户隔离（P1 全套测试）、D7 双写与幂等（P2 全套 + mq-drill）、限流/缓存失效/创建幂等/并发（P3 全套）、有无越界做前端或 AI（无；本文件决策日志可查）

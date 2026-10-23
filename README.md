@@ -143,7 +143,7 @@ bash scripts/mq-drill.sh
 | GET | `/actuator/health` | Actuator |
 | POST | `/api/auth/login` | JWT 登录 |
 | POST | `/api/auth/register` | 开放注册（新建租户+用户，返回 JWT；按 IP 限流） |
-| POST | `/api/links` | 创建短链（需 Bearer Token；可选 `expireAt`，必须为未来时间） |
+| POST | `/api/links` | 创建短链（需 Bearer Token；可选 `expireAt`，必须为未来时间；可选 `Idempotency-Key` 请求头实现幂等重放） |
 | GET | `/api/links?page=&size=` | 分页列表（仅本人创建的链，size 1..100 默认 20） |
 | GET | `/api/links/{code}` | 详情：目标 URL、状态、过期时间、创建/更新时间 |
 | PATCH | `/api/links/{code}` | 改目标 URL / 备注；成功后删除 Redis 缓存 |
@@ -152,6 +152,12 @@ bash scripts/mq-drill.sh
 | GET | `/r/{code}` | 302 跳转；Redis 缓存优先，未命中回源 MySQL；同步写 `lf_click_log` |
 
 **错误码语义（已写死）**：跳转遇 **禁用或不存在 → 404**，**过期 → 410**；管理接口的越权访问统一 **404**（不泄露他人短码存在性）；注册租户名冲突 **409**；触发限流 **429**。
+
+**限流（P3）**：注册按 IP 5 次/10 分钟；创建按用户 30 次/分钟；公开跳转按 IP 300 次/分钟。全部为 Redis 固定窗口，超限 429，阈值见下方环境变量。限流器在 Redis 故障时放行（degrade open）。
+
+**缓存一致性（P3）**：更新短链时**写穿**（立即写入新值）并安排 1 秒后的延迟双删，清除并发读旧库行回填的脏值；禁用同理（先删 + 延迟双删）。最终一致窗口约 1 秒，上限为 TTL（默认 3600 秒）。过期链路不依赖缓存（每次跳转都校验 DB 行状态）。
+
+**创建幂等与并发（P3）**：携带 `Idempotency-Key` 头的重复提交返回同一短码（Redis `pending→code` 两段式，并发同键只建一条，映射保留 24h）；短码生成靠 `uk_code` 唯一索引兜底，撞码自动重试新码，并发创建不会产生重复短码。
 
 跳转路径缓存键：`linkforge:code:{code}`。更新/禁用会主动删除该键，下一次跳转回源后重建。  
 
@@ -188,6 +194,10 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 
 - `linkforge.mq.async-click-enabled` 控制是否发 MQ
 - `LINKFORGE_REGISTER_MAX` / `LINKFORGE_REGISTER_WINDOW_SECONDS` 注册限流阈值（默认 5 / 600 秒）
+- `LINKFORGE_CREATE_RATE_MAX` / `LINKFORGE_CREATE_RATE_WINDOW_SECONDS` 创建限流（默认 30 / 60 秒，按用户）
+- `LINKFORGE_REDIRECT_RATE_MAX` / `LINKFORGE_REDIRECT_RATE_WINDOW_SECONDS` 跳转限流（默认 300 / 60 秒，按 IP）
+- `LINKFORGE_IDEMPOTENCY_TTL_SECONDS` 创建幂等键保留时长（默认 86400 秒）
+- `/actuator/health` 展示组件细节（db / redis / rabbit / diskSpace），依赖 DOWN 时整体 503
 
 ## 许可证
 

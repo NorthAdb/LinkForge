@@ -12,7 +12,6 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "linkforge.rate-limit.key-prefix=linkforge:rl:it-life:",
@@ -71,7 +70,7 @@ class LinkLifecycleTest extends AbstractIntegrationTest {
     }
 
     @Test
-    void updateChangesUrlEvictsCacheAndRedirectFollows() throws Exception {
+    void updateWritesThroughCacheAndRedirectFollows() throws Exception {
         String token = registerForToken();
         String first = "https://example.com/before-" + System.currentTimeMillis();
         String second = "https://example.com/after-" + System.currentTimeMillis();
@@ -86,11 +85,19 @@ class LinkLifecycleTest extends AbstractIntegrationTest {
         assertEquals(200, patched.getStatusCode().value(), patched.getBody());
         assertEquals(second, body(patched).path("data").path("originalUrl").asText());
 
-        assertFalse(Boolean.TRUE.equals(redis.hasKey(KEY_PREFIX + code)), "cache must be evicted after update");
+        assertEquals(second, redis.opsForValue().get(KEY_PREFIX + code),
+                "write-through must cache the new URL immediately");
 
         var redirectedAgain = get("/r/" + code, null);
         assertEquals(302, redirectedAgain.getStatusCode().value(), redirectedAgain.getBody());
         assertEquals(second, redirectedAgain.getHeaders().getLocation().toString());
+
+        // after the delayed stale-clear fires, a fresh read must still resolve to the new URL
+        Thread.sleep(1300);
+        var afterClear = get("/r/" + code, null);
+        assertEquals(302, afterClear.getStatusCode().value(), afterClear.getBody());
+        assertEquals(second, afterClear.getHeaders().getLocation().toString(),
+                "location must stay consistent after the delayed double delete");
         assertEquals(second, redis.opsForValue().get(KEY_PREFIX + code));
     }
 

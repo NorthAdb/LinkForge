@@ -49,6 +49,14 @@ public class LinkForgeProperties {
         /** Fixed-window per-IP limit for open registration. */
         private int registerMax = 5;
         private int registerWindowSeconds = 600;
+        /** Fixed-window per-user limit for link creation. */
+        private int createMax = 30;
+        private int createWindowSeconds = 60;
+        /** Fixed-window per-IP limit for public redirects. */
+        private int redirectMax = 300;
+        private int redirectWindowSeconds = 60;
+        /** TTL of the Idempotency-Key -> code mapping. */
+        private long idempotencyTtlSeconds = 86400;
         private String keyPrefix = "linkforge:rl:";
     }
 }

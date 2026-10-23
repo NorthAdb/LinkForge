@@ -65,6 +65,17 @@ public abstract class AbstractIntegrationTest {
         return exchange(HttpMethod.POST, uri, json, token);
     }
 
+    protected ResponseEntity<String> postJsonWithHeader(String uri, String json, String token,
+                                                        String headerName, String headerValue) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        if (token != null) {
+            headers.setBearerAuth(token);
+        }
+        headers.set(headerName, headerValue);
+        return rest.exchange(uri, HttpMethod.POST, new HttpEntity<>(json, headers), String.class);
+    }
+
     protected ResponseEntity<String> patchJson(String uri, String json, String token) {
         return exchange(HttpMethod.PATCH, uri, json, token);
     }

@@ -4,6 +4,16 @@ spring:
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:dev}
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+
 ---
 spring:
   config:
@@ -49,15 +59,6 @@ mybatis-plus:
 server:
   port: ${SERVER_PORT:8080}
 
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info
-  endpoint:
-    health:
-      show-details: when_authorized
-
 linkforge:
   jwt:
     secret: ${JWT_SECRET}
@@ -81,6 +82,11 @@ linkforge:
   rate-limit:
     register-max: ${LINKFORGE_REGISTER_MAX:5}
     register-window-seconds: ${LINKFORGE_REGISTER_WINDOW_SECONDS:600}
+    create-max: ${LINKFORGE_CREATE_RATE_MAX:30}
+    create-window-seconds: ${LINKFORGE_CREATE_RATE_WINDOW_SECONDS:60}
+    redirect-max: ${LINKFORGE_REDIRECT_RATE_MAX:300}
+    redirect-window-seconds: ${LINKFORGE_REDIRECT_RATE_WINDOW_SECONDS:60}
+    idempotency-ttl-seconds: ${LINKFORGE_IDEMPOTENCY_TTL_SECONDS:86400}
     key-prefix: ${LINKFORGE_RATELIMIT_KEY_PREFIX:linkforge:rl:}
 
 logging:
