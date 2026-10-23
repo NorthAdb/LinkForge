@@ -23,6 +23,7 @@ spring:
     listener:
       simple:
         auto-startup: false
+        default-requeue-rejected: false
   jackson:
     time-zone: Asia/Shanghai
     serialization:
@@ -47,6 +48,9 @@ linkforge:
     code-length: 7
   mq:
     async-click-enabled: false
+    sync-click-enabled: true
+    reconcile-fixed-delay-ms: 3600000
+    reconcile-initial-delay-ms: 3600000
   bootstrap:
     enabled: false
     password: ${LINKFORGE_BOOTSTRAP_PASSWORD:it-not-used}
