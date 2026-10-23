@@ -207,7 +207,7 @@ public class ShortLinkService {
      */
     public String resolveAndRecord(String code, HttpServletRequest request) {
         LinkForgeProperties.RateLimit rl = properties.getRateLimit();
-        String rlKey = rl.getKeyPrefix() + "redirect:ip:" + ClientIps.resolve(request);
+        String rlKey = rl.getKeyPrefix() + "redirect:ip:" + ClientIps.resolve(request, rl.isTrustXff());
         if (!rateLimiter.tryAcquire(rlKey, rl.getRedirectMax(), rl.getRedirectWindowSeconds())) {
             throw new BizException(429, "too many requests, retry later");
         }

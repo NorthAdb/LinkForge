@@ -57,6 +57,8 @@ public class LinkForgeProperties {
         private int redirectWindowSeconds = 60;
         /** TTL of the Idempotency-Key -> code mapping. */
         private long idempotencyTtlSeconds = 86400;
+        /** Honor X-Forwarded-For only behind a trusted reverse proxy; spoofable otherwise. */
+        private boolean trustXff = false;
         private String keyPrefix = "linkforge:rl:";
     }
 }

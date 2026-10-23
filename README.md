@@ -44,7 +44,7 @@ com.linkforge
 ├── bootstrap   # 演示租户种子数据
 ├── user        # 租户 / 用户 / 登录
 ├── link        # 短链创建、302 跳转、健康检查
-└── stats       # 点击落库 + MQ 抽象与 stub 消费者
+└── stats       # 点击落库 + RabbitMQ 发布/消费/幂等聚合 + 对账追平 + stats API
 ```
 
 ## 快速开始
@@ -153,7 +153,7 @@ bash scripts/mq-drill.sh
 
 **错误码语义（已写死）**：跳转遇 **禁用或不存在 → 404**，**过期 → 410**；管理接口的越权访问统一 **404**（不泄露他人短码存在性）；注册租户名冲突 **409**；触发限流 **429**。
 
-**限流（P3）**：注册按 IP 5 次/10 分钟；创建按用户 30 次/分钟；公开跳转按 IP 300 次/分钟。全部为 Redis 固定窗口，超限 429，阈值见下方环境变量。限流器在 Redis 故障时放行（degrade open）。
+**限流（P3）**：注册按 IP 5 次/10 分钟；创建按用户 30 次/分钟；公开跳转按 IP 300 次/分钟。全部为 Redis 固定窗口，超限 429，阈值见下方环境变量。限流器在 Redis 故障时放行（degrade open）。客户端 IP 默认取 socket 地址、**不信任** `X-Forwarded-For`（该头可伪造、会被用来绕限流）；仅在可信反向代理后部署时设 `LINKFORGE_TRUST_XFF=true`。
 
 **缓存一致性（P3）**：更新短链时**写穿**（立即写入新值）并安排 1 秒后的延迟双删，清除并发读旧库行回填的脏值；禁用同理（先删 + 延迟双删）。最终一致窗口约 1 秒，上限为 TTL（默认 3600 秒）。过期链路不依赖缓存（每次跳转都校验 DB 行状态）。
 
@@ -173,20 +173,22 @@ bash scripts/mq-drill.sh
 **对账与追平**：`ClickLogReconciler` 定时（`LINKFORGE_MQ_RECONCILE_FIXED_DELAY_MS`，默认 30s）扫描 `lf_click_log` 中尚未出现在 `lf_consumed_event` 的行并重放聚合——MQ 宕机期间发布失败的点击由它自动补齐（`scripts/mq-drill.sh` 演练此场景）。手工对账：
 
 ```sql
--- 明细与聚合应一致（sync 开关开着时）
+-- 明细与聚合应一致（sync 开关开着时；库中不应有测试注入的合成事件）
 SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
        (SELECT IFNULL(SUM(clicks),0) FROM lf_click_daily) AS aggregate;
 ```
 
 **何时可关同步**：连续观察 `detail == aggregate` 且 MQ 稳定后，设 `LINKFORGE_SYNC_CLICK_ENABLED=false` 切纯异步。注意：关同步后新点击的 eventId 退化为随机 UUID（不再有 click_log id），对账器只负责收敛历史行。MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.click.dlx` / `linkforge.click.dlq`）。
 
-## MVP vs 后续
+**存量库迁移注记**：`lf_click_daily` / `lf_consumed_event` 两张表只会在**全新数据卷**上由 schema.sql 自动创建；已有旧卷的库需手动执行 `src/main/resources/db/schema.sql` 中对应的两段 `CREATE TABLE IF NOT EXISTS`（幂等，可重复跑）。
 
-| 阶段 | 内容 |
-|------|------|
-| **MVP（当前）** | Compose 三件套、登录、创建短链、缓存跳转、同步点击日志、MQ 接口 + stub |
-| **下一期** | MQ 异步聚合统计、幂等、限流、短链过期管理 API、压测量化 |
-| **再后** | AI 模块（独立 PostgreSQL/pgvector，可用 Supabase 仅托管 PG）、自然语言查统计 |
+## 当前状态 vs 后续
+
+| 阶段 | 内容 | 状态 |
+|------|------|------|
+| **P0–P3（当前 main）** | Compose 三件套、登录/注册（限流）、短链 CRUD/禁用/过期、缓存跳转（写穿+双删）、MQ 异步聚合（幂等/对账/断链追平）、创建幂等、并发不撞码、限流、Actuator 组件健康 | ✅ 已交付（见 docs/progress.md） |
+| **P4** | CI、bench.md 压测数字、测试矩阵归档、简历条目 | 待外部审计后另定 |
+| **P5** | 自定义短码、CSV 导出、极简静态管理页、OpenAPI | 待外部审计后另定 |
 
 ## 配置要点
 
@@ -197,6 +199,7 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 - `LINKFORGE_CREATE_RATE_MAX` / `LINKFORGE_CREATE_RATE_WINDOW_SECONDS` 创建限流（默认 30 / 60 秒，按用户）
 - `LINKFORGE_REDIRECT_RATE_MAX` / `LINKFORGE_REDIRECT_RATE_WINDOW_SECONDS` 跳转限流（默认 300 / 60 秒，按 IP）
 - `LINKFORGE_IDEMPOTENCY_TTL_SECONDS` 创建幂等键保留时长（默认 86400 秒）
+- `LINKFORGE_TRUST_XFF` 是否信任 X-Forwarded-For（默认 false，仅在可信反代后开启）
 - `/actuator/health` 展示组件细节（db / redis / rabbit / diskSpace），依赖 DOWN 时整体 503
 
 ## 许可证

@@ -1,15 +1,22 @@
 package com.linkforge.stats;
 
 import com.linkforge.AbstractIntegrationTest;
+import com.linkforge.stats.entity.ClickDaily;
+import com.linkforge.stats.entity.ConsumedEvent;
 import com.linkforge.stats.mapper.ClickDailyMapper;
+import com.linkforge.stats.mapper.ConsumedEventMapper;
 import com.linkforge.stats.mq.ClickEvent;
 import com.linkforge.stats.service.ClickStatsService;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -28,6 +35,24 @@ class ClickIdempotencyTest extends AbstractIntegrationTest {
     @Autowired
     private ClickDailyMapper clickDailyMapper;
 
+    @Autowired
+    private ConsumedEventMapper consumedEventMapper;
+
+    private final List<String> syntheticEventIds = new ArrayList<>();
+    private final List<String> syntheticCodes = new ArrayList<>();
+
+    @AfterEach
+    void cleanSyntheticStats() {
+        if (!syntheticEventIds.isEmpty()) {
+            consumedEventMapper.delete(new LambdaQueryWrapper<ConsumedEvent>()
+                    .in(ConsumedEvent::getEventId, syntheticEventIds));
+        }
+        if (!syntheticCodes.isEmpty()) {
+            clickDailyMapper.delete(new LambdaQueryWrapper<ClickDaily>()
+                    .in(ClickDaily::getCode, syntheticCodes));
+        }
+    }
+
     @Test
     void sameEventIdCountsOnceAcrossReplays() throws Exception {
         String token = registerForToken();
@@ -36,6 +61,8 @@ class ClickIdempotencyTest extends AbstractIntegrationTest {
 
         ClickEvent event = new ClickEvent("it-" + System.currentTimeMillis(), 1L, linkId, code,
                 null, "127.0.0.1", "it-ua", null, LocalDateTime.now());
+        syntheticEventIds.add(event.getEventId());
+        syntheticCodes.add(code);
 
         assertTrue(clickStatsService.consume(event), "first delivery must count");
         assertFalse(clickStatsService.consume(event), "replay must be skipped");
@@ -49,11 +76,17 @@ class ClickIdempotencyTest extends AbstractIntegrationTest {
         String code = createLink(token, "https://example.com/idem2-" + System.currentTimeMillis());
         long linkId = linkIdOf(code, token);
         long stamp = System.currentTimeMillis();
+        syntheticCodes.add(code);
 
-        assertTrue(clickStatsService.consume(new ClickEvent("it-a" + stamp, 1L, linkId, code,
-                null, null, null, null, LocalDateTime.now().minusDays(1))));
-        assertTrue(clickStatsService.consume(new ClickEvent("it-b" + stamp, 1L, linkId, code,
-                null, null, null, null, LocalDateTime.now())));
+        ClickEvent yesterday = new ClickEvent("it-a" + stamp, 1L, linkId, code,
+                null, null, null, null, LocalDateTime.now().minusDays(1));
+        ClickEvent today = new ClickEvent("it-b" + stamp, 1L, linkId, code,
+                null, null, null, null, LocalDateTime.now());
+        syntheticEventIds.add(yesterday.getEventId());
+        syntheticEventIds.add(today.getEventId());
+
+        assertTrue(clickStatsService.consume(yesterday));
+        assertTrue(clickStatsService.consume(today));
 
         assertEquals(2, clickDailyMapper.sumClicks(linkId));
         var stats = clickStatsService.stats(linkId, code, 7);

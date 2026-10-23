@@ -1,14 +1,22 @@
 package com.linkforge.stats;
 
 import com.linkforge.AbstractIntegrationTest;
+import com.linkforge.stats.entity.ClickDaily;
+import com.linkforge.stats.entity.ConsumedEvent;
+import com.linkforge.stats.mapper.ClickDailyMapper;
+import com.linkforge.stats.mapper.ConsumedEventMapper;
 import com.linkforge.stats.mq.ClickEvent;
 import com.linkforge.stats.service.ClickStatsService;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -22,11 +30,33 @@ class StatsApiTest extends AbstractIntegrationTest {
     @Autowired
     private ClickStatsService clickStatsService;
 
+    @Autowired
+    private ClickDailyMapper clickDailyMapper;
+
+    @Autowired
+    private ConsumedEventMapper consumedEventMapper;
+
+    private final List<String> syntheticEventIds = new ArrayList<>();
+    private final List<String> syntheticCodes = new ArrayList<>();
+
+    @AfterEach
+    void cleanSyntheticStats() {
+        if (!syntheticEventIds.isEmpty()) {
+            consumedEventMapper.delete(new LambdaQueryWrapper<ConsumedEvent>()
+                    .in(ConsumedEvent::getEventId, syntheticEventIds));
+        }
+        if (!syntheticCodes.isEmpty()) {
+            clickDailyMapper.delete(new LambdaQueryWrapper<ClickDaily>()
+                    .in(ClickDaily::getCode, syntheticCodes));
+        }
+    }
+
     @Test
     void statsVisibleOnlyToOwner() throws Exception {
         String tokenA = registerForToken();
         String tokenB = registerForToken();
         String code = createLink(tokenA, "https://example.com/stats-" + System.currentTimeMillis());
+        syntheticCodes.add(code);
         var detail = body(get("/api/links/" + code, tokenA)).path("data");
         long linkId = detail.path("id").asLong();
         long tenantId = 1L;
@@ -38,6 +68,9 @@ class StatsApiTest extends AbstractIntegrationTest {
                 null, null, null, null, LocalDateTime.now()));
         clickStatsService.consume(new ClickEvent("st-c" + stamp, tenantId, linkId, code,
                 null, null, null, null, LocalDateTime.now().minusDays(1)));
+        syntheticEventIds.add("st-a" + stamp);
+        syntheticEventIds.add("st-b" + stamp);
+        syntheticEventIds.add("st-c" + stamp);
 
         var own = get("/api/links/" + code + "/stats", tokenA);
         assertEquals(200, own.getStatusCode().value(), own.getBody());
