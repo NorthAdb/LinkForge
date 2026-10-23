@@ -12,7 +12,7 @@ spring:
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/linkforge?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false}
     username: ${SPRING_DATASOURCE_USERNAME:linkforge}
-    password: ${SPRING_DATASOURCE_PASSWORD:linkforge_pass}
+    password: ${SPRING_DATASOURCE_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
   data:
     redis:
@@ -23,7 +23,7 @@ spring:
     host: ${SPRING_RABBITMQ_HOST:localhost}
     port: ${SPRING_RABBITMQ_PORT:5672}
     username: ${SPRING_RABBITMQ_USERNAME:linkforge}
-    password: ${SPRING_RABBITMQ_PASSWORD:linkforge_pass}
+    password: ${SPRING_RABBITMQ_PASSWORD}
     listener:
       simple:
         # Match MVP default: sync click log; enable when async-click-enabled=true
@@ -58,7 +58,7 @@ management:
 
 linkforge:
   jwt:
-    secret: ${JWT_SECRET:linkforge-dev-secret-change-me-at-least-32-chars}
+    secret: ${JWT_SECRET}
     expire-hours: ${JWT_EXPIRE_HOURS:24}
   short-link:
     # Redis key: linkforge:code:{code} -> originalUrl
@@ -70,9 +70,9 @@ linkforge:
     async-click-enabled: false
   bootstrap:
     enabled: true
-    tenant-name: demo
-    username: admin
-    password: admin123
+    tenant-name: ${LINKFORGE_BOOTSTRAP_TENANT:demo}
+    username: ${LINKFORGE_BOOTSTRAP_USERNAME:admin}
+    password: ${LINKFORGE_BOOTSTRAP_PASSWORD}
 
 logging:
   level:

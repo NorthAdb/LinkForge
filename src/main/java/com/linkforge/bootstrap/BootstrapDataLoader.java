@@ -17,7 +17,8 @@ import java.time.LocalDateTime;
 
 /**
  * MVP auth strategy: fixed bootstrap tenant + user (no public register).
- * Default: tenant=demo / username=admin / password=admin123
+ * Tenant and username default to demo/admin. Password comes only from
+ * LINKFORGE_BOOTSTRAP_PASSWORD (no default in source).
  */
 @Slf4j
 @Component
@@ -36,6 +37,11 @@ public class BootstrapDataLoader implements ApplicationRunner {
         }
         String tenantName = properties.getBootstrap().getTenantName();
         String username = properties.getBootstrap().getUsername();
+        String password = properties.getBootstrap().getPassword();
+        if (password == null || password.isBlank()) {
+            throw new IllegalStateException(
+                    "LINKFORGE_BOOTSTRAP_PASSWORD is required when linkforge.bootstrap.enabled=true");
+        }
         Tenant tenant = tenantMapper.selectOne(new LambdaQueryWrapper<Tenant>().eq(Tenant::getName, tenantName));
         if (tenant == null) {
             tenant = new Tenant();
@@ -53,7 +59,7 @@ public class BootstrapDataLoader implements ApplicationRunner {
             user = new UserAccount();
             user.setTenantId(tenant.getId());
             user.setUsername(username);
-            user.setPasswordHash(passwordEncoder.encode(properties.getBootstrap().getPassword()));
+            user.setPasswordHash(passwordEncoder.encode(password));
             user.setStatus(1);
             user.setCreatedAt(LocalDateTime.now());
             user.setUpdatedAt(LocalDateTime.now());

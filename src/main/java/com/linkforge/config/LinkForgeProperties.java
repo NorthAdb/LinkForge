@@ -37,6 +37,7 @@ public class LinkForgeProperties {
         private boolean enabled = true;
         private String tenantName = "demo";
         private String username = "admin";
-        private String password = "admin123";
+        /** Required via LINKFORGE_BOOTSTRAP_PASSWORD. No default in source. */
+        private String password;
     }
 }

@@ -20,15 +20,15 @@
 
 **MVP 明确不做**：AI / PostgreSQL / Supabase、Spring Cloud、Seata、完整压测、前端 SPA。
 
-## 鉴权策略（已写死在代码注释里）
+## 鉴权策略
 
-采用 **固定 bootstrap 租户 + JWT 登录**（不做公开注册）：
+采用 **固定 bootstrap 租户 + JWT 登录**（不做公开注册）。启动时由 `BootstrapDataLoader` 幂等写入。口令不写在源码里，只从环境变量读取：
 
-- 租户名：`demo`
-- 用户名：`admin`
-- 密码：`admin123`
+- `LINKFORGE_BOOTSTRAP_TENANT`（默认 `demo`）
+- `LINKFORGE_BOOTSTRAP_USERNAME`（默认 `admin`）
+- `LINKFORGE_BOOTSTRAP_PASSWORD`（必填，无默认值）
 
-启动时由 `BootstrapDataLoader` 幂等写入。可用配置 `linkforge.bootstrap.*` 修改。
+本地示例值只在 `.env.example`。
 
 ## 模块（包）结构
 
@@ -49,14 +49,15 @@ com.linkforge
 
 ### 1. 启动依赖（Docker Compose）
 
+在仓库根目录执行。Compose 不再内置数据库或 MQ 口令，必须先有 `.env`：
+
 ```bash
-cd /workspace/linkforge
-cp .env.example .env   # 可选
+cp .env.example .env   # 本地示例；不要提交 .env
 docker compose up -d
 docker compose ps      # 确认 mysql / redis / rabbitmq healthy
 ```
 
-默认账号见 `.env.example`（MySQL `linkforge/linkforge_pass`，RabbitMQ 同理）。
+Compose 读取 `MYSQL_ROOT_PASSWORD`、`MYSQL_PASSWORD`、`RABBITMQ_PASSWORD`（以及可选的库名、用户名、端口）。用户名默认 `linkforge`，口令只来自 `.env`。
 
 ### 2. 编译
 
@@ -66,13 +67,27 @@ mvn -q -DskipTests package
 
 ### 3. 运行应用
 
+应用不会自动加载 `.env`。先导出变量再启动：
+
 ```bash
+set -a
+source .env
+set +a
 mvn spring-boot:run
 # 或
 java -jar target/linkforge-0.0.1-SNAPSHOT.jar
 ```
 
-默认端口 `8080`，profile `dev`。
+默认端口 `8080`，profile `dev`。未设置下列必填变量时，Spring 占位符无法解析，进程起不来：
+
+| 变量 | 作用 |
+|------|------|
+| `LINKFORGE_BOOTSTRAP_PASSWORD` | bootstrap 用户口令 |
+| `SPRING_DATASOURCE_PASSWORD` | MySQL 用户口令 |
+| `SPRING_RABBITMQ_PASSWORD` | RabbitMQ 口令 |
+| `JWT_SECRET` | JWT HMAC 密钥，至少 32 字符 |
+
+可选、源码里有非敏感默认值：`LINKFORGE_BOOTSTRAP_TENANT`、`LINKFORGE_BOOTSTRAP_USERNAME`、`SPRING_DATASOURCE_URL`、`SPRING_DATASOURCE_USERNAME`、`SPRING_DATA_REDIS_HOST`、`SPRING_DATA_REDIS_PORT`、`SPRING_RABBITMQ_HOST`、`SPRING_RABBITMQ_PORT`、`SPRING_RABBITMQ_USERNAME`。Redis 口令默认空（`SPRING_DATA_REDIS_PASSWORD`）。
 
 ### 4. 冒烟
 
@@ -84,7 +99,7 @@ curl -s http://localhost:8080/actuator/health
 # 登录
 TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"tenantName":"demo","username":"admin","password":"admin123"}' \
+  -d '{"tenantName":"'"${LINKFORGE_BOOTSTRAP_TENANT:-demo}"'","username":"'"${LINKFORGE_BOOTSTRAP_USERNAME:-admin}"'","password":"'"${LINKFORGE_BOOTSTRAP_PASSWORD}"'"}' \
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["token"])')
 
 # 创建短链
@@ -120,10 +135,8 @@ MQ：默认 `linkforge.mq.async-click-enabled=false`（只同步写库）。打�
 
 ## 配置要点
 
-见 `src/main/resources/application.yml`：
+见 `src/main/resources/application.yml`。口令与 `JWT_SECRET` 只有环境变量，没有写在 yml 或 Java 默认值里。本地示例见 `.env.example`。
 
-- 数据源 / Redis / RabbitMQ 均可用环境变量覆盖
-- `JWT_SECRET` 至少 32 字符
 - `linkforge.mq.async-click-enabled` 控制是否发 MQ
 
 ## 许可证
