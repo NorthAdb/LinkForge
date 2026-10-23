@@ -7,12 +7,14 @@ import com.linkforge.stats.entity.ClickLog;
 import com.linkforge.stats.mapper.ClickLogMapper;
 import com.linkforge.stats.mq.ClickEvent;
 import com.linkforge.stats.mq.ClickEventPublisher;
+import com.linkforge.security.UserContext;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 @Slf4j
 @Service
@@ -23,6 +25,11 @@ public class ClickRecordService {
     private final ClickEventPublisher clickEventPublisher;
     private final LinkForgeProperties properties;
 
+    /**
+     * D7=A double write: sync row in lf_click_log plus async publish. A failed publish
+     * is logged and later backfilled by ClickLogReconciler, so the redirect path never
+     * blocks on MQ.
+     */
     public void recordClick(ShortLink link, HttpServletRequest request) {
         LocalDateTime now = LocalDateTime.now();
         String ip = ClientIps.resolve(request);
@@ -37,12 +44,19 @@ public class ClickRecordService {
         logRow.setUserAgent(ua);
         logRow.setReferer(referer);
         logRow.setClickedAt(now);
-        clickLogMapper.insert(logRow);
+        if (properties.getMq().isSyncClickEnabled()) {
+            clickLogMapper.insert(logRow);
+        }
 
         if (properties.getMq().isAsyncClickEnabled()) {
             try {
+                String eventId = logRow.getId() != null
+                        ? "log-" + logRow.getId()
+                        : UUID.randomUUID().toString();
+                Long userId = UserContext.get() == null ? null : UserContext.get().getUserId();
                 clickEventPublisher.publish(new ClickEvent(
-                        link.getTenantId(), link.getId(), link.getCode(), ip, ua, referer, now));
+                        eventId, link.getTenantId(), link.getId(), link.getCode(),
+                        userId, ip, ua, referer, now));
             } catch (Exception ex) {
                 log.warn("async click publish failed code={}: {}", link.getCode(), ex.getMessage());
             }
