@@ -28,9 +28,11 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 @Slf4j
 @Service
@@ -43,6 +45,10 @@ public class ShortLinkService {
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final int CODE_ATTEMPTS = 16;
     private static final long STALE_WRITEBACK_CLEAR_MS = 1000;
+    private static final Pattern CUSTOM_CODE_PATTERN = Pattern.compile("^[A-Za-z0-9_-]{4,16}$");
+    private static final Set<String> RESERVED_CODES = Set.of(
+            "api", "r", "actuator", "health", "auth", "login", "register", "links",
+            "export", "stats", "swagger", "docs", "static", "index");
 
     private final ShortLinkMapper shortLinkMapper;
     private final StringRedisTemplate stringRedisTemplate;
@@ -115,6 +121,10 @@ public class ShortLinkService {
         if (request.getExpireAt() != null && !request.getExpireAt().isAfter(LocalDateTime.now())) {
             throw new BizException("expireAt must be in the future");
         }
+        String customCode = request.getCustomCode() == null ? null : request.getCustomCode().trim();
+        if (customCode != null && !customCode.isEmpty()) {
+            requireValidCustomCode(customCode);
+        }
 
         ShortLink link = new ShortLink();
         link.setTenantId(user.getTenantId());
@@ -126,16 +136,26 @@ public class ShortLinkService {
         link.setCreatedAt(LocalDateTime.now());
         link.setUpdatedAt(LocalDateTime.now());
 
-        // The uk_code unique index is the concurrency backstop; on a collision a fresh
-        // random code is tried instead of failing the request.
+        // uk_code is the concurrency backstop. A taken custom code is a 409; random
+        // codes regenerate on collision instead of failing the request.
         boolean inserted = false;
-        for (int attempt = 0; attempt < CODE_ATTEMPTS && !inserted; attempt++) {
-            link.setCode(randomCode(properties.getShortLink().getCodeLength()));
+        if (customCode != null && !customCode.isEmpty()) {
+            link.setCode(customCode);
             try {
                 shortLinkMapper.insert(link);
                 inserted = true;
             } catch (DuplicateKeyException ex) {
-                log.info("short code collision on {}, retrying (attempt {})", link.getCode(), attempt + 1);
+                throw new BizException(409, "code already exists");
+            }
+        } else {
+            for (int attempt = 0; attempt < CODE_ATTEMPTS && !inserted; attempt++) {
+                link.setCode(randomCode(properties.getShortLink().getCodeLength()));
+                try {
+                    shortLinkMapper.insert(link);
+                    inserted = true;
+                } catch (DuplicateKeyException ex) {
+                    log.info("short code collision on {}, retrying (attempt {})", link.getCode(), attempt + 1);
+                }
             }
         }
         if (!inserted) {
@@ -148,6 +168,15 @@ public class ShortLinkService {
                     Duration.ofSeconds(properties.getRateLimit().getIdempotencyTtlSeconds()));
         }
         return new CreateShortLinkResponse(link.getId(), link.getCode(), url, "/r/" + link.getCode());
+    }
+
+    private static void requireValidCustomCode(String code) {
+        if (!CUSTOM_CODE_PATTERN.matcher(code).matches()) {
+            throw new BizException("customCode must be 4-16 chars of letters, digits, underscore or hyphen");
+        }
+        if (RESERVED_CODES.contains(code.toLowerCase())) {
+            throw new BizException("customCode is reserved");
+        }
     }
 
     public PageResponse<ShortLinkDetail> list(int page, int size) {
@@ -168,8 +197,11 @@ public class ShortLinkService {
 
     public ShortLinkDetail update(String code, UpdateShortLinkRequest request) {
         boolean hasUrl = request.getOriginalUrl() != null && !request.getOriginalUrl().isBlank();
-        if (!hasUrl && request.getTitle() == null) {
+        if (!hasUrl && request.getTitle() == null && request.getExpireAt() == null) {
             throw new BizException("nothing to update");
+        }
+        if (request.getExpireAt() != null && !request.getExpireAt().isAfter(LocalDateTime.now())) {
+            throw new BizException("expireAt must be in the future");
         }
         ShortLink link = getOwnedLink(code);
         String effectiveUrl = link.getOriginalUrl();
@@ -182,6 +214,9 @@ public class ShortLinkService {
         if (request.getTitle() != null) {
             link.setTitle(request.getTitle());
         }
+        if (request.getExpireAt() != null) {
+            link.setExpireAt(request.getExpireAt());
+        }
         link.setUpdatedAt(LocalDateTime.now());
         shortLinkMapper.updateById(link);
         // Write-through now, then a delayed delete clears any stale write-back a racing
@@ -192,10 +227,26 @@ public class ShortLinkService {
     }
 
     public void disable(String code) {
+        setStatus(code, 0);
+    }
+
+    public void enable(String code) {
+        setStatus(code, 1);
+    }
+
+    private void setStatus(String code, int status) {
         ShortLink link = getOwnedLink(code);
-        link.setStatus(0);
+        link.setStatus(status);
         link.setUpdatedAt(LocalDateTime.now());
         shortLinkMapper.updateById(link);
+        evictCache(code);
+        scheduleStaleClear(code);
+    }
+
+    /** Logical delete: the code stays reserved (uk_code) and cannot be reused. */
+    public void delete(String code) {
+        ShortLink link = getOwnedLink(code);
+        shortLinkMapper.deleteById(link.getId());
         evictCache(code);
         scheduleStaleClear(code);
     }

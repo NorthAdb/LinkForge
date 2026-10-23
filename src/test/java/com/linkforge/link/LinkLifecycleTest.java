@@ -145,4 +145,53 @@ class LinkLifecycleTest extends AbstractIntegrationTest {
         var resp = patchJson("/api/links/" + code, "{}", token);
         assertEquals(400, resp.getStatusCode().value(), resp.getBody());
     }
+
+    @Test
+    void updateCanSetExpireAt() throws Exception {
+        String token = registerForToken();
+        String code = createLink(token, "https://example.com/exp-set");
+        var past = patchJson("/api/links/" + code,
+                om.writeValueAsString(Map.of("expireAt", LocalDateTime.now().minusMinutes(1).toString())), token);
+        assertEquals(400, past.getStatusCode().value(), past.getBody());
+
+        var future = patchJson("/api/links/" + code,
+                om.writeValueAsString(Map.of("expireAt", LocalDateTime.now().plusDays(3).toString())), token);
+        assertEquals(200, future.getStatusCode().value(), future.getBody());
+        assertFalse(body(future).path("data").path("expireAt").asText().isBlank());
+    }
+
+    @Test
+    void enableRestoresDisabledLink() throws Exception {
+        String token = registerForToken();
+        String target = "https://example.com/re-enable-" + System.currentTimeMillis();
+        String code = createLink(token, target);
+
+        assertEquals(200, postJson("/api/links/" + code + "/disable", "{}", token).getStatusCode().value());
+        assertEquals(404, get("/r/" + code, null).getStatusCode().value());
+
+        assertEquals(200, postJson("/api/links/" + code + "/enable", "{}", token).getStatusCode().value());
+        var redirected = get("/r/" + code, null);
+        assertEquals(302, redirected.getStatusCode().value(), redirected.getBody());
+        assertEquals(target, redirected.getHeaders().getLocation().toString());
+    }
+
+    @Test
+    void deleteRemovesLinkEverywhere() throws Exception {
+        String token = registerForToken();
+        String code = createLink(token, "https://example.com/del-" + System.currentTimeMillis());
+
+        assertEquals(200, delete("/api/links/" + code, token).getStatusCode().value());
+
+        assertFalse(Boolean.TRUE.equals(redis.hasKey(KEY_PREFIX + code)), "cache must be evicted after delete");
+        assertEquals(404, get("/r/" + code, null).getStatusCode().value());
+        assertEquals(404, get("/api/links/" + code, token).getStatusCode().value());
+        var list = get("/api/links?page=1&size=100", token);
+        assertEquals(0, body(list).path("data").path("total").asLong());
+    }
+
+    @Test
+    void unauthenticatedManagementCallReturns401() {
+        var resp = get("/api/links?page=1&size=10", null);
+        assertEquals(401, resp.getStatusCode().value(), resp.getBody());
+    }
 }

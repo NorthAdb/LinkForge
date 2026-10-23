@@ -84,6 +84,10 @@ public abstract class AbstractIntegrationTest {
         return exchange(HttpMethod.GET, uri, null, token);
     }
 
+    protected ResponseEntity<String> delete(String uri, String token) {
+        return exchange(HttpMethod.DELETE, uri, null, token);
+    }
+
     protected ResponseEntity<String> getWithHeader(String uri, String token, String name, String value) {
         HttpHeaders headers = new HttpHeaders();
         if (token != null) {
