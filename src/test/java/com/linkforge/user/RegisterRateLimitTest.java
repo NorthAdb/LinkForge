@@ -1,8 +1,11 @@
 package com.linkforge.user;
 
 import com.linkforge.AbstractIntegrationTest;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.util.Map;
@@ -12,10 +15,21 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "linkforge.rate-limit.key-prefix=linkforge:rl:it-rl:",
         "linkforge.rate-limit.register-max=2",
-        "linkforge.rate-limit.register-window-seconds=2"
+        "linkforge.rate-limit.register-window-seconds=10"
 })
 @ActiveProfiles("test")
 class RegisterRateLimitTest extends AbstractIntegrationTest {
+
+    @Autowired
+    private StringRedisTemplate redis;
+
+    @BeforeEach
+    void clearCounter() {
+        var keys = redis.keys("linkforge:rl:it-rl:*");
+        if (keys != null && !keys.isEmpty()) {
+            redis.delete(keys);
+        }
+    }
 
     @Test
     void thirdRegisterFromSameIpGets429() throws Exception {
