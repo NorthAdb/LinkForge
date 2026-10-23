@@ -1,5 +1,6 @@
 package com.linkforge.stats.service;
 
+import com.linkforge.common.util.ClientIps;
 import com.linkforge.config.LinkForgeProperties;
 import com.linkforge.link.entity.ShortLink;
 import com.linkforge.stats.entity.ClickLog;
@@ -24,7 +25,7 @@ public class ClickRecordService {
 
     public void recordClick(ShortLink link, HttpServletRequest request) {
         LocalDateTime now = LocalDateTime.now();
-        String ip = resolveClientIp(request);
+        String ip = ClientIps.resolve(request);
         String ua = truncate(request.getHeader("User-Agent"), 512);
         String referer = truncate(request.getHeader("Referer"), 512);
 
@@ -46,14 +47,6 @@ public class ClickRecordService {
                 log.warn("async click publish failed code={}: {}", link.getCode(), ex.getMessage());
             }
         }
-    }
-
-    private static String resolveClientIp(HttpServletRequest request) {
-        String xff = request.getHeader("X-Forwarded-For");
-        if (xff != null && !xff.isBlank()) {
-            return xff.split(",")[0].trim();
-        }
-        return request.getRemoteAddr();
     }
 
     private static String truncate(String value, int max) {
