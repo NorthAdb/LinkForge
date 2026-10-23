@@ -123,10 +123,16 @@ curl -s -X POST http://localhost:8080/api/links \
 curl -s -D - -o /dev/null http://localhost:8080/r/CODE
 ```
 
-一键冒烟（仓库根目录执行，自动做 health → 登录 → 建链 → 302 → Redis 校验，口令读 `.env`）：
+一键冒烟（仓库根目录执行，自动做 health → 登录 → 建链 → 302 → Redis 校验 → 注册 → 生命周期，口令读 `.env`）：
 
 ```bash
 bash scripts/smoke.sh
+```
+
+MQ 宕机演练（基线聚合 → 停 Rabbit 全部 302 → 恢复后追平）：
+
+```bash
+bash scripts/mq-drill.sh
 ```
 
 ## 已实现接口
@@ -142,12 +148,31 @@ bash scripts/smoke.sh
 | GET | `/api/links/{code}` | 详情：目标 URL、状态、过期时间、创建/更新时间 |
 | PATCH | `/api/links/{code}` | 改目标 URL / 备注；成功后删除 Redis 缓存 |
 | POST | `/api/links/{code}/disable` | 禁用；成功后删除 Redis 缓存 |
+| GET | `/api/links/{code}/stats?days=7` | 点击统计（仅链主）：总量 + 按天序列，days 1..90 |
 | GET | `/r/{code}` | 302 跳转；Redis 缓存优先，未命中回源 MySQL；同步写 `lf_click_log` |
 
 **错误码语义（已写死）**：跳转遇 **禁用或不存在 → 404**，**过期 → 410**；管理接口的越权访问统一 **404**（不泄露他人短码存在性）；注册租户名冲突 **409**；触发限流 **429**。
 
 跳转路径缓存键：`linkforge:code:{code}`。更新/禁用会主动删除该键，下一次跳转回源后重建。  
-MQ：默认 `linkforge.mq.async-click-enabled=false`（只同步写库）。打开后会额外投递到 RabbitMQ，消费者目前为 **stub 打日志**。
+
+## 点击统计管道（D7 双写）
+
+跳转产生一次点击后会**双写**：
+
+1. **同步明细**：插入 `lf_click_log`（开关 `LINKFORGE_SYNC_CLICK_ENABLED`，默认开）。
+2. **异步聚合**：发布 `ClickEvent` 到 RabbitMQ（开关 `LINKFORGE_ASYNC_CLICK_ENABLED`，默认开），真实消费者按 `eventId` 幂等写入 `lf_consumed_event` + 按天累加 `lf_click_daily`。
+
+幂等设计：`eventId = "log-{click_log.id}"`（确定性），实时消费与对账重放共用同一键，同一次点击无论被投递多少次只计一次。消费失败的消息进死信队列 `linkforge.click.dlq`（不回队热循环）。
+
+**对账与追平**：`ClickLogReconciler` 定时（`LINKFORGE_MQ_RECONCILE_FIXED_DELAY_MS`，默认 30s）扫描 `lf_click_log` 中尚未出现在 `lf_consumed_event` 的行并重放聚合——MQ 宕机期间发布失败的点击由它自动补齐（`scripts/mq-drill.sh` 演练此场景）。手工对账：
+
+```sql
+-- 明细与聚合应一致（sync 开关开着时）
+SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
+       (SELECT IFNULL(SUM(clicks),0) FROM lf_click_daily) AS aggregate;
+```
+
+**何时可关同步**：连续观察 `detail == aggregate` 且 MQ 稳定后，设 `LINKFORGE_SYNC_CLICK_ENABLED=false` 切纯异步。注意：关同步后新点击的 eventId 退化为随机 UUID（不再有 click_log id），对账器只负责收敛历史行。MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.click.dlx` / `linkforge.click.dlq`）。
 
 ## MVP vs 后续
 

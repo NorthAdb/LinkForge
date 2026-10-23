@@ -26,8 +26,10 @@ spring:
     password: ${SPRING_RABBITMQ_PASSWORD}
     listener:
       simple:
-        # Match MVP default: sync click log; enable when async-click-enabled=true
-        auto-startup: ${LINKFORGE_MQ_LISTENER_AUTO_STARTUP:false}
+        # Consumer runs by default now that the real consumer is in place.
+        auto-startup: ${LINKFORGE_MQ_LISTENER_AUTO_STARTUP:true}
+        # Errored messages go to the dead-letter queue instead of hot-looping.
+        default-requeue-rejected: ${LINKFORGE_MQ_DEFAULT_REQUEUE_REJECTED:false}
   jackson:
     time-zone: Asia/Shanghai
     serialization:
@@ -65,9 +67,12 @@ linkforge:
     cache-ttl-seconds: 3600
     code-length: 7
   mq:
-    # true: publish click events to RabbitMQ (consumer may be stub)
-    # false: only sync write click log (MVP default path still works)
-    async-click-enabled: false
+    # D7=A double write: async publish on by default, sync lf_click_log kept for对账.
+    # Turn sync off only after reconciliation proves aggregate == detail (see README).
+    async-click-enabled: ${LINKFORGE_ASYNC_CLICK_ENABLED:true}
+    sync-click-enabled: ${LINKFORGE_SYNC_CLICK_ENABLED:true}
+    reconcile-fixed-delay-ms: ${LINKFORGE_MQ_RECONCILE_FIXED_DELAY_MS:30000}
+    reconcile-initial-delay-ms: ${LINKFORGE_MQ_RECONCILE_INITIAL_DELAY_MS:15000}
   bootstrap:
     enabled: true
     tenant-name: ${LINKFORGE_BOOTSTRAP_TENANT:demo}

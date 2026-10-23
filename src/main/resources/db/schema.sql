@@ -53,3 +53,21 @@ CREATE TABLE IF NOT EXISTS lf_click_log (
     KEY idx_click_link_time (link_id, clicked_at),
     KEY idx_click_tenant_time (tenant_id, clicked_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS lf_click_daily (
+    id            BIGINT PRIMARY KEY AUTO_INCREMENT,
+    tenant_id     BIGINT       NOT NULL,
+    link_id       BIGINT       NOT NULL,
+    code          VARCHAR(16)  NOT NULL,
+    stat_date     DATE         NOT NULL,
+    clicks        BIGINT       NOT NULL DEFAULT 0,
+    created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_daily_link_date (link_id, stat_date),
+    KEY idx_daily_tenant_date (tenant_id, stat_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS lf_consumed_event (
+    event_id      VARCHAR(64) PRIMARY KEY,
+    consumed_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -29,8 +29,10 @@ public class LinkForgeProperties {
 
     @Data
     public static class Mq {
-        /** When true, also publish click events (consumer may be stub). */
+        /** When true, also publish click events to RabbitMQ. */
         private boolean asyncClickEnabled = false;
+        /** D7=A: keep the sync lf_click_log write alongside the async path. */
+        private boolean syncClickEnabled = true;
     }
 
     @Data

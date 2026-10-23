@@ -5,7 +5,9 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-@MapperScan("com.linkforge")
+// Explicit mapper packages: a broad "com.linkforge" scan also proxied plain
+// interfaces like ClickEventPublisher into mapper beans.
+@MapperScan({"com.linkforge.user.mapper", "com.linkforge.link.mapper", "com.linkforge.stats.mapper"})
 public class LinkForgeApplication {
 
     public static void main(String[] args) {
