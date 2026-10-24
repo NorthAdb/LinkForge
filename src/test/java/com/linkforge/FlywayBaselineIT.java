@@ -83,14 +83,18 @@ class FlywayBaselineIT {
         assertEquals(Boolean.TRUE, baseline.get("success"));
         assertTrue(rows.stream().noneMatch(r -> "1".equals(String.valueOf(r.get("version")))
                 && "SQL".equals(String.valueOf(r.get("type")))), "V1 must not re-run: " + rows);
-        // V2 (outbox, deepen A7), V3 (click dims, deepen A8) and V4 (case-sensitive
-        // short codes, deepen A10) apply on top of the baseline
+        // V2 (outbox), V3 (click dims), V4 (case-sensitive codes), V5 (api keys) and
+        // V6 (webhooks) apply on top of the baseline
         assertTrue(rows.stream().anyMatch(r -> "2".equals(String.valueOf(r.get("version")))
                 && "SQL".equals(String.valueOf(r.get("type")))), "V2 must apply after baseline: " + rows);
         assertTrue(rows.stream().anyMatch(r -> "3".equals(String.valueOf(r.get("version")))
                 && "SQL".equals(String.valueOf(r.get("type")))), "V3 must apply after baseline: " + rows);
         assertTrue(rows.stream().anyMatch(r -> "4".equals(String.valueOf(r.get("version")))
                 && "SQL".equals(String.valueOf(r.get("type")))), "V4 must apply after baseline: " + rows);
+        assertTrue(rows.stream().anyMatch(r -> "5".equals(String.valueOf(r.get("version")))
+                && "SQL".equals(String.valueOf(r.get("type")))), "V5 must apply after baseline: " + rows);
+        assertTrue(rows.stream().anyMatch(r -> "6".equals(String.valueOf(r.get("version")))
+                && "SQL".equals(String.valueOf(r.get("type")))), "V6 must apply after baseline: " + rows);
         // A9 audit S2: the short-code column must be case-sensitive binary collation
         assertEquals("utf8mb4_0900_bin", jdbc.queryForObject(
                 "SELECT COLLATION_NAME FROM information_schema.COLUMNS "
