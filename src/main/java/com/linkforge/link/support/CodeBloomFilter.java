@@ -51,16 +51,23 @@ public class CodeBloomFilter {
             LinkForgeProperties.Bloom cfg = properties.getBloom();
             BloomFilter<String> fresh = BloomFilter.create(
                     Funnels.stringFunnel(StandardCharsets.UTF_8), cfg.getExpectedInsertions(), cfg.getFpp());
+            // Publish the (still fail-open) filter before seeding: a create landing in
+            // the seeding window calls put() straight into `fresh` (Guava bit array is
+            // concurrency-safe) instead of being dropped and staying invisible until
+            // the next restart (A9 audit S1).
+            filter = fresh;
             List<String> codes = shortLinkMapper.selectAllCodes();
             for (String code : codes) {
                 fresh.put(code);
             }
-            filter = fresh;
             ready = true;
             meterRegistry.counter("linkforge.bloom.loaded").increment();
             log.info("bloom seeded with {} codes (expectedInsertions={}, fpp={}, approxSize={})",
                     codes.size(), cfg.getExpectedInsertions(), cfg.getFpp(), fresh.approximateElementCount());
         } catch (Exception ex) {
+            // No half-seeded filter may linger: back to the fail-open state
+            // (filter==null, ready==false) so every probe keeps going to the DB.
+            filter = null;
             ready = false;
             meterRegistry.counter("linkforge.bloom.loadfailed").increment();
             log.warn("bloom load failed; fail-open on the cache+DB path: {}", ex.getMessage(), ex);

@@ -1,0 +1,26 @@
+-- A10 / audit A9-S2: short codes are case-sensitive.
+-- The V1 column inherited the utf8mb4 default collation utf8mb4_0900_ai_ci
+-- (case-insensitive), so /r/{lowercase-variant} resolved via the DB when the
+-- Bloom gate was off but 404'd when it was on — behaviour changed with a toggle.
+-- This pins the intended semantics: exact-case match only.
+--
+-- Why utf8mb4_0900_bin and NOT utf8mb4_bin: utf8mb4_bin is PAD SPACE
+-- ('abc' = 'abc ' compares equal), which would let /r/abc%20 hit code "abc" via
+-- the DB while the Bloom gate (exact string) rejects it — the same
+-- "behaviour depends on the toggle" inconsistency in a new form. utf8mb4_0900_bin
+-- is NO PAD (like the current 0900_ai_ci) and case-sensitive ('abc' = 'ABC' is 0).
+-- Chosen by 萧北 2026-10-24. uk_code is rebuilt with the column, name unchanged;
+-- the existing ai_ci index already rules out codes differing only by case, so the
+-- stricter collation cannot raise unique conflicts and the migration always succeeds.
+--
+-- Only lf_short_link.code changes. lf_click_log.code / lf_click_daily.code are
+-- redundant snapshots written from the DB row (canonical case) and are never
+-- compared or joined on, so their collation is irrelevant today — and skipping
+-- them avoids rebuilding the ever-growing detail tables.
+--
+-- RULE: joins across these tables must go through link_id, never through code.
+-- Comparing lf_short_link.code against lf_click_log.code directly would raise
+-- ERROR 1267 (illegal mix of collations); if a code-based join is ever really
+-- needed, migrate the snapshot columns to the same collation in a new migration.
+ALTER TABLE lf_short_link
+    MODIFY code VARCHAR(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL;

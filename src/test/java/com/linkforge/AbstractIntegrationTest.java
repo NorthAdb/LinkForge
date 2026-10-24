@@ -110,6 +110,16 @@ public abstract class AbstractIntegrationTest {
         return om.readTree(resp.getBody()).path("data").path("code").asText();
     }
 
+    /** Creates a short link with a custom code and returns the code. */
+    protected String createCustomLink(String token, String customCode, String originalUrl) throws Exception {
+        String json = om.writeValueAsString(java.util.Map.of("originalUrl", originalUrl, "customCode", customCode));
+        ResponseEntity<String> resp = postJson("/api/links", json, token);
+        if (!resp.getStatusCode().is2xxSuccessful()) {
+            throw new IllegalStateException("create custom link failed: " + resp.getStatusCode() + " " + resp.getBody());
+        }
+        return om.readTree(resp.getBody()).path("data").path("code").asText();
+    }
+
     protected ResponseEntity<String> postJson(String uri, String json, String token) {
         return exchange(HttpMethod.POST, uri, json, token);
     }

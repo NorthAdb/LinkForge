@@ -40,6 +40,22 @@ class CodeBloomFilterTest {
     }
 
     @Test
+    void putsDuringTheLoadWindowAreNotLost() {
+        // A9 audit S1: the filter is published before seeding, so a create that
+        // commits after the snapshot (mid-load) lands in the same instance.
+        when(mapper.selectAllCodes()).thenAnswer(inv -> {
+            bloom.put("racer");
+            return List.of("seeded1");
+        });
+
+        bloom.load();
+
+        assertTrue(bloom.isReady());
+        assertTrue(bloom.mightContain("seeded1"));
+        assertTrue(bloom.mightContain("racer"), "put landing in the seeding window must survive");
+    }
+
+    @Test
     void putAfterLoadMakesNewCodesPositive() {
         when(mapper.selectAllCodes()).thenReturn(List.of());
         bloom.load();

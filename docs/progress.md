@@ -2,9 +2,9 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：深化 A9 终态＝合并 `d6c97e0`（feat/deepen-a9-bloom 四单元 + 共享测试容器连接上限修复）+ docs 收口 `ee86f0114f534729c755f34da55acd6527dc85a5`（其上至多一个纯 docs 钉子提交；审计以 git rev-parse HEAD 为准，`ee86f0114f534729c755f34da55acd6527dc85a5` 必为其祖先）；A8 终态 `9dd60df` 的钉点漂移已在本轮开工提交 `f6b7dbe` 补钉（A8-N1）。
+> **当前 main tip**：`ccff8026fa491d529d2f06e26d91bc6d30d4a939`（2026-10-24，深化 A9 终态＝合并 `d6c97e0` + docs 收口 `ee86f01` + 纯钉子提交 `ccff802`，`git rev-parse HEAD` 可对）。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
-> 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6、A7、A8 均已交付并通过审计（A8 审计 PASS_WITH_NITS @ `9dd60df`）；本轮为**深化 A9 Bloom 防非法短码穿透**（跳转热路径 DB 前短路），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A9-bloom-handoff.md`。
+> 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6、A7、A8、A9 均已交付并通过审计（A9 审计 PASS_WITH_NITS @ `ccff802`，无 must-fix）；本轮为**深化 A10 singleflight 防热点击穿**（+ A9 审计收口 + V4 短码区分大小写），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A10-singleflight-handoff.md`。
 
 ## 状态总览
 
@@ -23,6 +23,7 @@
 | 深化 | A7 Transactional Outbox | feat/deepen-a7-outbox | ✅ 完成（见「深化 A7 Transactional Outbox」） |
 | 深化 | A8 维度预聚合看板 | feat/deepen-a8-dimensions | ✅ 完成（见「深化 A8 维度预聚合」） |
 | 深化 | A9 Bloom 防非法短码穿透 | feat/deepen-a9-bloom | ✅ 完成（见「深化 A9 Bloom 防非法短码穿透」） |
+| 深化 | A10 singleflight 防热点击穿 | feat/deepen-a10-singleflight | ✅ 完成（见「深化 A10 singleflight 防热点击穿」） |
 | P4 | 工程化（CI/bench/隔离/收紧） | feat/p4-engineering | ✅ 完成（见「P4 工程化」） |
 
 ## 环境与工具事实（审计人须知）
@@ -634,7 +635,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | D-A9-2 | **Guava `BloomFilter<String>`**（`Funnels.stringFunnel(UTF_8)`）进程内；`expectedInsertions=100000` + `fpp=1e-4` 可配；`ApplicationReadyEvent` 全量 `SELECT code` 装载；创建成功 `put`；多实例各自装载（Demo 姿态，跨实例新建码的假阴性限制与 RedisBloom 后置路线登记 README） | 交接单推荐默认；RedisBloom 需 Redis Stack 模块，不为本阶段引入 |
 | D-A9-3 | 插入点＝`resolveTarget` **限流之后、缓存与 DB 之前**；`mightContain==false` → 404 + 指标 `linkforge.bloom.rejected`；true → 维持既有 Redis+DB 路径 | 交接单 D-A9-3；放在缓存读之前连 Redis GET 一并省掉（强于「仅不打 MySQL」） |
 | D-A9-4 | 假阳性 → 一次 DB miss → 404，正确性不变；用 Guava 标准实现（不自造 bitset，杜绝假阴性） | 交接单 D-A9-4 |
-| D-A9-5 | 禁用：行仍在，Bloom 保持正答 → 回源 DB → 404；删除：物理删行、经典 Bloom 不可回收，删除码仍可能正答 → 一次 DB miss → 404（登记已知限制；定期全量 rebuild 可选后置）；**不**为删除引入会假阴性的粗糙结构 | 交接单 D-A9-5 |
+| D-A9-5 | 禁用：行仍在，Bloom 保持正答 → 回源 DB → 404；删除是**逻辑删除**（行保留、码位不可复用），已删码仍装进 Bloom（播种 SQL 绕过 @TableLogic）→ 回源 DB（deleted=0 过滤）→ 404；经典 Bloom 不可回收（rebuild 后置）；**不**为删除引入会假阴性的粗糙结构（A10 起按审计 A9-N4 更正措辞） | 交接单 D-A9-5 |
 | D-A9-6 | `linkforge.bloom.enabled`（`LINKFORGE_BLOOM_ENABLED`）开关；未就绪/装载失败 **fail-open** 走旧路径（warn + 指标 `linkforge.bloom.loadfailed`），Bloom 故障不产生 5xx | 交接单 D-A9-6 |
 | D-A9-7 | `LINKFORGE_BLOOM_EXPECTED_INSERTIONS=100000` / `LINKFORGE_BLOOM_FPP=0.0001`；超预期插入只会**劣化误判率（多回源，不会漏）**写进 README；启动日志打 seeded 数与 approxSize | 交接单 D-A9-7 |
 | D-A9-8 | Bloom 不替代 URL Redis 缓存、不存 status/expire；A10/B7/B8 本阶段不做（仅在「下一步」提名） | 交接单 D-A9-8 |
@@ -681,6 +682,85 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 ### 下一步（不混入本轮）
 
 - A10 singleflight（防击穿）、B7 空值缓存 + TTL 抖动、B8 Caffeine L1；Bloom 共享化（RedisBloom）与删除回收（定期 rebuild）后置，均需萧北指令再开。
+
+---
+
+## 深化 A10 singleflight 防热点击穿（feat/deepen-a10-singleflight，发车基线 main@ccff802，2026-10-24）
+
+范围：交接单 `记录追踪/05-阶段交接/LinkForge-phase-A10-singleflight-handoff.md`。同码并发 DB 行读合并为一次在途读（进程内 singleflight），**禁用/过期/删除仍以 DB 行为准**（决策 #8 不动）；开工消化 A9 审计 S1/S2/N1–N4，其中 S2 按萧北口径落 V4（`utf8mb4_0900_bin`）。范围外（B7 空值缓存 + TTL 抖动 / B8 Caffeine / 分布式锁 / XFetch 实现 / RedisBloom / Bloom rebuild / 长链去重 Bloom / ES）未动。
+
+### A9 审计项处置（对照交接单 §0.1）
+
+| # | 处置 | 落点 |
+|---|------|------|
+| **A9-S1** | **完整落地**：`load()` 改为「先 `filter = fresh`（ready 仍 false → mightContain 照样 fail-open）→ 再 `selectAllCodes()` 逐条 put → 最后 `ready = true`」，装载窗口内的创建 `put` 直落 fresh（Guava 位数组并发安全）；`loadfailed` 分支补 `filter = null`，不留半装 filter | `CodeBloomFilter`；单测 `putsDuringTheLoadWindowAreNotLost`（mock answer 内 put → 装载后正答）。时序说明：filter 先发布、ready 后置，两段 volatile 写保证窗口内「要么 fail-open、要么已包含新 put」 |
+| **A9-S2** | **V4 落地**（萧北已定口径）：`V4__short_code_case_sensitive.sql` 把 `lf_short_link.code` 改为 `utf8mb4_0900_bin`（NO PAD，非 `utf8mb4_bin` 的 PAD SPACE）；关联表不改（冗余快照、零比较场景）；文件头写明选型理由与「跨表关联一律 link_id」规则；README 自定义短码段 + `/r/{code}` 行 + OpenAPI（`/r/{code}` 参数与 `customCode`）加「区分大小写」；保留字检查仍不区分大小写 | V4 + IT（Bloom 开/关两上下文都 404）+ `FlywayBaselineIT` 断言 V4 + collation |
+| A9-N1 | README「已知限制」多实例句改为审计建议原文（真阴性表述） | README 防穿透节 |
+| A9-N2 | `doCreate` 改为「insert 成功 → `codeBloom.put` → `cacheUrl`」，先落库再登记存在性 | `ShortLinkService.doCreate` |
+| A9-N3 | 新增 `BloomDisabledAtStartupIT`（`properties = "linkforge.bloom.enabled=false"`）：断言 `isReady()==false`、`loaded`/`rejected` 未注册、未知码 404、建链 302；同上下文承载 S2 的 Bloom 关大小写用例 | 新 IT |
+| A9-N4 | README 防穿透节与 progress D-A9-5「物理删除」全部更正为「逻辑删除（行保留、码位不可复用）；播种 SQL 故意绕过 @TableLogic，已删码保持正答 → 回源 DB（deleted=0 过滤）→ 404」；`ShortLinkMapper.selectAllCodes` 注释写明绕过是故意的 | README + progress + mapper 注释 |
+
+### 决策记录（D-A10-1…10）
+
+| # | 决策 | 理由 |
+|---|------|------|
+| D-A10-1 | 只合并 `resolveTarget` 第 ④ 步「code → 行」；**Redis 命中与否都走合并**（命中时也读库，§0.0）；限流/Bloom/Redis GET/状态判定/回填/`recordClick` 留在各请求线程；过期判定用本请求 `now()`，BizException 结论不共享 | 交接单 D-A10-1；本项目不是经典击穿形状，合并对象是每请求读行 |
+| D-A10-2 | `link/support/SingleFlight<K,V>`：`ConcurrentHashMap` + `putIfAbsent`（**禁用** computeIfAbsent 包阻塞调用）；领头在自己线程同步执行 loader，`complete/completeExceptionally` 交结果，`finally remove(key, future)` 两参摘除；完成即摘除，**不是结果缓存**（无 TTL、无最近值、null 不缓存） | 交接单 D-A10-2；JDK 并发包，零新依赖 |
+| D-A10-3 | key＝原样 code（区分大小写）；**先 V4 后 singleflight**，无「大小写两路 flight」中间态 | 交接单 D-A10-3；与 V4/Bloom 口径一致 |
+| D-A10-4 | 跟车超时 `linkforge.singleflight.wait-timeout-ms`（`LINKFORGE_SINGLEFLIGHT_WAIT_TIMEOUT_MS`，默认 500）→ **自读退化** + `timeout` 计数；领头异常原样传给同批跟车（与各自读库失败等价）、条目摘除下轮重新领头；不自动重试；中断恢复标志后退化为自读 | 交接单 D-A10-4 |
+| D-A10-5 | 强一致口径保留：每请求拿到一次真实 DB 读，跟车共享的是一次**在途**读（窗口毫秒级 < 1s 双删）；`update`/`setStatus`/`delete` 写后 `forget(code)`；合并器不跨请求缓存行 | 交接单 D-A10-5；写后 forget 有 IT 钉住 |
+| D-A10-6 | Bloom 门在合并器之前；误判/已删码的并发 miss 也合并但 null 不缓存（B7 后置） | 交接单 D-A10-6 |
+| D-A10-7 | Redis 回填保持每请求自行「cached 空才 SET」（同值幂等）；不做领头回填（需传递领头标志，收益为零重复 SET） | 交接单 D-A10-7 可选项的取舍 |
+| D-A10-8 | `linkforge.singleflight.enabled`（默认 true）+ 嵌套配置类 + yml env 透传；指标 `loads`（领头尝试）/`shared`（跟车成功复用）/`timeout`（退化自读）；关闭时不注册计数器 | 交接单 D-A10-8 |
+| D-A10-9 | S2＝V4 `utf8mb4_0900_bin`（NO PAD，萧北 2026-10-24 已定）；只改 `lf_short_link.code`；跨表按 link_id 关联规则写进 V4 头注释 | 交接单 D-A10-9（§1.1 四条理由） |
+| D-A10-10 | 进程内合并，多实例最坏「每实例每窗口 1 次」；不引入分布式锁（只会串行化读、拉长尾延迟）；README 一句话写明取舍 | 交接单 D-A10-10 |
+
+### 改动清单
+
+| 单元 | 内容 |
+|------|------|
+| V4 | `V4__short_code_case_sensitive.sql`（ALTER MODIFY collation；存量库实测 `Migrating schema to version "4 - short code case sensitive"`）；V1–V3 未动 |
+| Bloom 收口 | `CodeBloomFilter.load()` 顺序调换（S1）+ `loadfailed` 清 filter；`doCreate` put 前置（N2）；`selectAllCodes` 注释（N4） |
+| 合并器 | `link/support/SingleFlight`（泛型组件，约 90 行）+ `link/support/ShortLinkRowLoader`（薄 Bean 包 selectOne，供测试 spy） |
+| 接线 | `ShortLinkService.resolveTarget` ④ 改 `singleFlight.run(code, () -> rowLoader.load(code))`；`update`/`setStatus`/`delete` 后 `forget(code)` |
+| 配置 | `LinkForgeProperties.SingleFlight`（enabled/waitTimeoutMs）+ application.yml 两个 env |
+| 测试 | `SingleFlightTest` 5 例（单测，CountDownLatch 卡领头 + 线程态 await 定等）；`SingleFlightRedirectIT` 3 例（@SpyBean 延迟 300ms 制造重叠：24 并发恰 1 次读 + loads/shared 增量、关闭对照 12 次全读且不计数、disable 在途窗口后的 GET 必 404）；`BloomRedirectIT` 大小写用例 + `BloomDisabledAtStartupIT` 2 例；`FlywayBaselineIT` V4 + collation 断言；`CodeBloomFilterTest` +1（S1） |
+| 文档 | README 新「防击穿（A10 singleflight）」节（真实形状/窗口/forget/退化/多实例/无分布式锁/mutex-singleflight-XFetch 对照）+ 跳转时序 ④ + 配置要点 + 指标清单 + 自定义短码「区分大小写」 |
+
+### 验收勾选（对照交接单）
+
+| # | 标准 | 证据 |
+|---|------|------|
+| A10-1 | DB 行读经合并器、命中与否都合并、其余步骤各请求自理 | 代码（resolveTarget ④ = `singleFlight.run`，其余步骤原位）；`recordClick` 零 diff |
+| A10-2 | 并发 IT：N≥20 并发同码全 302、DB 读恰 1 次、loads=1/shared=N−1；关闭对照 N 次 | `SingleFlightRedirectIT.concurrentRedirectsShareExactlyOneRowRead`（24 并发 + spy 300ms 延迟；rowReads=1、loads 增量 1、shared 增量 23）；`mergeDisabledEveryRequestReadsItsOwnRow`（12 并发 rowReads=12、loads 不涨） |
+| A10-3 | 合并器单测五态 | `SingleFlightTest`：恰 1 次 loader+计数、异常传播同批跟车且下轮重新领头、超时自读+timeout 计数、完成后无残留、forget 生效 |
+| A10-4 | 降级路径不产生额外 5xx/404 | 超时自读（单测）；领头异常传播（单测）；关闭=A9 行为（单测 + 实机 `LINKFORGE_SINGLEFLIGHT_ENABLED=false` 重启：valid 302/unknown 404、loads 未注册） |
+| A10-5 | 禁用/过期/删除语义不变；写路径 forget；窗口口径成文；无行缓存 | `LinkLifecycleIT`/`BloomRedirectIT` 回归绿（disable→404、enable→302、过期→410）；实机 disable/enable 手验；`disableDuringInFlightReadIsNotRiddenByLaterRequests` 钉住写后不跟车；组件无 TTL/无最近值（代码审） |
+| A10-6 | A9-S1/N1/N2/N4 已修、N3 有 IT | 见「A9 审计项处置」表 |
+| A10-7 | S2：V4 + collation + 双上下文 404 + 大小写共存 + 保留字 + 基线断言 + 文档 | 实机 information_schema 三列核对（short_link=0900_bin，click_log/click_daily=0900_ai_ci）；建 `A10x…` → 302、小写变体 → 404（Bloom 开 rejected、Bloom 关 DB miss 两 IT）；`FlywayBaselineIT` 断 V4 + collation；`LinkValidationsTest` 保留字用例保持绿；README/OpenAPI/progress 成文 |
+| A10-8 | README/progress 完整、连接预算一行 | 本节 + README；预算：既有 ~21 上下文 + 本轮 2 个新上下文（BloomDisabledAtStartupIT、SingleFlightRedirectIT，均设 `hikari.maximum-pool-size=4`）→ 峰值连接 ≈ 21×10+2×4=218 < 500，未动 `--max-connections` |
+| A10-9 | verify 全绿 + CI 绿、测例增量 | 本机 `mvn -B test` → **41 单测绿**（+6：SingleFlightTest 5 + S1 用例 1）；CI 全量与 run 链接收口时按实补齐 |
+| A10-10 | 范围干净 | diff 复查：无空值缓存/TTL 抖动/Caffeine/分布式锁/XFetch 实现/RedisBloom/长链 Bloom；V1–V3 未改；`recordClick`/Outbox/维度/UV 零 diff；**零新依赖**（JDK 并发包） |
+
+### 验证命令与输出摘要（本机，2026-10-24）
+
+- `D:/tools/apache-maven-3.9.9/bin/mvn -B test` → `Tests run: 41, Failures: 0, Errors: 0` + BUILD SUCCESS
+- 实机（kill 旧进程 → 新 jar 重启）：`Migrating schema to version "4 - short code case sensitive"`；`bloom seeded with 889 codes`；Flyway validate 5 migrations
+- information_schema：`lf_short_link.code=utf8mb4_0900_bin`，`lf_click_log/lf_click_daily.code=utf8mb4_0900_ai_ci`（关联表未动，实锤）
+- 大小写：建 `A10x1792843534` → 302；小写变体 → 404（Bloom 拒）；`LINKFORGE_SINGLEFLIGHT_ENABLED=false` 重启后小写变体仍 404（V4 是 DB 级语义，与开关无关）
+- 并发：xargs -P 50 同码 GET → **50/50 全 302**，`loads` 1→38、`shared` 0→13、`timeout` 未注册（无 5xx；未加延迟时重叠量天然不稳定，确定性证据归 IT 的 spy 延迟窗口）
+- disable → 404、enable → 302；`bash scripts/smoke.sh` → **SMOKE OK**（8/8）
+- 回归：`bash scripts/mq-drill.sh` → **DRILL OK**；`bash scripts/outbox-drill.sh` → **OUTBOX DRILL OK**（PENDING=10/hot-path detail=0/attempts=2 → recovery aggregate=10, detail=10, SENT=10, UV=1）
+
+### 执行记录
+
+- 开工按交接单顺序：A9 收口（S1/N1/N2/N4）→ V4（S2 + N3 上下文）→ singleflight 组件与接线 → 测试 → 实机 → 文档。每单元本地编译/单测绿后提交。
+- 本地单测两轮红均为测试自身断言写错（`v0/v1` 计数错位、无残留断言期望值写反），组件行为正确；修正后 41/41 绿。`Thread.ofPlatform()`（JDK 21 API）替换为 JDK 17 兼容写法一次。
+- 手验过程重启应用三次（正常 / singleflight-off / 正常），V4 只在首次启动迁移，后续 validate。
+
+### 下一步（不混入本轮）
+
+- B7 空值缓存 + TTL 抖动、B8 Caffeine L1、XFetch 实现、RedisBloom 共享、Bloom 定期 rebuild、长链去重 Bloom、B10 全量 bench，均需萧北指令再开。
 
 ---
 

@@ -15,6 +15,7 @@ public class LinkForgeProperties {
     private Bootstrap bootstrap = new Bootstrap();
     private RateLimit rateLimit = new RateLimit();
     private Bloom bloom = new Bloom();
+    private SingleFlight singleFlight = new SingleFlight();
 
     @Data
     public static class Jwt {
@@ -60,6 +61,14 @@ public class LinkForgeProperties {
         private int expectedInsertions = 100_000;
         /** Desired false-positive probability; false positives just fall through to cache+DB. */
         private double fpp = 0.0001;
+    }
+
+    @Data
+    public static class SingleFlight {
+        /** A10: merge concurrent same-code hot-path row reads into one in-flight DB read. */
+        private boolean enabled = true;
+        /** Follower wait cap; on expiry the follower does its own DB read (fail-open). */
+        private long waitTimeoutMs = 500;
     }
 
     @Data
