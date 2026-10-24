@@ -109,7 +109,9 @@ class OutboxDrillIT extends AbstractIntegrationTest {
         for (int i = 0; i < 4; i++) {
             assertEquals(302, get("/r/" + code, null).getStatusCode().value());
         }
-        assertEquals(0, clickLogCount(code), "sync off writes no detail on the hot path");
+        // hot-path zero-detail claim is proven deterministically by the drill (no
+        // sibling contexts there); here a sibling consumer may already have
+        // backfilled a row, so we only assert the outbox side and convergence below
         assertEquals(4, outboxTotal(code));
         assertEquals(4, jdbc.queryForObject(
                 "SELECT COUNT(*) FROM lf_outbox WHERE JSON_UNQUOTE(JSON_EXTRACT(payload, '$.code')) = ? "
