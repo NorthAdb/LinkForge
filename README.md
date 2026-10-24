@@ -119,7 +119,7 @@ curl -s -X POST http://localhost:8080/api/links \
   -H 'Content-Type: application/json' \
   -d '{"originalUrl":"https://example.com","title":"demo"}'
 
-# 302 跳转（把 CODE 换成返回的 code；用 GET，`-I` 发 HEAD 会被安全链按未鉴权拒绝 403）
+# 302 跳转（把 CODE 换成返回的 code；`curl -I` 发 HEAD 也可探测：同 GET 语义返回 302/404/410，但不产生点击记录）
 curl -s -D - -o /dev/null http://localhost:8080/r/CODE
 ```
 
@@ -156,10 +156,11 @@ bash scripts/mq-drill.sh
 | GET | `/api/links/{code}/clicks?page=&size=` | 点击明细（仅链主）：时间/IP/UA/Referer，新到旧分页 |
 | GET | `/api/links/export` | 导出本人全部短链 CSV（UTF-8 BOM，逗号/引号转义） |
 | GET | `/r/{code}` | 302 跳转；Redis 缓存优先，未命中回源 MySQL；同步写 `lf_click_log` |
+| HEAD | `/r/{code}` | 可跳性探测：302（带 Location）/404/410 与 GET 同档，但**不写点击明细、不发 MQ、不计 UV**（共用按 IP 跳转限流） |
 
 **错误码语义（已写死）**：跳转遇 **禁用或不存在 → 404**，**过期 → 410**；管理接口的越权访问统一 **404**（不泄露他人短码存在性）；未携带/无效凭证 **401**；注册租户名冲突 **409**、自定义短码被占用 **409**；触发限流 **429**。
 
-**自定义短码**：`customCode` 需 4-16 位字母/数字/下划线/连字符，保留字（api、r、actuator、health、auth 等）不可用；已被占用（含已删除链占用的码）返回 409。随机码与自定义码共用 `uk_code` 唯一索引，并发安全。
+**自定义短码**：`customCode` 需 4-16 位字母/数字/下划线/连字符，保留字（admin、login、stats、actuator、console、metrics 等，大小写不敏感）不可用，短于 4 位的词（api、r）天然被长度规则挡住；已被占用（含已删除链占用的码）返回 409。随机码与自定义码共用 `uk_code` 唯一索引，并发安全。
 
 **限流（P3）**：注册按 IP 5 次/10 分钟；创建按用户 30 次/分钟；公开跳转按 IP 300 次/分钟。全部为 Redis 固定窗口，超限 429，阈值见下方环境变量。限流器在 Redis 故障时放行（degrade open）。客户端 IP 默认取 socket 地址、**不信任** `X-Forwarded-For`（该头可伪造、会被用来绕限流）；仅在可信反向代理后部署时设 `LINKFORGE_TRUST_XFF=true`。同一客户端经 IPv4/IPv6 两个协议访问会各占一个计数桶（本机 `127.0.0.1` 与 `::1` 并存属预期现象）。
 

@@ -7,6 +7,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.net.URI;
@@ -20,6 +22,12 @@ public class RedirectController {
     @GetMapping("/r/{code}")
     public ResponseEntity<Void> redirect(@PathVariable String code, HttpServletRequest request) {
         String target = shortLinkService.resolveAndRecord(code, request);
+        return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(target)).build();
+    }
+
+    @RequestMapping(value = "/r/{code}", method = RequestMethod.HEAD)
+    public ResponseEntity<Void> probe(@PathVariable String code, HttpServletRequest request) {
+        String target = shortLinkService.resolveForProbe(code, request);
         return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(target)).build();
     }
 }

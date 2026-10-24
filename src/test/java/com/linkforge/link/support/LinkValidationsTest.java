@@ -51,6 +51,9 @@ class LinkValidationsTest {
     void reservedWordsRejectedCaseInsensitively() {
         assertThrows(BizException.class, () -> LinkValidations.requireValidCustomCode("stats"));
         assertThrows(BizException.class, () -> LinkValidations.requireValidCustomCode("DOCS"));
+        assertThrows(BizException.class, () -> LinkValidations.requireValidCustomCode("admin"));
+        assertThrows(BizException.class, () -> LinkValidations.requireValidCustomCode("ADMIN"));
+        assertThrows(BizException.class, () -> LinkValidations.requireValidCustomCode("favicon"));
         assertDoesNotThrow(() -> LinkValidations.requireValidCustomCode("docs2"));
     }
 }

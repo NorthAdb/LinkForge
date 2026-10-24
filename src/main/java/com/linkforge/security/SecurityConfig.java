@@ -37,7 +37,8 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> {
                     auth.requestMatchers("/actuator/health", "/api/health").permitAll()
                             .requestMatchers("/api/auth/**").permitAll()
-                            .requestMatchers(HttpMethod.GET, "/r/**").permitAll();
+                            .requestMatchers(HttpMethod.GET, "/r/**").permitAll()
+                            .requestMatchers(HttpMethod.HEAD, "/r/**").permitAll();
                     if (docsEnabled) {
                         auth.requestMatchers(docsPaths).permitAll()
                                 .requestMatchers(consolePaths).permitAll();
