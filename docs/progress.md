@@ -2,7 +2,7 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：开工 `68cbcc6`（A6 收口，2026-10-24）；本轮（A7）收工精确 SHA 见「深化 A7 Outbox」小节末尾。
+> **当前 main tip**：开工 `68cbcc6` → 收工 `18f918e`（A7 代码终态＝此合并；docs 收口提交紧随，`git log -2` 可见），2026-10-24。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
 > 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6 均已交付并通过审计；本轮为**深化 A7 Transactional Outbox**（点击管道升级 + 关 sync 断链追平演练），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A7-outbox-handoff.md`。
 
@@ -528,7 +528,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | A7-6 | 关 sync 明细/UV 语义文档化且行为一致 | README 管道节「关 sync 后的语义」；drill/IT 断言明细=10、UV=1 与文档一致 |
 | A7-7 | 旧 Reconciler/开关无谎言 | 代码：sync 关时 reconcile 直接 return；README 同口径 |
 | A7-8 | N1+N2 已做、文档完整 | 本节 + 分支首提交 + README/docker README |
-| A7-9 | verify 全绿 + CI 绿 | 本机 23 单测绿；CI 期望 **79 = 23 单测 + 56 IT**（+OutboxDrillIT 2），链接见下 |
+| A7-9 | verify 全绿 + CI 绿 | 本机 23 单测绿；CI 全量 **79 例（23 单测 + 56 IT）0 失败**：分支终态 run [40079719914](https://github.com/NorthAdb/LinkForge/actions/runs/40079719914) ✅、main run [40079879455](https://github.com/NorthAdb/LinkForge/actions/runs/40079879455) ✅（`Tests run: 56` IT + `Tests run: 23` 单测） |
 
 ### 验证命令与输出摘要（本机，2026-10-24）
 
