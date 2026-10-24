@@ -349,7 +349,8 @@ public class ShortLinkService {
         // B8 L1 (URL strings only, never the row) in front of the Redis L2; a hit
         // saves a Redis round-trip but the row below is still read per request.
         String cached = urlLocalCache.getIfPresent(code);
-        if (cached == null || cached.isBlank()) {
+        boolean servedFromLocal = cached != null && !cached.isBlank();
+        if (!servedFromLocal) {
             cached = stringRedisTemplate.opsForValue().get(cacheKey);
         }
         // A10: concurrent same-code reads merge into one in-flight DB read (whether
@@ -374,6 +375,11 @@ public class ShortLinkService {
         // must never mask a dirty/poisoned row (legacy-dirty contract, LinkLifecycleIT).
         if (!LinkValidations.isRenderableUrl(link.getOriginalUrl())) {
             throw new BizException(410, "short link target is invalid");
+        }
+        // Bw1-N1: a Redis-only hit backfills the L1 so a hot code stops paying the
+        // Redis round-trip after the 10s L1 TTL; every row check above already passed.
+        if (!servedFromLocal && cached != null && !cached.isBlank()) {
+            urlLocalCache.put(code, cached);
         }
         String originalUrl = cached != null && !cached.isBlank() ? cached : link.getOriginalUrl();
         if (!LinkValidations.isRenderableUrl(originalUrl)) {

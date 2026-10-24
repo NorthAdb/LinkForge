@@ -35,6 +35,23 @@ class BloomRedirectIT extends AbstractIntegrationTest {
     @Autowired
     private com.linkforge.link.mapper.ShortLinkMapper shortLinkMapper;
 
+    @Autowired
+    private com.linkforge.link.support.UrlLocalCache urlLocalCache;
+
+    @Test
+    void redisOnlyHitBackfillsTheLocalCache() throws Exception {
+        // Bw1-N1: after the 10s L1 TTL a hot code keeps hitting Redis; that hit must
+        // backfill the L1 (once every row check passed) instead of looping on misses.
+        String token = registerForToken();
+        String code = createLink(token, "https://example.com/l1-backfill");
+        assertEquals(302, get("/r/" + code, null).getStatusCode().value());
+
+        urlLocalCache.invalidate(code); // simulate the L1 TTL expiring
+        assertEquals(302, get("/r/" + code, null).getStatusCode().value());
+        assertEquals("https://example.com/l1-backfill", urlLocalCache.getIfPresent(code),
+                "the Redis-only hit must have backfilled the L1");
+    }
+
     private double rejectedCount() {
         var counter = meterRegistry.find("linkforge.bloom.rejected").counter();
         return counter == null ? 0.0 : counter.count();
