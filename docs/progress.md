@@ -983,6 +983,9 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 - **Bw2fix-9 手验**：带主密钥配 endpoint → `unset LINKFORGE_WEBHOOK_SECRET_KEY` 重启（WARN 文案＝「master key unavailable」，N2 口径）→ 点击 302 → 投递行 **PENDING / attempts=0**，relay 跳过 9 轮（`relay.skipped`=9.0）→ 恢复主密钥重启 → 该行 **SENT / attempts=1**，无需重放。附带取证：无主密钥时 PUT 新 endpoint 返回 503（secret 落库必须加密，属 B 波 2 既定降级，S1-b 针对的是已配置 endpoint 的投递意图）
 - 期间踩坑一次：重启验证时 8080 上残留了无密钥的旧进程，PUT 打到旧进程得 503——杀干净后即 200；不影响结论
 - 三回归：`scripts/smoke.sh` **SMOKE OK**；`scripts/outbox-drill.sh` **OUTBOX DRILL OK**；`scripts/mq-drill.sh` **DRILL OK**（本机注册限流窗口按惯例先清本机 Redis 计数键）
+- **分支 CI 三红一绿（修复轮自己的教训）**：①run [40114155914](https://github.com/NorthAdb/LinkForge/actions/runs/40114155914) 红（@e5bb964）＝四件事：pom execution id 起名 default-it 没顶掉隐式 default 执行 → **整套 IT 跑了两遍**、时钟 IT 混进 UTC fork；queryForMap 的 DATETIME 返回 LocalDateTime、强转 Timestamp 抛 ClassCastException；脏值 `javascript:alert(1)` 其实过得了渲染校验（isRenderableUrl 只拦控制字符/解析失败，CRLF 注入串才是已知不可渲染形态）；duplicate 计数断言没按 tag 取（find 命中同名的另一个计数器）。修＝execution id 改 `default` + asLocalDateTime 兼容两种返回类型 + 脏值改 CRLF 串 + taggedCounter（08e3797）。②run [40114667946](https://github.com/NorthAdb/LinkForge/actions/runs/40114667946) 红＝转义笔误把 
+ 写成真实换行，字符串字面量断裂（42d7ef9 修）。③run [40114741958](https://github.com/NorthAdb/LinkForge/actions/runs/40114741958) 红＝asLocalDateTime 助手的 python 替换静默未命中、调用点已改导致缺方法（2248085 修）。终态 run [40114874266](https://github.com/NorthAdb/LinkForge/actions/runs/40114874266) 绿。教训：python 批量改代码必须 assert 替换发生；`&&` 链守提交（本轮起恢复，禁止 `;\)。
+- **修复后例数**：surefire **63**（59+4）＋ failsafe 默认 execution **90**（86+3 S1 例 +1 N1 例）＋ `webhook-tz-it` fork **2**（M1/S2 回归）＝ **合计 155 例全绿**；连接预算不变（时钟 IT 复用 WebhookDeliveryIT 属性集，fork 内容器不并存）≈ 226 < 500
 
 ---
 
