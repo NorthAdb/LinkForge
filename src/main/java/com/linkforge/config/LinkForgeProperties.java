@@ -17,6 +17,8 @@ public class LinkForgeProperties {
     private Bloom bloom = new Bloom();
     private SingleFlight singleFlight = new SingleFlight();
     private L1 l1 = new L1();
+    private ApiKey apiKey = new ApiKey();
+    private Webhook webhook = new Webhook();
 
     @Data
     public static class Jwt {
@@ -84,6 +86,34 @@ public class LinkForgeProperties {
         private long maximumSize = 10_000;
         /** Must stay well under the Redis positive-cache TTL. */
         private long ttlSeconds = 10;
+    }
+
+    @Data
+    public static class ApiKey {
+        /** B-wave2 B4: quotas fall back to these when the key row stores NULL. */
+        private int defaultQuotaPerMinute = 120;
+        private int defaultQuotaPerDay = 10_000;
+        private int maxActivePerUser = 10;
+    }
+
+    @Data
+    public static class Webhook {
+        /** B-wave2 B5: click webhooks off the A7 outbox chain. */
+        private boolean enabled = true;
+        /** Relay drain switch; test contexts default it off so only one relay race-drains the shared table. */
+        private boolean relayEnabled = true;
+        /** Base64 of a 32-byte AES-256 master key; missing key degrades the feature off. */
+        private String secretMasterKey = "";
+        private long relayFixedDelayMs = 2000;
+        private long relayInitialDelayMs = 5000;
+        private int relayBatchSize = 50;
+        private int maxAttempts = 8;
+        private long backoffBaseSeconds = 10;
+        private long backoffMaxSeconds = 3600;
+        private int connectTimeoutMs = 2000;
+        private int requestTimeoutMs = 5000;
+        /** IT-only escape hatch; must never be true in prod (D-Bw2-15). */
+        private boolean allowPrivateTargets = false;
     }
 
     @Data

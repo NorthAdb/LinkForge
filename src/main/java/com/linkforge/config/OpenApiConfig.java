@@ -18,9 +18,24 @@ public class OpenApiConfig {
     @Bean
     public OpenAPI linkForgeOpenApi(ObjectProvider<BuildProperties> buildProperties) {
         BuildProperties build = buildProperties.getIfAvailable();
-        return new OpenAPI().info(new Info()
-                .title("LinkForge")
-                .version(build != null ? build.getVersion() : "dev")
-                .description("多租户短链 + 访问分析后端（短链创建、302 跳转、点击双写聚合）"));
+        return new OpenAPI()
+                .info(new Info()
+                        .title("LinkForge")
+                        .version(build != null ? build.getVersion() : "dev")
+                        .description("多租户短链 + 访问分析后端（短链创建、302 跳转、点击双写聚合）。"
+                                + "认证二选一：JWT（Authorization: Bearer）或 API Key（X-API-Key 头，"
+                                + "仅 /api/links/** 可用）；两者同时携带返回 400。"
+                                + "Webhook 签名头：X-LinkForge-Event-Id / X-LinkForge-Timestamp / X-LinkForge-Signature（v1=HMAC-SHA256）。"))
+                .components(new io.swagger.v3.oas.models.Components()
+                        .addSecuritySchemes("bearerAuth",
+                                new io.swagger.v3.oas.models.security.SecurityScheme()
+                                        .type(io.swagger.v3.oas.models.security.SecurityScheme.Type.HTTP)
+                                        .scheme("bearer")
+                                        .bearerFormat("JWT"))
+                        .addSecuritySchemes("apiKeyAuth",
+                                new io.swagger.v3.oas.models.security.SecurityScheme()
+                                        .type(io.swagger.v3.oas.models.security.SecurityScheme.Type.APIKEY)
+                                        .in(io.swagger.v3.oas.models.security.SecurityScheme.In.HEADER)
+                                        .name("X-API-Key")));
     }
 }

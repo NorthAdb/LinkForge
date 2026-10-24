@@ -36,17 +36,20 @@ public class ClickStatsService {
     private final ClickDailyMapper clickDailyMapper;
     private final ClickDimDailyMapper clickDimDailyMapper;
     private final ClickLogMapper clickLogMapper;
+    private final com.linkforge.webhook.service.WebhookService webhookService;
     private final TransactionTemplate dedupTx;
 
     public ClickStatsService(ConsumedEventMapper consumedEventMapper,
                              ClickDailyMapper clickDailyMapper,
                              ClickDimDailyMapper clickDimDailyMapper,
                              ClickLogMapper clickLogMapper,
+                             com.linkforge.webhook.service.WebhookService webhookService,
                              PlatformTransactionManager transactionManager) {
         this.consumedEventMapper = consumedEventMapper;
         this.clickDailyMapper = clickDailyMapper;
         this.clickDimDailyMapper = clickDimDailyMapper;
         this.clickLogMapper = clickLogMapper;
+        this.webhookService = webhookService;
         this.dedupTx = new TransactionTemplate(transactionManager);
     }
 
@@ -94,6 +97,11 @@ public class ClickStatsService {
                 clickDimDailyMapper.incrementClick(event.getTenantId(), event.getLinkId(),
                         date, dim.type(), dim.value());
             }
+            // B-wave2 B5: a click that won the dedup insert leaves one PENDING webhook
+            // delivery in the SAME transaction — replayed events early-return above,
+            // so one eventId can never enqueue twice (D-Bw2-9). Failures are swallowed
+            // inside; statistics semantics untouched.
+            webhookService.recordClickDelivery(event);
             return true;
         }));
     }

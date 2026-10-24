@@ -236,6 +236,38 @@ MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.c
 - **行级 URL 校验门（B8 引入的护栏）**：每次跳转都会读行，行的 `original_url` 不可渲染时**一律 410，与缓存命中与否无关**——带 B8 后「脏行 + 旧缓存未清」会被旧缓存遮蔽成 302，此门保证脏行永远不被旧缓存掩盖（`LinkLifecycleIT` legacy-dirty 契约钉住）
 - **多实例诚实口径**：L1 进程内、实例间**不同步**（无 pub/sub 广播）——实例 A 改了 URL，实例 B 在 L1 TTL（≤10s）内可能仍跳旧 URL，与 Redis 双删窗口叠加时取更长者；空值缓存在 Redis、多实例共享。Bloom 的多实例限制见「防穿透」
 
+## 开放能力（B4 API Key / B5 Webhook）
+
+### B4 API Key（哈希存储 + 配额）
+
+外部系统可以不拿 JWT、改用 **API Key** 调链接面 API：
+
+- **格式与存储**：明文 `lfk_{8位前缀}_{32位Base62}`，只在**创建响应里出现一次**；库里只有 `key_hash = SHA-256(明文)`（唯一索引点查）+ 展示用 `key_prefix`，明文与 hash 都不进日志/列表
+- **请求头**：`X-API-Key: lfk_...`（**不能**放 `Authorization: Bearer`——那是 JWT 专用，混发两样返回 400）
+- **身份**：Key 以**创建者用户**的身份调用（`ROLE_API_KEY`），归属/限流/幂等语义与 JWT 完全一致；多租户隔离不变
+- **权限白名单**：Key 可调 `/api/links/**`（含 stats / breakdown / clicks / export）；**不可**调 `/api/keys/**`、`/api/webhooks/**`、`/actuator/**`（health 除外）→ 403。Key 不能再签 Key、改回调地址、看全局指标（防泄露后横向扩权）
+- **吊销即时**：每请求按 hash 点查一次库，`DELETE /api/keys/{id}` 后**下一请求即 401**（不做认证缓存，代价是每请求一次点查）
+- **配额**：Key 级分钟/日两道固定窗口（复用限流实现，键 `linkforge:rl:apikey:min|day:{keyId}`），超限 429 + `Retry-After`；额度默认 120/分钟、10000/日，可在创建时按 Key 覆盖。**诚实边界**：Redis 故障期间配额 fail-open 不生效（配额是商业限额不是安全边界）；固定窗口边界可瞬时 2×；分钟被拒时日计数已 +1（小幅高估）
+- **管理 API（仅 JWT）**：`POST /api/keys`（明文仅此一次）/ `GET /api/keys` / `DELETE /api/keys/{id}`（幂等吊销）；每用户活跃 Key 上限 10
+
+```bash
+curl -X POST -H "Authorization: Bearer $JWT" -H "Content-Type: application/json"   -d '{"name":"ci","quotaPerMinute":60}' http://localhost:8080/api/keys
+# → data.key = "lfk_xxxxxxxx_..." （仅此一次）
+curl -X POST -H "X-API-Key: lfk_xxxxxxxx_xxx" -H "Content-Type: application/json"   -d '{"originalUrl":"https://example.com"}' http://localhost:8080/api/links
+```
+
+### B5 点击 Webhook（建在 A7 Outbox 链上）
+
+租户可配置一个回调地址，点击事件**逐次**推送（`link.clicked`）：
+
+- **投递来源（关键）**：`recordClick` 热路径**零新增**——点击照旧走 `lf_outbox → MQ → consume`，在 `consume` 的**幂等去重事务内**落一行 `lf_webhook_delivery(PENDING)`，独立 relay 轮询做 HTTP 投递。同一 eventId 无论重放几次只产生一行；断 MQ 期间点击停在 outbox，恢复后自动补出投递
+- **签名与防重放**：头 `X-LinkForge-Event-Id`（= `evt_` + 点击 eventId，跨重试/重放稳定）、`X-LinkForge-Timestamp`（Unix 秒）、`X-LinkForge-Signature: v1=HMAC-SHA256(secret, timestamp + "." + rawBody)`。接收方校验：常量时间比较 + **±300s** 容差 + 按 event id 去重
+- **payload**：`{id, type:"link.clicked", createdAt, data:{linkId, code, clickedAt, device, refererHost}}`——**不推原始 IP / 完整 UA / 完整 Referer**（隐私最小化）
+- **重试**：2xx = SENT；网络错/超时/408/429/5xx 按 `min(1h, 10s·2^n)` 退避（默认上限 8 次后 **FAILED**）；其它 4xx 首败即 FAILED（接收方明确拒收）。手工重放：`UPDATE lf_webhook_delivery SET status='PENDING', next_attempt_at=NULL WHERE id=?`。**at-least-once**（多实例无 SKIP LOCKED），接收方按 event id 去重
+- **secret 存储（Q1 拍板）**：at-rest 为 **AES-256-GCM 密文**（`v1:` + Base64(nonce‖ct‖tag)），主密钥来自 env **`LINKFORGE_WEBHOOK_SECRET_KEY`**（Base64 32 字节）。创建/轮换时明文只返回一次，GET 只给掩码。**运维边界**：主密钥丢失 → 库内密文全部不可解密，须对所有租户 `rotate-secret` 重发；主密钥不进仓库；**主密钥未配置时 webhook 功能整体降级关闭**（启动有 warn，endpoint 无法保存、不产生投递），不会带坏密钥签名
+- **SSRF 基本防护**：保存时与**每次发送前**双校验——仅 http/https、拒 userinfo、解析出的所有 IP 不得为环回/私网/链路本地（含云元数据 169.254.169.254）/CGNAT/ULA，不跟随重定向（3xx = 不可重试失败）。**诚实限制**：DNS rebinding（校验与连接两次解析的 TOCTOU）本波不做、无端口白名单、无出口代理隔离；`LINKFORGE_WEBHOOK_ALLOW_PRIVATE_TARGETS` 仅测试用，prod 禁开
+- **调度隔离**：`spring.task.scheduling.pool.size=4`，webhook relay 慢不拖点击 outbox 追平；webhook 依赖 `LINKFORGE_ASYNC_CLICK_ENABLED=true`（纯 sync 模式不产生回调）
+
 **存量库迁移（Flyway，深化 A6）**：schema 已版本化在 `src/main/resources/db/migration`（`V1__baseline_schema.sql`），由应用启动时自动迁移（`spring.flyway.baseline-on-migrate=true`）：
 
 - **全新数据卷**：首次启动应用（或跑 `scripts/migrate.sh`）由 Flyway 建全部表；Compose 的 MySQL 不再挂载 initdb 脚本，容器 healthy 后直接起应用即可。
@@ -274,11 +306,13 @@ MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.c
 - `LINKFORGE_SINGLEFLIGHT_ENABLED` / `LINKFORGE_SINGLEFLIGHT_WAIT_TIMEOUT_MS` 同码并发读行合并（默认 true / 500ms，见「防击穿」；超时退化自读）
 - `LINKFORGE_CACHE_TTL_JITTER_SECONDS`（默认 300）/ `LINKFORGE_ABSENT_TTL_SECONDS`（默认 60）/ `LINKFORGE_ABSENT_TTL_JITTER_SECONDS`（默认 30）空值缓存与抖动（见「多级缓存」；absent ≤0 关闭负缓存）
 - `LINKFORGE_L1_ENABLED` / `LINKFORGE_L1_MAXIMUM_SIZE` / `LINKFORGE_L1_TTL_SECONDS` Caffeine L1（默认 true / 10000 / 10 秒，见「多级缓存」；命中不跳过 DB 行读）
+- `LINKFORGE_APIKEY_QUOTA_PER_MINUTE`（默认 120）/ `LINKFORGE_APIKEY_QUOTA_PER_DAY`（默认 10000）/ `LINKFORGE_APIKEY_MAX_ACTIVE`（默认 10）API Key 配额与上限（见「开放能力」）
+- `LINKFORGE_WEBHOOK_ENABLED`（默认 true）/ `LINKFORGE_WEBHOOK_SECRET_KEY`（Base64 32 字节 AES-256 主密钥，缺失则 webhook 降级关）/ `LINKFORGE_WEBHOOK_RELAY_FIXED_DELAY_MS`（默认 2000）/ `LINKFORGE_WEBHOOK_MAX_ATTEMPTS`（默认 8）/ `LINKFORGE_WEBHOOK_ALLOW_PRIVATE_TARGETS`（默认 false，仅测试）
 - `LINKFORGE_IDEMPOTENCY_TTL_SECONDS` 创建幂等键保留时长（默认 86400 秒）
 - `LINKFORGE_TRUST_XFF` 是否信任 X-Forwarded-For（默认 false，仅在可信反代后开启）
 - 限流覆盖说明：注册按 IP、创建按用户（**含自定义短码创建，共用 POST /api/links 的限额**）；CSV 导出与统计查询属管理 API（JWT 必需、租户隔离），未单独限流，导出有 1 万行上限保护
 - `/actuator/health` 展示组件细节（db / redis / rabbit / diskSpace），依赖 DOWN 时整体 503
-- `/actuator/metrics/**` 暴露业务计数器（`linkforge.links.created`、`linkforge.redirects`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`、`linkforge.bloom.rejected` / `linkforge.bloom.loaded` / `linkforge.bloom.loadfailed`、`linkforge.singleflight.loads` / `linkforge.singleflight.shared` / `linkforge.singleflight.timeout`、`linkforge.cache.absent.hit` / `linkforge.cache.absent.put`、`linkforge.l1.hit` / `linkforge.l1.miss`、`linkforge.outbox.failed`），需 Bearer Token
+- `/actuator/metrics/**` 暴露业务计数器（`linkforge.links.created`、`linkforge.redirects`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`、`linkforge.bloom.rejected` / `linkforge.bloom.loaded` / `linkforge.bloom.loadfailed`、`linkforge.singleflight.loads` / `linkforge.singleflight.shared` / `linkforge.singleflight.timeout`、`linkforge.cache.absent.hit` / `linkforge.cache.absent.put`、`linkforge.l1.hit` / `linkforge.l1.miss`、`linkforge.apikey.auth{result}` / `linkforge.apikey.quota.rejected{window}`、`linkforge.webhook.delivery{result}` / `linkforge.webhook.enqueued` / `linkforge.webhook.blocked`、`linkforge.outbox.failed`），需 Bearer Token
 - **公网部署**：本地 Demo 一律默认 profile（全开放）；对外部署设 `SPRING_PROFILES_ACTIVE=prod` 一键收紧——health 细节转 `when_authorized`、springdoc 与静态控制台关闭、文档/控制台路径在过滤器层 denyAll（见 application.yml prod 段与 ProdProfileIT）
 
 ## 架构

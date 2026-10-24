@@ -28,9 +28,11 @@ import java.util.function.Supplier;
  *   so a late arrival can never be dropped by the finishing leader). This is a
  *   de-duplicator, NOT a result cache: nothing survives the flight, no TTL, no
  *   last-value memory. Null results (bloom false-positives, deleted codes) are
- *   shared within the flight only — no negative caching (B7 is out of scope).
- * - {@code forget(key)} lets write paths (update/disable/delete) drop an in-flight
- *   read so requests arriving after the commit re-lead and read the fresh row.
+ *   shared within the flight only. Negative caching lives elsewhere (B7's
+ *   linkforge:absent:{code} in ShortLinkService) — this component caches nothing.
+ * - {@code peek(key)} + two-arg {@code forget(key, snapshot)} let write paths
+ *   (update/disable/delete) drop only the in-flight read they snapshotted before
+ *   committing, never a flight that started after the commit (A10 audit N1).
  *
  * Failure semantics: a loader exception is handed to every follower already
  * waiting (same as if each had read and failed itself) and the entry is removed,

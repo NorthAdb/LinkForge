@@ -2,9 +2,9 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：B 档波 1 终态＝合并 `8474d7f`（B7 空值缓存+抖动 / B8 L1 / A10-N1 / 行级校验门，119 例全绿）+ main 去抖直修 `5f610ee` + docs 收口 `cdc0a6a141dd5cf544ec89c0a926d1df681532c1`（其上至多一个纯 docs 钉子提交；审计以 `git rev-parse HEAD` 为准，`cdc0a6a…` 必为其祖先）。
+> **当前 main tip**：`05f67389b9fe229b48ef17c96775107706af9db1`（2026-10-24，B 档波 1 终态＝合并 `8474d7f` + main 去抖 `5f610ee` + docs 收口 `cdc0a6a` + 纯钉子提交 `05f6738`，`git rev-parse HEAD` 可对）。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
-> 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6–A10 均已交付并通过审计（A10 审计 PASS_WITH_NITS @ `f8130cf`，无 must-fix/should-fix）；本轮为 **B 档波 1：B7 空值缓存+TTL 抖动 + B8 Caffeine L1（+ A10-N1 安全 forget）**，交接单 `记录追踪/05-阶段交接/LinkForge-phase-B-wave1-b7b8-handoff.md`。
+> 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6–A10、B 档波 1 均已交付并通过审计（B 波 1 审计 PASS_WITH_NITS @ `05f6738`，无 must-fix/should-fix）；本轮为 **B 档波 2：B4 API Key（哈希）+ 配额 + B5 点击 Webhook（建在 A7 Outbox 链上）**，交接单 `记录追踪/05-阶段交接/LinkForge-phase-B-wave2-b4b5-handoff.md`（Q1 AES-GCM+env 主密钥 / Q2 逐次点击 / Q3 Key 绑创建者已拍板）。
 
 ## 状态总览
 
@@ -25,6 +25,7 @@
 | 深化 | A9 Bloom 防非法短码穿透 | feat/deepen-a9-bloom | ✅ 完成（见「深化 A9 Bloom 防非法短码穿透」） |
 | 深化 | A10 singleflight 防热点击穿 | feat/deepen-a10-singleflight | ✅ 完成（见「深化 A10 singleflight 防热点击穿」） |
 | 深化 | B 档波 1：B7 空值缓存+抖动 / B8 L1 | feat/deepen-b-wave1-b7b8 | ✅ 完成（见「B 档波 1：B7+B8」） |
+| 深化 | B 档波 2：B4 API Key / B5 Webhook | feat/deepen-b-wave2-b4b5 | ✅ 完成（见「B 档波 2：B4+B5」） |
 | P4 | 工程化（CI/bench/隔离/收紧） | feat/p4-engineering | ✅ 完成（见「P4 工程化」） |
 
 ## 环境与工具事实（审计人须知）
@@ -839,6 +840,95 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 ### 下一步（不混入本波）
 
 - 波 2+：B4/B5/B2/B6/B1/B10/B3/B9，均需萧北指令再开。
+
+---
+## B 档波 2：B4 API Key + 配额 / B5 点击 Webhook（feat/deepen-b-wave2-b4b5，发车基线 main@05f6738，2026-10-24）
+
+范围：交接单 `记录追踪/05-阶段交接/LinkForge-phase-B-wave2-b4b5-handoff.md`。多租户从「数据隔离」到「可集成」：只存哈希的 API Key + Key 级配额；点击事件经 A7 Outbox 链以 HMAC 签名推送到租户 Webhook，302 热路径零新增。Q1（AES-GCM+env 主密钥）/ Q2（逐次点击）/ Q3（Key 绑创建者）已由萧北拍板。开工消化 B 波 1 审计 N1/N2。范围外（Resilience4j / OAuth / 管理 UI / 聚合推送 / 租户级 Key / 波 3–5 / V1–V4 改动）未动。
+
+### B 波 1 审计项处置（对照交接单 §0.1）
+
+| # | 处置 | 落点 |
+|---|------|------|
+| **Bw1-N1** | **已修**：`resolveTarget` 在行判定全部通过（含行级 URL 校验门）之后，Redis-only 命中即 `urlLocalCache.put` 回填 L1——不重写 Redis、不改 TTL、**仍不跳过** singleflight/DB 行读 | `ShortLinkService` + IT `redisOnlyHitBackfillsTheLocalCache`（invalidate L1 后一次 GET → getIfPresent 非空） |
+| **Bw1-N2** | **已修**：`SingleFlight` 类注释改为现状（负缓存在 `ShortLinkService` 的 `linkforge:absent:{code}`，本组件不缓存结果；写路径用 peek 快照 + 两参 forget） | `SingleFlight` 头注释 |
+
+### 决策记录（D-Bw2-1…21）
+
+| # | 决策 | 理由 |
+|---|------|------|
+| D-Bw2-1 | Key 明文 `lfk_{prefix8}_{secret32}`；库只存 `key_hash=hex(SHA-256(明文))`（CHAR(64) UK）+ `key_prefix` 展示；明文仅创建响应一次；高熵随机串用 SHA-256（不做 bcrypt）；HMAC+pepper 加分未做 | 交接单推荐默认 |
+| D-Bw2-2 | 头名 `X-API-Key`（独立于 Bearer）；`ApiKeyAuthFilter` 只处理 `/api/**`（shouldNotFilter），`addFilterAfter(JwtAuthFilter)`；JWT+Key 同带 → 400；无效/吊销 → 401 JSON 同形；两个过滤器沿用 @Component 自动注册（OncePerRequestFilter 去重） | 交接单 D-Bw2-2 |
+| D-Bw2-3 | Key 绑 `(tenant_id, user_id)`，认证成功 `UserContext.set(AuthUser(userId, tenantId, "apikey:"+prefix))` + `ROLE_API_KEY`（**不给** ROLE_USER）——现有 per-user 归属/限流/幂等原样生效 | Q3 拍板 |
+| D-Bw2-4 | SecurityConfig 显式白名单：`/api/links/**` → hasAnyRole(USER, API_KEY)；`/api/keys/**`、`/api/webhooks/**`、`/actuator/**`（health 除外）→ hasRole(USER)；`anyRequest()` 收紧为 hasRole(USER)；新增 accessDeniedHandler → 403 JSON | 交接单 D-Bw2-4 |
+| D-Bw2-5 | 管理 API（JWT only）：POST /api/keys（明文一次）/ GET /api/keys（无 key/hash）/ DELETE /api/keys/{id}（幂等吊销、他人 id 404）；每用户活跃上限 10（`LINKFORGE_APIKEY_MAX_ACTIVE`） | 交接单 D-Bw2-5 |
+| D-Bw2-6 | 吊销即时：每请求按 key_hash 点查（UK 索引），`revoked_at IS NULL` 才放行；**不做认证缓存**；`last_used_at` best-effort（`SET NX linkforge:apikey:touch:{id} EX 60` 抢到才 UPDATE，失败吞掉） | 交接单 D-Bw2-6 |
+| D-Bw2-7 | 配额复用 `RedisRateLimiter`：`{rl前缀}apikey:min:{keyId}`（60s）/ `apikey:day:{keyId}:{yyyyMMdd}`（Asia/Shanghai 自然日，86400s 兜底）；NULL 额度回落默认 120/10000；先分钟后日；超限 429 + `Retry-After`（分钟固定 60、日窗给到次日 0 点秒数）；**只对 Key 请求计数**；fail-open（Redis 故障配额不生效）；诚实登记：固定窗口边界 2×、分钟拒时日计数已 +1 | 交接单 D-Bw2-7 |
+| D-Bw2-8 | `V5__api_key.sql`（§1.2 表结构）；V1–V4 零改 | 交接单 |
+| D-Bw2-9 | **投递来源＝第二跳 outbox**：`consume` dedup 事务内（lf_consumed_event 插入成功后、return true 前）查本租户启用 endpoint，有则 INSERT `lf_webhook_delivery(PENDING)`；`recordClick`/`resolveTarget`/`ClickOutboxRelay` 零改动；`lf_outbox` 不加事件类型；副作用＝依赖 async-click-enabled=true（dev 默认开） | 交接单 D-Bw2-9（关键决策） |
+| D-Bw2-10 | 逐次点击 `link.clicked`；payload `{id, type, createdAt, data:{linkId, code, clickedAt, device, refererHost}}`（复用 A8 `ClickDimensions`）；**不推原始 IP/完整 UA/Referer** | Q2 拍板 + 隐私最小化 |
+| D-Bw2-11 | 头三件套 `X-LinkForge-Event-Id/Timestamp/Signature`；签名 `v1=HMAC-SHA256(secret, ts + "." + body)`（发送时时间戳，重试更新）；secret `whsec_`+64hex，创建/轮换明文一次；at-rest **AES-256-GCM**（`v1:`+Base64(nonce‖ct‖tag)），主密钥 env `LINKFORGE_WEBHOOK_SECRET_KEY`（Base64 32 字节）；**主密钥缺失/非 32 字节 → webhook 整体降级关（warn），endpoint 保存 503、不产生投递、不签名**；轮换后 PENDING 重试用当前 secret 签名 | Q1 拍板；README 写轮换/丢失运维边界 |
+| D-Bw2-12 | 投递 event id = `evt_` + ClickEvent.eventId；`UNIQUE(endpoint_id, event_id)` 兜底；同一点击重放/重试 id 稳定 | 交接单 |
+| D-Bw2-13 | 2xx=SENT；网络错/超时/408/429/5xx → attempts+1，`next_attempt_at=now+min(1h, 10s·2^attempts)`；其它 4xx 首败 FAILED；attempts≥8（`LINKFORGE_WEBHOOK_MAX_ATTEMPTS`）→ FAILED；手工重放 SQL 写 README；endpoint 禁用/删除 → PENDING 行下轮标 FAILED('endpoint disabled') | 交接单 D-Bw2-13 |
+| D-Bw2-14 | Relay `@Scheduled` fixedDelay 2000ms 批 50；HTTP 用 JDK `java.net.http.HttpClient`（零新依赖，connect 2s/request 5s/**NEVER 跟随重定向**）；**调度隔离**＝`spring.task.scheduling.pool.size: 4`（基础 yml，`LINKFORGE_SCHEDULING_POOL_SIZE` 可覆盖），webhook 慢不拖点击追平；多实例 at-least-once（接收方按 event id 去重） | 交接单 D-Bw2-14 二选一取 pool.size |
+| D-Bw2-15 | SSRF 双校验（保存 + 发送前）：scheme http/https、拒 userinfo、解析出的**所有** IP 不得为 loopback/any-local/multicast/link-local（含 169.254.169.254）/site-local/CGNAT 100.64/10/IPv6 ULA fc00::/7/IPv4-mapped 回落 v4 规则；不跟随重定向；`allow-private-targets` 默认 false 仅 IT 开；README 写明 DNS rebinding/端口白名单/出口代理三项不做 | 交接单 D-Bw2-15 |
+| D-Bw2-16 | 每租户一个 endpoint（uk tenant）：PUT /api/webhooks/endpoint（创建返明文 secret 一次，更新不换 secret）、GET（掩码）、POST rotate-secret（新明文一次）、DELETE（物理删，存量 PENDING 行下轮 FAILED）；JWT only | 交接单 D-Bw2-16 |
+| D-Bw2-17 | 测试桩＝JDK `com.sun.net.httpserver.HttpServer`（零新依赖，随机端口，脚本化状态码，记录头/体）；未用 mockwebserver | 交接单推荐默认 |
+| D-Bw2-18 | `V6__webhook.sql`（endpoint + delivery 两表，§1.2 列名钉死）；`lf_outbox`/`lf_consumed_event` 结构不动 | 交接单 |
+| D-Bw2-19 | 指标：`linkforge.apikey.auth{result=ok|invalid|ambiguous}`（吊销与无效共用 invalid，progress 钉死）+ `linkforge.apikey.quota.rejected{window=minute|day}` + `linkforge.webhook.delivery{result=success|retry|failed}` + `linkforge.webhook.enqueued` + `linkforge.webhook.blocked`；RedisRateLimiter fail-open 不打点是既有行为 | 交接单允许微调，此为钉死口径 |
+| D-Bw2-20 | OpenAPI components 增加 `bearerAuth`（http bearer JWT）与 `apiKeyAuth`（header X-API-Key）两 scheme；描述注明「二选一、同带 400」与 webhook 签名头 | 交接单 D-Bw2-20 |
+| D-Bw2-21 | 热路径零行为改动（仅 Bw1-N1 的 L1 回填）；`consume` 只追加投递行插入；V1–V4 零改 | 交接单 D-Bw2-21 |
+
+### 改动清单
+
+| 单元 | 内容 |
+|------|------|
+| V5/V6 | `V5__api_key.sql`、`V6__webhook.sql`；`FlywayBaselineIT` 断言补 V5/V6；V1–V4 零改 |
+| B4 | `apikey` 包（entity/mapper/dto/service/controller）；`ApiKeyAuthFilter`（认证+配额+touch）；SecurityConfig 白名单 + 403 handler；`LinkForgeProperties.ApiKey`；OpenAPI 两 scheme |
+| B5 | `webhook` 包（entity/mapper×2/service/controller/relay/cipher/signer/targetGuard）；`ClickStatsService.consume` 事务内追加 `recordClickDelivery`（仅此一处）；`spring.task.scheduling.pool.size: 4` |
+| 测试 | `ApiKeyIT` 6 例；`WebhookDeliveryIT` 6 例（JDK HttpServer 桩：真链签名/退避重试/4xx 首败/max-attempts/幂等单行/可达性解耦）；单测 +11（Signer 2、Cipher 5、TargetGuard 4）；`BloomRedirectIT` +1（N1 回填） |
+| 文档 | README「开放能力（B4/B5）」节（含全部诚实边界 + curl 示例）+ 配置要点 2 行 + 指标清单 |
+
+### 验收勾选（对照交接单 Bw2-1…16）
+
+| # | 标准 | 证据 |
+|---|------|------|
+| Bw2-1 | Bw1-N1 回填有断言、N2 注释一致 | 见处置表 |
+| Bw2-2 | 只存 hash；明文仅一次；无明文/hash 泄漏 | `ApiKeyIT.keyLifecycleHashOnlyStorageAndCreatorIdentity`（DB key_hash=SHA-256(明文)、list 无明文无 hash）+ grep 代码审 |
+| Bw2-3 | X-API-Key 认证、401/400 语义、/r/** 不经 Key 过滤 | ApiKeyIT 吊销/伪造/双带头用例；`shouldNotFilter` 只处理 /api |
+| Bw2-4 | Key 可调 links 面、不可调 keys/webhooks/actuator→403 JSON；JWT 行为不变 | `keySurfaceIsForbiddenToKeysButHealthStaysOpen`（health 仍 200）；`ObservabilityIT`/`TenantIsolationIT` 回归绿 |
+| Bw2-5 | 吊销下一请求即 401 | `revokedKeyFailsOnTheVeryNextRequestAndForgedKeysAreInvalid`（无认证缓存） |
+| Bw2-6 | 分钟/日配额 429+Retry-After、只计 Key、fail-open | `perKeyMinuteQuotaReturns429WithRetryAfterAndSpareOthers`；键名 `{rl前缀}apikey:min|day:{keyId}` 代码可查；fail-open=RedisRateLimiter 既有口径（README 登记） |
+| Bw2-7 | consume 事务内落投递行；热路径/relay/lf_outbox 未改；同 eventId 只 1 行 | 代码（唯一接线点）；`sameEventConsumedTwiceYieldsExactlyOneDelivery`；stats 语义零变化（仅追加） |
+| Bw2-8 | 签名头齐全、桩侧重算一致、README ±300s | `signedDeliveryFlowsThroughTheRealOutboxChain`（真 MQ 链 + 独立重算） |
+| Bw2-9 | 退避/FAILED/首败即败/重放方式 | `retryableFailuresBackOffThenSentWithStableEventId`（event id 三次相同）、`permanent4xxFailsImmediatelyWithoutRetry`、`maxAttemptsEndsInFailed`（attempts=8） |
+| Bw2-10 | SSRF 规则 + 双校验 + 不跟随重定向 + 开关 | `WebhookTargetGuardTest` 6 例（无 DNS 依赖）；发送前 `isBlocked`；HTTP client NEVER |
+| Bw2-11 | 调度隔离 + 不可达不拖跳转 | yml pool.size=4；`redirectDoesNotDependOnEndpointReachability` |
+| Bw2-12 | 指标齐 + README 同步 | README 指标清单（apikey/webhook 计数器）；手验 actuator |
+| Bw2-13 | V5/V6 新增、V1–V4 零改、Baseline 覆盖 V6、存量卷 Migrating to "5"/"6" | FlywayBaselineIT + 实机启动日志 |
+| Bw2-14 | README/progress 完整 + 连接预算 | 本节 + README；预算：新增 2 上下文（ApiKeyIT、WebhookDeliveryIT）各 hikari 4 → 24×10+2×4 ≈ 248 < 500 |
+| Bw2-15 | verify 全绿 + CI 绿 + 钉子口径 | 本机 `mvn -B test` → **56 单测绿**（46+10）；CI run 链接收口补齐 |
+| Bw2-16 | 范围干净 | diff 复查：无 Resilience4j/OAuth/UI/波 3+；`resolveTarget` 除 N1 外零改；零新依赖（桩走 JDK 模块）；V1–V4 零改 |
+
+### 验证命令与输出摘要（本机，2026-10-24）
+
+- `D:/tools/apache-maven-3.9.9/bin/mvn -B test` → `Tests run: 56, Failures: 0` + BUILD SUCCESS
+- 实机（kill 旧进程 → 新 jar 重启，.env 补 `LINKFORGE_WEBHOOK_SECRET_KEY`）：启动日志见 `Migrating schema to version "5 - api key"`、`"6 - webhook"`；手验与回归见执行记录
+- 连接预算：新增 2 个 @SpringBootTest 上下文（ApiKeyIT / WebhookDeliveryIT，各 `hikari.maximum-pool-size=4`）→ 峰值 ≈ 24×10 + 2×4 = 248 < 500，未动 `--max-connections`
+
+### 执行记录
+
+- 提交序：Bw1-N1/N2（aac251a）→ B4（f97ddf4）→ B5（b9393eb）→ docs。每单元编译/单测绿后提交。
+- 单测迭代红三次均为测试自身问题：Cipher 测试主密钥常量 33/30 字节非 32（AES-256 拒收，改精确 32）；Guard 测试桩把所有 host 解析成同一 IP（按 host 前缀区分公网/私网答案）；一次草稿转义笔误（改用 Pattern.quote）。
+- `.env`（本机，gitignore）补 `LINKFORGE_WEBHOOK_SECRET_KEY`；`.env.example` 同步说明；`application-test.yml` 配固定 32 字节测试主密钥；yml 中 `spring.task.scheduling` 放基础文档（首个 spring 键内，避免同文档重复键）。
+- **分支 CI 五红一绿（webhook IT 在共享套件里的三段修复史，跨上下文竞态家族新成员）**：①run 40104801146 红＝ApiKeyIT 期望 actuator 403 实得 401（过滤器没覆盖，手验同步抓到，8e770a2 修）；②run 40105127938 红＝三个链式用例超时且两段式取证报出 `last_error=blocked target`——**兄弟缓存上下文的 webhook relay 抢跑共享 `lf_webhook_delivery`**，其 allow-private-targets=false 的守卫把本上下文（开=true）的投递行标 FAILED；修＝`webhook.relay-enabled` 开关（eca1295），test yml 默认 false、仅 WebhookDeliveryIT 开（同 MqEndToEndIT 的 async/listener 模式）；③run 40107163544 红＝行未落库时 `queryForMap` 抛 EmptyResult 使 await 直接中止 + 桩脚本类级静态队列被并发投递互相消耗；修＝空安全 latestDeliveryFor + **每测试独立桩路径**（/hook-retry、/hook-max…，0ed64e0）；④run 40107773960 红＝maxAttempts 脚本只放一个 500（第二次尝试轮空得 200 → SENT attempts=2），「末位重复」注释从未实现；修＝脚本放满 8 个 500 + RECEIVED 断言只数本 event id（4df861f）。终态 run 40108332225 绿。
+- **实机手验抓到并修掉一个真缺口（`8e770a2`）**：`/actuator/metrics` 带 Key 得 401 而非 403——`shouldNotFilter` 原本把整个 actuator 都跳过，Key 请求没进过滤器而是匿名 401。修后 actuator（health 除外）也过 Key 过滤器，Key 得到干净 403（metrics/keys 实测 403，health 200）。分支首跑 CI 预期红在 ApiKeyIT 该用例，修复后重跑绿（见 CI 链）。
+- 实机手验（A9 起惯例，证据）：B4＝建 Key（prefix `lfk_iNfLfHm3`，list 无明文）→ Key 建链 302 → metrics/keys 403 → `quotaPerMinute=5` 第 5 请求 429 + `Retry-After: 60`；B5＝PUT endpoint（secret 明文一次、库列 `v1:OGKt…` 密文、GET 掩码）→ 跳转 → 本机桩收投递：**独立重算 HMAC 签名一致**、event id `evt_log-3955`、payload 无原始 IP、device=bot/refererHost=direct；首投 IOException（手验桩自身路径问题）→ 重试 SENT(attempts=2, 200)——重试路径真机实证；SSRF 关闭态 3 个私网/元数据/ftp 目标全 400。
+- 实机回归：`smoke.sh` **SMOKE OK**；`outbox-drill.sh` **OUTBOX DRILL OK**；`mq-drill.sh` **DRILL OK**（首跑 429 系本机注册限流窗口被手验打满，清本机 Redis 计数键后重跑绿，非产品缺陷）。
+
+### 下一步（不混入本波）
+
+- 波 3+：B2/B6/B1/B10/B3/B9 及 backlog（Bw2-F1 聚合推送、Bw2-F2 租户级 Key），均需萧北指令再开。
 
 ---
 
