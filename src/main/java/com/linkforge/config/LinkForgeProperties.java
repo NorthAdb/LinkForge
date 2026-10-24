@@ -14,6 +14,7 @@ public class LinkForgeProperties {
     private Mq mq = new Mq();
     private Bootstrap bootstrap = new Bootstrap();
     private RateLimit rateLimit = new RateLimit();
+    private Bloom bloom = new Bloom();
 
     @Data
     public static class Jwt {
@@ -49,6 +50,16 @@ public class LinkForgeProperties {
         private String username = "admin";
         /** Required via LINKFORGE_BOOTSTRAP_PASSWORD. No default in source. */
         private String password;
+    }
+
+    @Data
+    public static class Bloom {
+        /** A9: a negative answer is authoritative (code never created) -> 404 before MySQL. */
+        private boolean enabled = true;
+        /** Capacity hint; inserting well beyond this degrades the false-positive rate (README). */
+        private int expectedInsertions = 100_000;
+        /** Desired false-positive probability; false positives just fall through to cache+DB. */
+        private double fpp = 0.0001;
     }
 
     @Data

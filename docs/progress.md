@@ -2,9 +2,9 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：`0b942e7`（2026-10-24，深化 A8 终态＝合并 `2ef4e01` + docs 收口与两次 IT 竞态稳定性修复，`git rev-parse HEAD` 可对）。
+> **当前 main tip**：`9dd60dfb24bf3204b47b98230b2e66166e43b09e`（2026-10-24，深化 A8 终态＝合并 `2ef4e01` + docs 收口 `9dd60df`；A8 审计 N1 指出的钉点漂移已在本轮开工提交补钉，`git rev-parse HEAD` 可对）。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
-> 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6 均已交付并通过审计；本轮为**深化 A7 Transactional Outbox**（点击管道升级 + 关 sync 断链追平演练），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A7-outbox-handoff.md`。
+> 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6、A7、A8 均已交付并通过审计（A8 审计 PASS_WITH_NITS @ `9dd60df`）；本轮为**深化 A9 Bloom 防非法短码穿透**（跳转热路径 DB 前短路），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A9-bloom-handoff.md`。
 
 ## 状态总览
 
@@ -22,6 +22,7 @@
 | 深化 | A6 Flyway 版本化迁移 | feat/deepen-a6-flyway | ✅ 完成（见「深化 A6 Flyway」） |
 | 深化 | A7 Transactional Outbox | feat/deepen-a7-outbox | ✅ 完成（见「深化 A7 Transactional Outbox」） |
 | 深化 | A8 维度预聚合看板 | feat/deepen-a8-dimensions | ✅ 完成（见「深化 A8 维度预聚合」） |
+| 深化 | A9 Bloom 防非法短码穿透 | feat/deepen-a9-bloom | ✅ 完成（见「深化 A9 Bloom 防非法短码穿透」） |
 | P4 | 工程化（CI/bench/隔离/收紧） | feat/p4-engineering | ✅ 完成（见「P4 工程化」） |
 
 ## 环境与工具事实（审计人须知）
@@ -610,6 +611,75 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 ### 执行记录
 
 - 收口提交后的 main CI 连续抓到两次**跨上下文竞态抖动**（同族三面相：兄弟上下文的健康 relay 抢标 SENT、健康消费者抢先回填明细），都在 `OutboxDrillIT` 的**时敏中间态断言**上（PENDING 恰等、热路径明细恰 0）。修法＝中间态断言改状态无关总行数或删除（确定性证据由 drill 承担，其独立实例无兄弟上下文），终态收敛由 await 证明。已在 main 直接修复（测试稳定性小改，保持 main 绿纪律）。
+
+---
+
+## 深化 A9 Bloom 防非法短码穿透（feat/deepen-a9-bloom，发车基线 main@9dd60df，2026-10-24）
+
+范围：交接单 `记录追踪/05-阶段交接/LinkForge-phase-A9-bloom-handoff.md`。跳转热路径在限流后、DB 前加 Guava 进程内 Bloom（只存短码），负答权威 → 404 不查库；**禁用/过期/删除仍强读 DB**（决策 #8 语义不动）。开头消化 A8 审计 N1/N2/N3。范围外（A10 singleflight / B7 空值缓存 / B8 Caffeine / RedisBloom / 长链去重 Bloom / ES）未动。
+
+### A8 审计项处置（对照交接单 §0.1）
+
+| # | 处置 | 落点 |
+|---|------|------|
+| **A8-N1** | 文首 tip 补钉精确 `9dd60dfb24bf3204b47b98230b2e66166e43b09e` | 开工提交 `f6b7dbe` |
+| **A8-N2** | 文首「本轮边界」改为「A8 已收口、本轮 A9 Bloom」 | 同上 |
+| **A8-N3** | `FlywayBaselineIT` 遗留卷断言补 V3（一行 `anyMatch version=3`，顺手做掉而非书面延期） | 同上 |
+
+### 决策记录（D-A9-1…8）
+
+| # | 决策 | 理由 |
+|---|------|------|
+| D-A9-1 | Bloom **只存短码 `code`**；口径「不存在一定不存在；存在/误判 → 回源 DB」；与「长链去重 Bloom」（C159）明确是两个结构，禁混用 | 交接单 D-A9-1；README/本节双写 |
+| D-A9-2 | **Guava `BloomFilter<String>`**（`Funnels.stringFunnel(UTF_8)`）进程内；`expectedInsertions=100000` + `fpp=1e-4` 可配；`ApplicationReadyEvent` 全量 `SELECT code` 装载；创建成功 `put`；多实例各自装载（Demo 姿态，跨实例新建码的假阴性限制与 RedisBloom 后置路线登记 README） | 交接单推荐默认；RedisBloom 需 Redis Stack 模块，不为本阶段引入 |
+| D-A9-3 | 插入点＝`resolveTarget` **限流之后、缓存与 DB 之前**；`mightContain==false` → 404 + 指标 `linkforge.bloom.rejected`；true → 维持既有 Redis+DB 路径 | 交接单 D-A9-3；放在缓存读之前连 Redis GET 一并省掉（强于「仅不打 MySQL」） |
+| D-A9-4 | 假阳性 → 一次 DB miss → 404，正确性不变；用 Guava 标准实现（不自造 bitset，杜绝假阴性） | 交接单 D-A9-4 |
+| D-A9-5 | 禁用：行仍在，Bloom 保持正答 → 回源 DB → 404；删除：物理删行、经典 Bloom 不可回收，删除码仍可能正答 → 一次 DB miss → 404（登记已知限制；定期全量 rebuild 可选后置）；**不**为删除引入会假阴性的粗糙结构 | 交接单 D-A9-5 |
+| D-A9-6 | `linkforge.bloom.enabled`（`LINKFORGE_BLOOM_ENABLED`）开关；未就绪/装载失败 **fail-open** 走旧路径（warn + 指标 `linkforge.bloom.loadfailed`），Bloom 故障不产生 5xx | 交接单 D-A9-6 |
+| D-A9-7 | `LINKFORGE_BLOOM_EXPECTED_INSERTIONS=100000` / `LINKFORGE_BLOOM_FPP=0.0001`；超预期插入只会**劣化误判率（多回源，不会漏）**写进 README；启动日志打 seeded 数与 approxSize | 交接单 D-A9-7 |
+| D-A9-8 | Bloom 不替代 URL Redis 缓存、不存 status/expire；A10/B7/B8 本阶段不做（仅在「下一步」提名） | 交接单 D-A9-8 |
+
+### 改动清单
+
+| 单元 | 内容 |
+|------|------|
+| 依赖 | pom 新增 `com.google.guava:guava:33.4.8-jre`（Boot BOM 不管理，显式版本属性）——本轮唯一新依赖 |
+| 组件 | `link/support/CodeBloomFilter`：`load()`（ApplicationReadyEvent 全量装载，异常 fail-open 计数）、`mightContain()`（disabled/未装载/装载失败一律 true）、`put()`、`approximateElementCount()` |
+| 热路径 | `ShortLinkService.resolveTarget` 限流后短路（rejected 指标）；`doCreate` 插入成功后 `put(code)`；`recordClick` / Outbox / 维度消费**零改动** |
+| 查询 | `ShortLinkMapper.selectAllCodes()`（`@Select` 仅 code 列） |
+| 配置 | `LinkForgeProperties.Bloom`（enabled / expectedInsertions / fpp）+ application.yml 三个 env 透传 |
+| 测试 | `CodeBloomFilterTest` 5 例（装载正/负答与 loaded 计数、创建后 put、关闭不装载且恒真、装载失败 fail-open、未装载 fail-open）；`BloomRedirectIT` 2 例（未知码 rejected++ 且 HEAD 同档、建链 302、禁用后 404；开关关闭＝A8 行为且不计数） |
+| 文档 | README 新「防穿透（A9 Bloom）」节；接口表 GET `/r/{code}` 行、跳转时序（①限流 → ②Bloom 门 → ③缓存 → ④DB）、核心路径表、配置要点、指标清单同步 |
+
+### 验收勾选（对照交接单）
+
+| # | 标准 | 证据 |
+|---|------|------|
+| A9-1 | DB 前 Bloom 短路；否定 → 404 不查库 | 代码（resolveTarget 短路在 selectOne 前）；实机 `/actuator/metrics/linkforge.bloom.rejected`＝**1.0**，恰对应手验中唯一一次随机码 GET；IT 断言 rejected 计数随未知码请求增长 |
+| A9-2 | 创建后入 Bloom；正常/禁用/过期语义与 A8 一致 | 实机建链 `WdODzWG` → 302、disable 后 → 404；`smoke.sh` 8/8（含 create→redirect 与 disable→404）；过期语义由既有 `LinkLifecycleIT` 经同一 resolveTarget 回归；IT 同断言 |
+| A9-3 | 误判与删除限制写清、口径自洽 | README「防穿透（A9 Bloom）」节（负答权威/误判回源/删除不回收/多实例限制/容量劣化方向）+ 本节 D-A9-3/4/5 |
+| A9-4 | `enabled=false` / 装载失败 fail-open 不拖垮跳转 | `CodeBloomFilterTest` 两例（关闭、装载失败均恒 true）+ `BloomRedirectIT.bloomDisabledFallsThroughToUnchangedDbPath`（404 照旧但不计数、建链照常 302） |
+| A9-5 | 未与长链去重混淆；status 不进 Bloom | 组件只收 code 一个维度（代码可查）；README 与 D-A9-1/D-A9-8 声明 |
+| A9-6 | A8-N1+N2 已做；N3 已做 | 开工提交 `f6b7dbe`（见「A8 审计项处置」表） |
+| A9-7 | README/progress 完整；D-A9 决策表齐 | 本节 + README 五处同步 |
+| A9-8 | verify 全绿 + CI 绿 | 本机 `mvn -B test` → **35 单测绿**（+5）；CI 全量例数与 run 链接收口时按实补齐（分支 run、main 合并 run） |
+| A9-9 | 范围干净 | diff 复查：无 A10/Caffeine/空值缓存主路径/ES/长链去重 Bloom；唯一新依赖 guava；无新 migration（Flyway 仅 validate）；UV/Outbox/维度语义未动；`recordClick` 未改 |
+
+### 验证命令与输出摘要（本机，2026-10-24）
+
+- `D:/tools/apache-maven-3.9.9/bin/mvn -B test` → `Tests run: 35, Failures: 0, Errors: 0` + BUILD SUCCESS
+- 实机（kill 旧 A8 进程 → `mvn -B package -DskipTests` → 新 jar 重启）：启动日志 `bloom seeded with 886 codes (expectedInsertions=100000, fpp=1.0E-4, approxSize=885)`；Flyway `Successfully validated 4 migrations`（无新版本，纯 validate）
+- 手验：随机码 GET → 404；建链 `WdODzWG` → 302；disable 后 GET → 404；`linkforge.bloom.rejected`＝1.0（恰等于一次未知码请求）、`linkforge.bloom.loaded`＝1.0
+- 回归：`bash scripts/smoke.sh` → **SMOKE OK**（health/login/create/redirect/redis/register/lifecycle/disable→404 全过）
+
+### 执行记录
+
+- 开工提交先消化 A8 三条 nit（含 N3 从「可书面延期」升级为直接补断言），再按单元推进：核心（Guava+组件+接线，编译绿）→ 测试（本地 35 绿）→ 实机四态手验 + 指标核对 → 文档。
+- 实机重启时旧后台启动任务随 kill 退出（预期）；A9 jar 启动一次成功，无回滚无重试。
+
+### 下一步（不混入本轮）
+
+- A10 singleflight（防击穿）、B7 空值缓存 + TTL 抖动、B8 Caffeine L1；Bloom 共享化（RedisBloom）与删除回收（定期 rebuild）后置，均需萧北指令再开。
 
 ---
 

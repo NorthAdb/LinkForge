@@ -157,7 +157,7 @@ bash scripts/outbox-drill.sh  # sync 关 + 断 MQ → 恢复追平（A7 硬验�
 | GET | `/api/links/{code}/stats/breakdown?dim=device\|referer_host&days=7` | **维度分布**（仅链主）：设备（mobile/desktop/tablet/bot/unknown）与来源 host（归一化，空→direct）各桶点击数降序，days 1..90；维度口径是点击数**不是 UV** |
 | GET | `/api/links/{code}/clicks?page=&size=` | 点击明细（仅链主）：时间/IP/UA/Referer，新到旧分页 |
 | GET | `/api/links/export` | 导出本人全部短链 CSV（UTF-8 BOM，逗号/引号转义） |
-| GET | `/r/{code}` | 302 跳转；Redis 缓存优先，未命中回源 MySQL；同步写 `lf_click_log` |
+| GET | `/r/{code}` | 302 跳转；Bloom 前置（从未存在的码 404 不查库，见「防穿透」），Redis 缓存优先，未命中回源 MySQL；同步写 `lf_click_log` |
 | HEAD | `/r/{code}` | 可跳性探测：302（带 Location）/404/410 与 GET 同档，但**不写点击明细、不发 MQ、不计 UV**（共用按 IP 跳转限流） |
 
 **错误码语义（已写死）**：跳转遇 **禁用或不存在 → 404**，**过期 → 410**；管理接口的越权访问统一 **404**（不泄露他人短码存在性）；未携带/无效凭证 **401**；注册租户名冲突 **409**、自定义短码被占用 **409**；触发限流 **429**。
@@ -204,6 +204,17 @@ MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.c
 - **口径**：维度计数是**点击数**，与 UV（按 IP 去重）不同——一次设备点击 ≠ 一个访客
 - 历史明细（A8 上线前）不做回填；新点击自消费起进维度表
 
+## 防穿透（A9 Bloom）
+
+跳转热路径在限流之后、DB 之前加了一层 **Guava `BloomFilter<String>`**（进程内，只存短码 `code`）：
+
+- **一定不存在 → 直接 404**：`mightContain == false` 是权威否定（该码在启动装载时不在库中、之后也没在本实例创建过），跳过 Redis 与 MySQL，计数指标 `linkforge.bloom.rejected`
+- **存在或误判 → 回源**：false positive（`fpp` 配置，默认 1e-4）只是多一次 DB miss 后照常 404，**正确性不受影响**；启动 `ApplicationReadyEvent` 全量 `SELECT code` 装载，创建成功即 `put`
+- **禁用/过期/删除语义不变**：Bloom 只挡「从未存在」的码，不存 status/expire——禁用行仍在（Bloom 保持正答 → 回源 DB → 404）；物理删除的经典 Bloom 无法回收（删除码仍可能正答 → 一次 DB miss → 404，可接受）；**删除/过期判断永远以 DB 为准**
+- **降级**：`LINKFORGE_BLOOM_ENABLED=false` 一键关闭（回落 A8 行为，非法码照旧 404 但查库）；装载失败/未就绪自动 fail-open 走旧路径（warn + `linkforge.bloom.loadfailed`），Bloom 故障不会导致 5xx
+- **容量**：`LINKFORGE_BLOOM_EXPECTED_INSERTIONS`（默认 100000）/ `LINKFORGE_BLOOM_FPP`（默认 0.0001）；实际插入量长期超过预期会劣化误判率（更「宁可误判回源」，不会漏），届时调大容量重启即可
+- **已知限制**：多实例各自装载不共享（跨实例新建的码在本实例为负答 → 需回源场景不存在——误判为负会 404，共享方案 RedisBloom 后置）；经典 Bloom 不支持删除回收（定期全量 rebuild 可选后置）。与「长链去重 Bloom」是**两个不同结构**，不得混用
+
 **存量库迁移（Flyway，深化 A6）**：schema 已版本化在 `src/main/resources/db/migration`（`V1__baseline_schema.sql`），由应用启动时自动迁移（`spring.flyway.baseline-on-migrate=true`）：
 
 - **全新数据卷**：首次启动应用（或跑 `scripts/migrate.sh`）由 Flyway 建全部表；Compose 的 MySQL 不再挂载 initdb 脚本，容器 healthy 后直接起应用即可。
@@ -224,7 +235,7 @@ MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.c
 
 | 类别 | 能力 | 说明 |
 |------|------|------|
-| **核心**（主路径 Demo 只依赖这些） | 注册/登录（JWT）、创建短链、`/r/{code}` 302 跳转、stats 统计、限流、同事务 Outbox + Relay 投递 + 幂等消费 + 断链追平、CI / bench | 冒烟（smoke.sh）与断链演练（mq-drill.sh / outbox-drill.sh）覆盖的即主路径 |
+| **核心**（主路径 Demo 只依赖这些） | 注册/登录（JWT）、创建短链、`/r/{code}` 302 跳转（Bloom 防穿透）、stats 统计、限流、同事务 Outbox + Relay 投递 + 幂等消费 + 断链追平、CI / bench | 冒烟（smoke.sh）与断链演练（mq-drill.sh / outbox-drill.sh）覆盖的即主路径 |
 | 可选（演示可用，面试可讲，主路径不强制） | 自定义短码、CSV 导出、Swagger UI、静态控制台、精确 UV / 点击明细、**维度分布（设备/来源）** | R2–R4 与深化 A8 落地，均有集成测试与隔离验证；prod profile 下文档与控制台默认关闭 |
 
 ## 配置要点
@@ -238,11 +249,12 @@ MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.c
 - `LINKFORGE_REGISTER_MAX` / `LINKFORGE_REGISTER_WINDOW_SECONDS` 注册限流阈值（默认 5 / 600 秒）
 - `LINKFORGE_CREATE_RATE_MAX` / `LINKFORGE_CREATE_RATE_WINDOW_SECONDS` 创建限流（默认 30 / 60 秒，按用户）
 - `LINKFORGE_REDIRECT_RATE_MAX` / `LINKFORGE_REDIRECT_RATE_WINDOW_SECONDS` 跳转限流（默认 300 / 60 秒，按 IP）
+- `LINKFORGE_BLOOM_ENABLED` / `LINKFORGE_BLOOM_EXPECTED_INSERTIONS` / `LINKFORGE_BLOOM_FPP` 跳转防穿透 Bloom（默认 true / 100000 / 0.0001，见「防穿透」；装载失败自动 fail-open）
 - `LINKFORGE_IDEMPOTENCY_TTL_SECONDS` 创建幂等键保留时长（默认 86400 秒）
 - `LINKFORGE_TRUST_XFF` 是否信任 X-Forwarded-For（默认 false，仅在可信反代后开启）
 - 限流覆盖说明：注册按 IP、创建按用户（**含自定义短码创建，共用 POST /api/links 的限额**）；CSV 导出与统计查询属管理 API（JWT 必需、租户隔离），未单独限流，导出有 1 万行上限保护
 - `/actuator/health` 展示组件细节（db / redis / rabbit / diskSpace），依赖 DOWN 时整体 503
-- `/actuator/metrics/**` 暴露业务计数器（`linkforge.links.created`、`linkforge.redirects`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`），需 Bearer Token
+- `/actuator/metrics/**` 暴露业务计数器（`linkforge.links.created`、`linkforge.redirects`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`、`linkforge.bloom.rejected` / `linkforge.bloom.loaded` / `linkforge.bloom.loadfailed`、`linkforge.outbox.failed`），需 Bearer Token
 - **公网部署**：本地 Demo 一律默认 profile（全开放）；对外部署设 `SPRING_PROFILES_ACTIVE=prod` 一键收紧——health 细节转 `when_authorized`、springdoc 与静态控制台关闭、文档/控制台路径在过滤器层 denyAll（见 application.yml prod 段与 ProdProfileIT）
 
 ## 架构
@@ -276,7 +288,7 @@ flowchart LR
     ST -->|UV| MY
 ```
 
-**跳转时序（GET /r/{code}）**：① 限流器按 IP 固定窗口 INCR（Redis，超限 429）→ ② 读缓存 `linkforge:code:{code}`（命中则省 URL 字段）→ ③ 无论命中与否都读 `lf_short_link` 行做禁用/过期判定（404/410，防脏缓存）→ ④ 目标 URL 严格校验后写入 `lf_click_log`（D7 同步明细）→ ⑤ 发布 `ClickEvent`（eventId=log-{id}）到 RabbitMQ → 返回 302。消费端以 eventId 唯一索引幂等累加 `lf_click_daily`；发布失败由 Reconciler 定时从明细补投（断 MQ 演练见 `scripts/mq-drill.sh`）。更新/禁用走写穿 + 1s 延迟双删防旧值回填。
+**跳转时序（GET /r/{code}）**：① 限流器按 IP 固定窗口 INCR（Redis，超限 429）→ ② **Bloom 门（A9）：从未存在的码直接 404，不碰 Redis/MySQL** → ③ 读缓存 `linkforge:code:{code}`（命中则省 URL 字段）→ ④ 无论命中与否都读 `lf_short_link` 行做禁用/过期判定（404/410，防脏缓存；Bloom 误判也走这里，正确性不变）→ ⑤ 目标 URL 严格校验后写入 `lf_click_log`（D7 同步明细）→ ⑥ 发布 `ClickEvent`（eventId=log-{id}）到 RabbitMQ → 返回 302。消费端以 eventId 唯一索引幂等累加 `lf_click_daily`；发布失败由 Reconciler 定时从明细补投（断 MQ 演练见 `scripts/mq-drill.sh`）。更新/禁用走写穿 + 1s 延迟双删防旧值回填。
 
 **本地 Demo 五步**（只走核心路径）：
 

@@ -27,6 +27,8 @@
         <commons-lang3.version>3.18.0</commons-lang3.version>
         <!-- Testcontainers 2.0.x: Boot-managed 1.x docker-java is rejected by Docker Desktop 29. -->
         <testcontainers.version>2.0.5</testcontainers.version>
+        <!-- A9 redirect hot-path Bloom filter; Boot BOM does not manage Guava. -->
+        <guava.version>33.4.8-jre</guava.version>
     </properties>
 
     <dependencyManagement>
@@ -91,6 +93,12 @@
             <groupId>com.baomidou</groupId>
             <artifactId>mybatis-plus-jsqlparser</artifactId>
             <version>${mybatis-plus.version}</version>
+        </dependency>
+        <!-- A9: in-process Bloom over short codes so never-created codes 404 before MySQL. -->
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+            <version>${guava.version}</version>
         </dependency>
         <dependency>
             <groupId>com.mysql</groupId>
