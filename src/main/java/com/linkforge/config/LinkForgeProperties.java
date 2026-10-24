@@ -29,10 +29,15 @@ public class LinkForgeProperties {
 
     @Data
     public static class Mq {
-        /** When true, also publish click events to RabbitMQ. */
+        /** When true, click events go through the outbox+relay instead of a hot-path publish. */
         private boolean asyncClickEnabled = false;
-        /** D7=A: keep the sync lf_click_log write alongside the async path. */
+        /** D7=A: keep the sync lf_click_log write alongside the outbox path. */
         private boolean syncClickEnabled = true;
+        /** A7 relay: drains PENDING outbox rows to RabbitMQ. */
+        private boolean relayEnabled = true;
+        private int relayBatchSize = 100;
+        private long relayFixedDelayMs = 2000;
+        private long relayInitialDelayMs = 3000;
     }
 
     @Data

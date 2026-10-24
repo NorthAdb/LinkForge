@@ -12,9 +12,11 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * Backfills clicks whose MQ publish failed (e.g. during a broker outage). Replay uses
- * the same deterministic "log-{id}" eventIds as the live path, so rows already counted
- * are skipped and each click counts exactly once.
+ * Safety net for sync-written rows not yet consumed (A7: live delivery belongs to
+ * ClickOutboxRelay). Replay uses the same deterministic "log-{id}" eventIds as the
+ * outbox path, so rows already counted are skipped and each click counts exactly
+ * once. With the sync write off this loop finds nothing — detail rows then come from
+ * the consumer itself and the outbox relay is the catch-up path.
  */
 @Slf4j
 @Component
