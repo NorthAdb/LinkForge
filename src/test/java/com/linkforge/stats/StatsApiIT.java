@@ -61,6 +61,9 @@ class StatsApiIT extends AbstractIntegrationTest {
         if (!syntheticCodes.isEmpty()) {
             clickDailyMapper.delete(new LambdaQueryWrapper<ClickDaily>()
                     .in(ClickDaily::getCode, syntheticCodes));
+            // consume() now backfills lf_click_log for UUID (non log-) synthetic events
+            clickLogMapper.delete(new LambdaQueryWrapper<ClickLog>()
+                    .in(ClickLog::getCode, syntheticCodes));
         }
     }
 
