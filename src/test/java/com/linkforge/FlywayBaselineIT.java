@@ -73,13 +73,19 @@ class FlywayBaselineIT {
 
     @Test
     void legacyVolumeIsBaselinedNotRemigrated() {
-        var rows = jdbc.queryForList("SELECT version, type, description, success FROM flyway_schema_history");
-        assertEquals(1, rows.size(), "baseline row only: " + rows);
-        Map<String, Object> baseline = rows.get(0);
+        var rows = jdbc.queryForList(
+                "SELECT version, type, description, success FROM flyway_schema_history ORDER BY installed_rank");
+        // legacy volume: one BASELINE@1 (V1 skipped), then any later versions applied on top
+        assertEquals(1, rows.stream()
+                .filter(r -> "BASELINE".equals(String.valueOf(r.get("type")))).count(), "baseline rows: " + rows);
+        var baseline = rows.get(0);
         assertEquals("1", String.valueOf(baseline.get("version")));
-        assertEquals("BASELINE", String.valueOf(baseline.get("type")));
-        // MySQL: success is bit(1), JDBC maps it to Boolean.
         assertEquals(Boolean.TRUE, baseline.get("success"));
+        assertTrue(rows.stream().noneMatch(r -> "1".equals(String.valueOf(r.get("version")))
+                && "SQL".equals(String.valueOf(r.get("type")))), "V1 must not re-run: " + rows);
+        // V2 (outbox, deepen A7) is applied on top of the baseline
+        assertTrue(rows.stream().anyMatch(r -> "2".equals(String.valueOf(r.get("version")))
+                && "SQL".equals(String.valueOf(r.get("type")))), "V2 must apply after baseline: " + rows);
         // V1 was skipped, so the schema still carries zero data rows beyond the bootstrap:
         assertFalse(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM lf_tenant)", Boolean.class),
                 "no seed data expected on this volume");

@@ -2,12 +2,20 @@ package com.linkforge.stats;
 
 import com.linkforge.AbstractIntegrationTest;
 import com.linkforge.config.LinkForgeProperties;
+import com.linkforge.stats.mq.ClickEvent;
+import com.linkforge.stats.mq.ClickEventPublisher;
+import com.linkforge.stats.mq.RabbitClickEventPublisher;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -15,9 +23,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * A7 acceptance in one context: the outbox transaction decouples redirects from MQ,
- * the relay drains PENDING rows, and with the sync write off the broker can be down
- * mid-drill without losing a single click (aggregate AND detail converge after
- * recovery). Relay/sync flags are toggled at runtime through the properties bean.
+ * the relay drains PENDING rows, and with the sync write off a failing publisher
+ * still loses nothing — aggregate AND detail converge once delivery recovers
+ * (the real docker-stop-broker leg runs in scripts/outbox-drill.sh). Relay/sync
+ * flags are toggled at runtime through the properties bean.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "linkforge.rate-limit.key-prefix=linkforge:rl:it-outbox:",
@@ -116,28 +125,48 @@ class OutboxDrillIT extends AbstractIntegrationTest {
         assertTrue(stats.path("data").path("totalUv").asLong() >= 1, "UV converges from consumer detail");
     }
 
+    /**
+     * Publisher-side failure injection. The real-broker outage leg of A7-3 lives in
+     * scripts/outbox-drill.sh (docker-stop rabbit on the real stack); restarting the
+     * shared Testcontainers broker inside the suite proved flaky and poisoned later
+     * contexts, so this IT proves the relay's retry accounting against a toggleable
+     * publisher and delivers through the real broker once the toggle clears.
+     */
+    @TestConfiguration
+    static class FlakyPublisherConfig {
+        static final AtomicBoolean FAIL_PUBLISH = new AtomicBoolean(false);
+
+        @Bean
+        @Primary
+        ClickEventPublisher flakyPublisher(RabbitClickEventPublisher real) {
+            return event -> {
+                if (FAIL_PUBLISH.get()) {
+                    throw new IllegalStateException("simulated broker outage");
+                }
+                real.publish(event);
+            };
+        }
+    }
+
     @Test
-    void brokerOutageDefersWithBackoffThenDelivers() throws Exception {
+    void publisherFailuresDeferWithBackoffThenDeliver() throws Exception {
+        FlakyPublisherConfig.FAIL_PUBLISH.set(true);
         String token = registerForToken();
         String code = createLink(token, "https://example.com/outbox-outage");
 
-        RABBIT.stop();
-        try {
-            for (int i = 0; i < 3; i++) {
-                assertEquals(302, get("/r/" + code, null).getStatusCode().value());
-            }
-            // relay keeps trying and defers with a growing next_attempt_at
-            await().atMost(java.time.Duration.ofSeconds(30))
-                    .untilAsserted(() -> assertTrue(jdbc.queryForObject(
-                            "SELECT COALESCE(MAX(attempts), 0) FROM lf_outbox WHERE "
-                                    + "JSON_UNQUOTE(JSON_EXTRACT(payload, '$.code')) = ?",
-                            Long.class, code) >= 1, "failed publishes must grow attempts"));
-        } finally {
-            RABBIT.start();
+        for (int i = 0; i < 3; i++) {
+            assertEquals(302, get("/r/" + code, null).getStatusCode().value());
         }
+        await().atMost(java.time.Duration.ofSeconds(30))
+                .untilAsserted(() -> assertTrue(jdbc.queryForObject(
+                        "SELECT COALESCE(MAX(attempts), 0) FROM lf_outbox WHERE "
+                                + "JSON_UNQUOTE(JSON_EXTRACT(payload, '$.code')) = ?",
+                        Long.class, code) >= 1, "failed publishes must grow attempts"));
+        assertEquals(3, outboxCount("PENDING", code), "deferred rows must stay PENDING");
 
+        FlakyPublisherConfig.FAIL_PUBLISH.set(false);
         String tok = token;
-        await().atMost(java.time.Duration.ofSeconds(150))
+        await().atMost(java.time.Duration.ofSeconds(30))
                 .untilAsserted(() -> {
                     assertEquals(3, outboxCount("SENT", code));
                     assertEquals(0, outboxCount("PENDING", code));
