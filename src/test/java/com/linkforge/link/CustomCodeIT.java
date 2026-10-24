@@ -54,7 +54,7 @@ class CustomCodeIT extends AbstractIntegrationTest {
     @Test
     void invalidCustomCodesRejected() throws Exception {
         String token = registerForToken();
-        for (String bad : new String[]{"ab!", "abc", "api", "actuator", "way-too-long-code-12345"}) {
+        for (String bad : new String[]{"ab!", "abc", "api", "actuator", "admin", "ADMIN", "way-too-long-code-12345"}) {
             var resp = postJson("/api/links", om.writeValueAsString(Map.of(
                     "originalUrl", "https://example.com/x", "customCode", bad)), token);
             assertEquals(400, resp.getStatusCode().value(), "customCode '" + bad + "': " + resp.getBody());

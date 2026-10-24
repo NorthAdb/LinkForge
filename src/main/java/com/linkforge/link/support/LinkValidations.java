@@ -13,10 +13,12 @@ import java.util.regex.Pattern;
 public final class LinkValidations {
 
     private static final Pattern CUSTOM_CODE_PATTERN = Pattern.compile("^[A-Za-z0-9_-]{4,16}$");
-    /** All >=4 chars: shorter reserved words never pass the length rule anyway. */
+    /** All >=4 chars: shorter words like "api" or "r" never pass the length rule, so they
+     * are kept out of this set deliberately. */
     private static final Set<String> RESERVED_CODES = Set.of(
             "actuator", "health", "auth", "login", "register", "links",
-            "export", "stats", "swagger", "docs", "static", "index");
+            "export", "stats", "swagger", "docs", "static", "index",
+            "admin", "console", "metrics", "assets", "error", "favicon");
 
     private LinkValidations() {
     }
