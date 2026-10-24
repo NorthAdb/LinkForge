@@ -17,6 +17,8 @@ import com.linkforge.link.support.CodeBloomFilter;
 import com.linkforge.link.support.CsvFormat;
 import com.linkforge.link.support.LinkValidations;
 import com.linkforge.link.support.ShortCodes;
+import com.linkforge.link.support.ShortLinkRowLoader;
+import com.linkforge.link.support.SingleFlight;
 import com.linkforge.security.AuthUser;
 import com.linkforge.security.UserContext;
 import com.linkforge.stats.service.ClickRecordService;
@@ -53,6 +55,8 @@ public class ShortLinkService {
     private final RedisRateLimiter rateLimiter;
     private final MeterRegistry meterRegistry;
     private final CodeBloomFilter codeBloom;
+    private final SingleFlight<String, ShortLink> singleFlight;
+    private final ShortLinkRowLoader rowLoader;
 
     private final ScheduledExecutorService evictor = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "cache-evictor");
@@ -244,6 +248,9 @@ public class ShortLinkService {
         }
         link.setUpdatedAt(LocalDateTime.now());
         shortLinkMapper.updateById(link);
+        // Drop the in-flight row read so requests arriving after this commit re-lead
+        // and read the fresh row instead of riding a pre-commit read (A10 D-A10-5).
+        singleFlight.forget(code);
         // Write-through now, then a delayed delete clears any stale write-back a racing
         // reader may have cached from the pre-commit row. Final consistency window ~1s.
         cacheUrl(code, effectiveUrl);
@@ -264,6 +271,7 @@ public class ShortLinkService {
         link.setStatus(status);
         link.setUpdatedAt(LocalDateTime.now());
         shortLinkMapper.updateById(link);
+        singleFlight.forget(code);
         evictCache(code);
         scheduleStaleClear(code);
     }
@@ -272,6 +280,7 @@ public class ShortLinkService {
     public void delete(String code) {
         ShortLink link = getOwnedLink(code);
         shortLinkMapper.deleteById(link.getId());
+        singleFlight.forget(code);
         evictCache(code);
         scheduleStaleClear(code);
     }
@@ -319,7 +328,11 @@ public class ShortLinkService {
 
         String cacheKey = CACHE_KEY_PREFIX + code;
         String cached = stringRedisTemplate.opsForValue().get(cacheKey);
-        ShortLink link = shortLinkMapper.selectOne(new LambdaQueryWrapper<ShortLink>().eq(ShortLink::getCode, code));
+        // A10: concurrent same-code reads merge into one in-flight DB read (whether
+        // or not Redis hit). The verdicts below still run per request on the row the
+        // caller got: a follower may see a row at most one query latency older than
+        // its arrival (ms, well under the existing 1s double-delete window).
+        ShortLink link = singleFlight.run(code, () -> rowLoader.load(code));
         if (link == null || link.getStatus() == null || link.getStatus() != 1) {
             throw new BizException(404, "short link not found");
         }
