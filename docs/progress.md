@@ -24,6 +24,7 @@
 | 深化 | A8 维度预聚合看板 | feat/deepen-a8-dimensions | ✅ 完成（见「深化 A8 维度预聚合」） |
 | 深化 | A9 Bloom 防非法短码穿透 | feat/deepen-a9-bloom | ✅ 完成（见「深化 A9 Bloom 防非法短码穿透」） |
 | 深化 | A10 singleflight 防热点击穿 | feat/deepen-a10-singleflight | ✅ 完成（见「深化 A10 singleflight 防热点击穿」） |
+| 深化 | B 档波 1：B7 空值缓存+抖动 / B8 L1 | feat/deepen-b-wave1-b7b8 | ✅ 完成（见「B 档波 1：B7+B8」） |
 | P4 | 工程化（CI/bench/隔离/收紧） | feat/p4-engineering | ✅ 完成（见「P4 工程化」） |
 
 ## 环境与工具事实（审计人须知）
@@ -763,6 +764,79 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 ### 下一步（不混入本轮）
 
 - B7 空值缓存 + TTL 抖动、B8 Caffeine L1、XFetch 实现、RedisBloom 共享、Bloom 定期 rebuild、长链去重 Bloom、B10 全量 bench，均需萧北指令再开。
+
+---
+
+## B 档波 1：B7 空值缓存+TTL 抖动 / B8 Caffeine L1（feat/deepen-b-wave1-b7b8，发车基线 main@f8130cf，2026-10-24）
+
+范围：交接单 `记录追踪/05-阶段交接/LinkForge-phase-B-wave1-b7b8-handoff.md`。热路径补齐「穿透负缓存（B7）+ TTL 抖动 + 进程内 L1（B8）」，开工消化 A10 审计 N1。**跳转仍是每请求读 DB 行判状态**（决策 #8/A10 叙事不动），L1 与空值缓存都不构成「跳过 DB 的行缓存」。范围外（波 2–5 / 行级 L1 / absent 进 Caffeine / 失效广播 / RedisBloom / V5）未动。
+
+### A10 审计项处置（对照交接单 §0.1）
+
+| # | 处置 | 落点 |
+|---|------|------|
+| **A10-N1** | **本波默认修**：`SingleFlight` 新增 `peek(key)`（写前只读窥视）+ `forget(key, priorSnapshot)`（两参 `remove`，快照不符即 no-op，null 快照 no-op）；写路径 `update`/`setStatus`/`delete` 改为「写前快照 → 提交 → 按快照摘除」，**不会误摘写后新领头**。残留窗口（快照与 commit 之间才领头的 flight 仍读旧行并被摘除）与 A10 已接受的毫秒窗口同阶，单测钉住两个方向 | `SingleFlight` + `ShortLinkService` 三处写路径；单测 `forgetWithStaleSnapshotSparesThePostWriteFlight`（新 flight 存活且跟车拿到新行）、`forgetWithNullSnapshotIsANoOp` |
+
+### 决策记录（D-Bw1-1…12）
+
+| # | 决策 | 理由 |
+|---|------|------|
+| D-Bw1-1 | 热路径终序：①限流 → ②Bloom → ③absent 探查 → ④L1 → ⑤Redis L2 → ⑥singleflight 行读 → ⑦状态/过期判定（本请求时钟）→ ⑧选 URL → ⑨回填 L1+L2；DB null 写 absent 后 404。HEAD/GET 共用 | 交接单 D-Bw1-1 |
+| D-Bw1-2 | absent 只缓存「DB 行读取结果为 null」；禁用 404 / 过期 410 / URL 不可渲染 410 **不写** absent | 行仍在的码启用/改期须立即生效（IT 钉住） |
+| D-Bw1-3 | 独立 key `linkforge:absent:{code}`（哨兵 `"1"`），不污染 `linkforge:code:{code}`；absent 不做 Caffeine 层 | 交接单推荐默认 |
+| D-Bw1-4 | Bloom 负答不读不写 absent；DB null 经 singleflight 返回后写 absent（计 put）再 404；`doCreate` 成功 DEL absent；`delete` 后下次回源 null 自然再写 | 交接单 D-Bw1-4 |
+| D-Bw1-5 | TTL 公式 `base + uniform[0, jitter]`（只向上抖，`jitteredTtlSeconds` 静态函数）：正缓存 `3600+300`（`LINKFORGE_CACHE_TTL_JITTER_SECONDS`）、空值 `60+30`；jitter≤0 退化为裸 base（单测钉死） | 交接单 D-Bw1-5 |
+| D-Bw1-6 | L1 **只缓存 URL 字符串**（与 L2 同形状），命中**不跳过** singleflight/DB；禁「行级 L1 跳过 DB」 | 交接单 D-Bw1-6；接 A10 强一致叙事 |
+| D-Bw1-7 | 手写 `link/support/UrlLocalCache`（`Caffeine.newBuilder().maximumSize().expireAfterWrite()`），不走全局 `@Cacheable`（避免扫到管理 API）；`maximum-size=10000`、`ttl-seconds=10`（≪ Redis TTL）；cacheUrl 写穿 L1+L2、evictCache/延迟双删同触 L1 | 交接单 D-Bw1-7 推荐手写小组件 |
+| D-Bw1-8 | L1 进程内不同步（无 pub/sub）：跨实例旧 URL 窗口 ≤ L1 TTL（10s），与 Redis 双删窗口叠加取更长者；absent 在 Redis 多实例共享；README 写明 | 交接单 D-Bw1-8 诚实口径 |
+| D-Bw1-9 | 指标：`linkforge.cache.absent.hit` / `.put`、`linkforge.l1.hit` / `.miss`（L1 关闭时不计数）；README 清单同步 | 交接单 D-Bw1-9 |
+| D-Bw1-10 | A10-N1 默认修（见上表） | 交接单 §0.1 |
+| D-Bw1-11 | **零新 migration**（V1–V4 零改）；pom 新增 `com.github.ben-manes.caffeine:caffeine`（**Boot BOM 管理版本，不手钉**）；Guava 保留给 Bloom | 交接单 D-Bw1-11 |
+| D-Bw1-12 | fail-open：absent 探查异常当 miss、写入异常吞掉 warn、L1 内部不抛（getIfPresent/put/invalidate 全守卫）；与 Bloom/singleflight 口径一致 | 交接单 D-Bw1-12 |
+
+### 改动清单
+
+| 单元 | 内容 |
+|------|------|
+| A10-N1 | `SingleFlight.peek/forget(两参)` + `ShortLinkService` 三处写路径 + 2 单测 |
+| B7 | `ABSENT_KEY_PREFIX`/哨兵常量；`absentKnown`/`markAbsent`/`clearAbsent`（fail-open）；`resolveTarget` ③探查（hit 计数→404）与 ⑥null→markAbsent→404（与 status!=1 拆分）；`doCreate` 成功后 `clearAbsent` |
+| 抖动 | `ShortLinkService.jitteredTtlSeconds`（static 包私有）+ `cacheUrl` 改抖动 TTL；`ShortLinkTtlTest` 3 例 |
+| B8 | pom caffeine（BOM 版本）；`LinkForgeProperties.L1`（enabled/maximumSize/ttlSeconds）；`UrlLocalCache`；`resolveTarget` L1→L2 两级读；`cacheUrl`/`evictCache` 接 L1 |
+| 配置 | `ShortLink` 三字段 + `L1` 块 + application.yml 五个 env |
+| 测试 | `BloomDisabledAtStartupIT` +@SpyBean+absent 命中跳 DB 用例；`BloomRedirectIT` +6（Bloom 负答不写 absent、disable 不写+enable 立即 302、过期不写、delete 写 absent+重复 miss 跳 DB、L1 命中+update 写穿、L1 关闭对照） |
+| 文档 | README 新「多级缓存」节 + 跳转时序 ①–⑨ + 配置要点 3 行 + 指标清单；顺手修 A10 遗留错字「并赃合并」 |
+
+### 验收勾选（对照交接单 Bw1-1…11）
+
+| # | 标准 | 证据 |
+|---|------|------|
+| Bw1-1 | 顺序符合 D-Bw1-1；HEAD/GET 共用 | 代码（resolveTarget ①–⑨ 顺序可读）；resolveForProbe/resolveAndRecord 共用 |
+| Bw1-2 | DB null 才写 absent；禁用/过期不写；enable 立即 302 | IT `disableDoesNotEnterAbsentAndEnableRecoversImmediately`（put 增量 0 + enable 立即 302）、`expiredDoesNotEnterAbsent`（410 后 put 增量 0）；`deletedCodeWritesAbsentAndRepeatMissesSkipTheDb`（delete → put=1） |
+| Bw1-3 | 独立 key 不污染正缓存；Bloom 负答不依赖 absent | `bloomNegativePathNeverWritesTheAbsentCache`（put 增量 0）+ 代码（bloom 门在 absent 探查前 return） |
+| Bw1-4 | TTL 公式 base+uniform[0,jitter]；jitter=0=base | `ShortLinkServiceTtlTest` 3 例（0/负退化、5000 次范围+离散度） |
+| Bw1-5 | L1 只存 URL；命中不跳过 DB/singleflight；cacheUrl/evict/双删同触 | `UrlLocalCache` 泛型即 String；resolveTarget L1 命中后仍 singleflight.run；cacheUrl/evictCache 双写 |
+| Bw1-6 | update 写穿可见；disable/delete 后 L1 无旧正缓存生效 | IT `localCacheServesRepeatReadsAndInvalidatesOnUpdate`（update 后 Location=v2）；disable 路径 evictCache→L1 invalidate（LinkLifecycleIT 回归绿） |
+| Bw1-7 | A10-N1 两参/快照语义 + 单测 | 见「A10 审计项处置」表 |
+| Bw1-8 | 开关与 fail-open | `localCacheDisabledFallsBackToRedisOnlyPath`（关闭不计数、走 Redis/DB）；absent TTL≤0 关闭（代码）；absent 探查/写入 fail-open（代码 + 单测层面无异常泄漏） |
+| Bw1-9 | README/progress 完整、无夸大 | 本节 + README「多级缓存」边界声明（仍每请求读行、不称防雪崩到分布式） |
+| Bw1-10 | verify 全绿 + CI 绿、钉子口径 | 本机 `mvn -B test` → **46 单测绿**（+5：SingleFlightTest 2 + ShortLinkServiceTtlTest 3）；CI run 链接收口补齐 |
+| Bw1-11 | 范围干净 | diff 复查：无行级 L1/RedisBloom/广播/波 2+；V1–V4 SQL 零改、无 V5；`stats/**` 零 diff（除无）；新依赖仅 caffeine（BOM 版本） |
+
+### 验证命令与输出摘要（本机，2026-10-24）
+
+- `D:/tools/apache-maven-3.9.9/bin/mvn -B test` → `Tests run: 49, Failures: 0` + BUILD SUCCESS
+- 实机手验（见执行记录）；`bash scripts/smoke.sh` → **SMOKE OK**；`bash scripts/mq-drill.sh` / `outbox-drill.sh` → 收口补记
+- 连接预算：**零新增上下文**（absent/L1 用例全部挂在既有 `BloomRedirectIT` / `BloomDisabledAtStartupIT` 上下文内），峰值连接与 A10 持平 ≈218 < 500
+
+### 执行记录
+
+- 提交序：A10-N1（3689cf5）→ B7（a692128）→ B8（ff76d50）→ IT（2f00d70）→ docs。每单元本地编译/单测绿后提交。单测总数实测 46（41 → +5）。
+- 本地单测红两次：A10-N1 测试缺 `CompletableFuture` import（已 amend 到绿提交）、IT 缺 `assertTrue` import（补后绿）。
+- 单测例数 41 → 46：SingleFlightTest +2（快照 forget 两态）、ShortLinkServiceTtlTest +3（抖动）。IT 66 → 73：BloomDisabledAtStartupIT +1（absent 命中跳 DB）、BloomRedirectIT +6。
+
+### 下一步（不混入本波）
+
+- 波 2+：B4/B5/B2/B6/B1/B10/B3/B9，均需萧北指令再开。
 
 ---
 
