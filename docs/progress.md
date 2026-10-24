@@ -2,7 +2,7 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：开工 `0189e2a` → 收工合并 `2d3e070`（+本收口提交）；2026-10-24，本轮为深化 A2/A3/B12。
+> **当前 main tip**：`a781b55`（2026-10-24，深化 A2/A3/B12 收口提交；`git rev-parse HEAD` 可对）。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
 > 本轮边界：P0–P5 及 v1.0.0 已完整交付并通过审计；本轮为**深化阶段 A2/A3/B12**（保留字补齐、HEAD 探测、OpenAPI/文档卫生），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A2A3B12-handoff.md`。
 
@@ -372,7 +372,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 
 ## 深化 A2/A3/B12（feat/deepen-a2-a3-b12，发车基线 main@0189e2a，2026-10-24）
 
-范围：交接单 `记录追踪/05-阶段交接/LinkForge-phase-A2A3B12-handoff.md`。A2 保留字补齐、A3 HEAD 探测不计点击、B12 OpenAPI/progress 卫生。范围外（A6 Flyway、A7 Outbox、A8–A10、UV 实现改造、上云）一律未动。
+范围：交接单 `记录追踪/05-阶段交接/LinkForge-phase-A2A3B12-handoff.md`。A2 保留字补齐、A3 HEAD 探测不计点击、B12 OpenAPI/progress 卫生。范围外（A6 Flyway、A7 Outbox、A8–A10、UV 实现改造、上云）一律未动。本段 diff（`0189e2a..2d3e070`，不含 .gitignore 杂务）＝ **13 文件 / +244 / -10**。
 
 ### 改动清单（分支内三单元提交）
 
