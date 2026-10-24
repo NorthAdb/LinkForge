@@ -2,9 +2,9 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：`0b942e7`（2026-10-24，深化 A8 终态＝合并 `2ef4e01` + docs 收口与两次 IT 竞态稳定性修复，`git rev-parse HEAD` 可对）。
+> **当前 main tip**：`9dd60dfb24bf3204b47b98230b2e66166e43b09e`（2026-10-24，深化 A8 终态＝合并 `2ef4e01` + docs 收口 `9dd60df`；A8 审计 N1 指出的钉点漂移已在本轮开工提交补钉，`git rev-parse HEAD` 可对）。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
-> 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6 均已交付并通过审计；本轮为**深化 A7 Transactional Outbox**（点击管道升级 + 关 sync 断链追平演练），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A7-outbox-handoff.md`。
+> 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6、A7、A8 均已交付并通过审计（A8 审计 PASS_WITH_NITS @ `9dd60df`）；本轮为**深化 A9 Bloom 防非法短码穿透**（跳转热路径 DB 前短路），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A9-bloom-handoff.md`。
 
 ## 状态总览
 

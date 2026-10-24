@@ -83,9 +83,11 @@ class FlywayBaselineIT {
         assertEquals(Boolean.TRUE, baseline.get("success"));
         assertTrue(rows.stream().noneMatch(r -> "1".equals(String.valueOf(r.get("version")))
                 && "SQL".equals(String.valueOf(r.get("type")))), "V1 must not re-run: " + rows);
-        // V2 (outbox, deepen A7) is applied on top of the baseline
+        // V2 (outbox, deepen A7) and V3 (click dims, deepen A8) apply on top of the baseline
         assertTrue(rows.stream().anyMatch(r -> "2".equals(String.valueOf(r.get("version")))
                 && "SQL".equals(String.valueOf(r.get("type")))), "V2 must apply after baseline: " + rows);
+        assertTrue(rows.stream().anyMatch(r -> "3".equals(String.valueOf(r.get("version")))
+                && "SQL".equals(String.valueOf(r.get("type")))), "V3 must apply after baseline: " + rows);
         // V1 was skipped, so the schema still carries zero data rows beyond the bootstrap:
         assertFalse(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM lf_tenant)", Boolean.class),
                 "no seed data expected on this volume");
