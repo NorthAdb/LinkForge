@@ -2,7 +2,7 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：深化 A9 终态＝合并 `d6c97e0`（feat/deepen-a9-bloom 四单元 + 共享测试容器连接上限修复）+ docs 收口（本节末尾钉精确 SHA）；A8 终态 `9dd60df` 的钉点漂移已在本轮开工提交 `f6b7dbe` 补钉（A8-N1）。
+> **当前 main tip**：深化 A9 终态＝合并 `d6c97e0`（feat/deepen-a9-bloom 四单元 + 共享测试容器连接上限修复）+ docs 收口 `ee86f0114f534729c755f34da55acd6527dc85a5`（其上至多一个纯 docs 钉子提交；审计以 git rev-parse HEAD 为准，`ee86f0114f534729c755f34da55acd6527dc85a5` 必为其祖先）；A8 终态 `9dd60df` 的钉点漂移已在本轮开工提交 `f6b7dbe` 补钉（A8-N1）。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
 > 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6、A7、A8 均已交付并通过审计（A8 审计 PASS_WITH_NITS @ `9dd60df`）；本轮为**深化 A9 Bloom 防非法短码穿透**（跳转热路径 DB 前短路），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A9-bloom-handoff.md`。
 
