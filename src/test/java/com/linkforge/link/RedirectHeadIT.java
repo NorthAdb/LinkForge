@@ -24,10 +24,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 @ActiveProfiles("test")
 class RedirectHeadIT extends AbstractIntegrationTest {
 
-    private long totalClicks(String token, String code) throws Exception {
-        var stats = get("/api/links/" + code + "/stats", token);
-        assertEquals(200, stats.getStatusCode().value(), stats.getBody());
-        return body(stats).path("data").path("totalClicks").asLong();
+    /** Sync lf_click_log detail count: deterministic right after the redirect,
+     * unlike stats totalClicks which reads the async lf_click_daily aggregate. */
+    private long clickCount(String token, String code) throws Exception {
+        var clicks = get("/api/links/" + code + "/clicks?size=1", token);
+        assertEquals(200, clicks.getStatusCode().value(), clicks.getBody());
+        return body(clicks).path("data").path("total").asLong();
     }
 
     @Test
@@ -36,15 +38,14 @@ class RedirectHeadIT extends AbstractIntegrationTest {
         String target = "https://example.com/head-" + System.currentTimeMillis();
         String code = createLink(token, target);
 
-        long before = totalClicks(token, code);
+        long before = clickCount(token, code);
         var probe = head("/r/" + code);
         assertEquals(302, probe.getStatusCode().value(), probe.getBody());
         assertEquals(target, probe.getHeaders().getLocation().toString());
-        assertEquals(before, totalClicks(token, code), "HEAD must not record a click");
+        assertEquals(before, clickCount(token, code), "HEAD must not record a click");
 
         assertEquals(302, get("/r/" + code, null).getStatusCode().value());
-        long afterGet = totalClicks(token, code);
-        assertEquals(before + 1, afterGet, "GET after HEAD counts exactly one click");
+        assertEquals(before + 1, clickCount(token, code), "GET after HEAD counts exactly one click");
     }
 
     @Test
