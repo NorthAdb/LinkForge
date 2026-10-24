@@ -2,7 +2,7 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：`a781b55`（2026-10-24，深化 A2/A3/B12 收口提交；`git rev-parse HEAD` 可对）。
+> **当前 main tip**：`2dc58b2`（2026-10-24，深化 A6 代码终态＝此合并提交；其后仅紧跟一个 docs 收口提交，不改代码，`git log -2` 可见）。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
 > 本轮边界：P0–P5 及 v1.0.0 已完整交付并通过审计；本轮为**深化阶段 A2/A3/B12**（保留字补齐、HEAD 探测、OpenAPI/文档卫生），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A2A3B12-handoff.md`。
 
@@ -463,7 +463,13 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | A6-5 | migrate.sh 走 Flyway 不灌旧 schema | 脚本全量重写（读脚本可见）；上述实机跑通记录 |
 | A6-6 | IT 无双轨 | `AbstractIntegrationTest` 已无 withInitScript；`FlywayBaselineIT` 覆盖 baseline 路；CI 全量实证 |
 | A6-7 | README/progress 更新、N1 已做 | 本节 + README 三处；N1 于分支首提交完成 |
-| A6-8 | verify 全绿、CI 绿 | 本机 `mvn -B test` → **23 单测绿**；CI 全量（期望 77 = 23 单测 + 54 IT，含 FlywayBaselineIT 2 例）链接见下收口 |
+| A6-8 | verify 全绿、CI 绿 | 本机 `mvn -B test` → **23 单测绿**；CI 全量 **77 例（23 单测 + 54 IT）0 失败**：分支终态 run [40075155191](https://github.com/NorthAdb/LinkForge/actions/runs/40075155191) ✅（FlywayBaselineIT 2/2）、main run [40075330083](https://github.com/NorthAdb/LinkForge/actions/runs/40075330083) ✅ |
+
+### 执行记录（含 CI 首跑红的两处修复）
+
+- 分支首跑 run 40074874592 红 1 例：`FlywayBaselineIT` 对 `flyway_schema_history.success` 按 "1" 断言，而 MySQL 下该列是 `bit(1)`、JDBC 读出为 Boolean（本机 mysql CLI 把 bit 渲染成 1，掩盖了类型差）——修为 `assertEquals(Boolean.TRUE, …)`。
+- 同一次 CI 有非测试线程崩：`NoSuchMethodError SystemProperties.getUserName`（Thread-3）。定位为 Testcontainers 2.0.5 需要比 Boot 3.3.5 BOM（commons-lang3 3.14.0）更新的 lang3；pom 覆盖 `commons-lang3.version=3.18.0`（lang3 向上二进制兼容，单一覆盖对齐所有消费方）。终态 CI 无该异常。
+- 存量卷实测细节（A6-4 证据补充）：baseline 前后 `information_schema.tables` 6→7（新增 history 表），`lf_short_link` 871 行数据原样保留。
 
 ### 验证命令与输出摘要（本机，2026-10-24）
 
