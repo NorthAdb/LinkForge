@@ -93,4 +93,98 @@ class BloomRedirectIT extends AbstractIntegrationTest {
         assertEquals(302, get("/r/" + mixed, null).getStatusCode().value());
         assertEquals(302, get("/r/" + lower, null).getStatusCode().value());
     }
+
+    private double counter(String name) {
+        var c = meterRegistry.find(name).counter();
+        return c == null ? 0.0 : c.count();
+    }
+
+    @Test
+    void bloomNegativePathNeverWritesTheAbsentCache() throws Exception {
+        double put0 = counter("linkforge.cache.absent.put");
+
+        assertEquals(404, get("/r/" + unique("nosuch"), null).getStatusCode().value());
+
+        assertEquals(put0, counter("linkforge.cache.absent.put"),
+                "bloom-negative codes must 404 pre-DB and never enter the negative cache");
+    }
+
+    @Test
+    void disableDoesNotEnterAbsentAndEnableRecoversImmediately() throws Exception {
+        String token = registerForToken();
+        String code = createLink(token, "https://example.com/absent-disable");
+        double put0 = counter("linkforge.cache.absent.put");
+
+        assertEquals(200, postJson("/api/links/" + code + "/disable", "{}", token).getStatusCode().value());
+        assertEquals(404, get("/r/" + code, null).getStatusCode().value());
+        assertEquals(put0, counter("linkforge.cache.absent.put"),
+                "a disabled row still exists — its 404 must not be negatively cached");
+        assertEquals(200, postJson("/api/links/" + code + "/enable", "{}", token).getStatusCode().value());
+        assertEquals(302, get("/r/" + code, null).getStatusCode().value(),
+                "enable must take effect immediately, not after any absent TTL");
+    }
+
+    @Test
+    void expiredDoesNotEnterAbsent() throws Exception {
+        String token = registerForToken();
+        String json = om.writeValueAsString(java.util.Map.of(
+                "originalUrl", "https://example.com/absent-expired",
+                "expireAt", java.time.LocalDateTime.now().plusSeconds(1)));
+        String code = body(postJson("/api/links", json, token)).path("data").path("code").asText();
+
+        Thread.sleep(1300);
+        double put0 = counter("linkforge.cache.absent.put");
+        assertEquals(410, get("/r/" + code, null).getStatusCode().value());
+        assertEquals(put0, counter("linkforge.cache.absent.put"),
+                "expiry is not absence — the row still exists, so no negative cache entry");
+    }
+
+    @Test
+    void deletedCodeWritesAbsentAndRepeatMissesSkipTheDb() throws Exception {
+        String token = registerForToken();
+        String code = createLink(token, "https://example.com/absent-deleted");
+        double put0 = counter("linkforge.cache.absent.put");
+        double hit0 = counter("linkforge.cache.absent.hit");
+
+        assertEquals(200, delete("/api/links/" + code, token).getStatusCode().value());
+        assertEquals(404, get("/r/" + code, null).getStatusCode().value());
+        assertEquals(1.0, counter("linkforge.cache.absent.put") - put0,
+                "logical delete -> DB null -> negative cache entry");
+        assertEquals(404, get("/r/" + code, null).getStatusCode().value());
+        assertTrue(counter("linkforge.cache.absent.hit") > hit0, "the repeat miss must be served by the absent entry");
+    }
+
+    @Test
+    void localCacheServesRepeatReadsAndInvalidatesOnUpdate() throws Exception {
+        String token = registerForToken();
+        String code = createLink(token, "https://example.com/l1-v1");
+
+        assertEquals(302, get("/r/" + code, null).getStatusCode().value());
+        double hit0 = counter("linkforge.l1.hit");
+        assertEquals(302, get("/r/" + code, null).getStatusCode().value());
+        assertTrue(counter("linkforge.l1.hit") > hit0, "a repeat read of a hot code must hit L1");
+
+        // write-through: the new URL is visible immediately, via L1 or the row
+        var updated = patchJson("/api/links/" + code,
+                om.writeValueAsString(java.util.Map.of("originalUrl", "https://example.com/l1-v2")), token);
+        assertEquals(200, updated.getStatusCode().value(), updated.getBody());
+        var redirected = get("/r/" + code, null);
+        assertEquals(302, redirected.getStatusCode().value());
+        assertEquals("https://example.com/l1-v2", redirected.getHeaders().getLocation().toString());
+    }
+
+    @Test
+    void localCacheDisabledFallsBackToRedisOnlyPath() throws Exception {
+        properties.getL1().setEnabled(false);
+        try {
+            String token = registerForToken();
+            String code = createLink(token, "https://example.com/l1-off");
+            double hit0 = counter("linkforge.l1.hit");
+
+            assertEquals(302, get("/r/" + code, null).getStatusCode().value());
+            assertEquals(hit0, counter("linkforge.l1.hit"), "disabled L1 must not count hits");
+        } finally {
+            properties.getL1().setEnabled(true);
+        }
+    }
 }
