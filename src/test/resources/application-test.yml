@@ -46,6 +46,15 @@ linkforge:
     register-max: ${LINKFORGE_REGISTER_MAX:1000}
     register-window-seconds: 600
     key-prefix: "linkforge:rl:it-default:"
+  webhook:
+    enabled: true
+    # fixed 32-byte test master key (Base64) — ITs rely on AES-GCM round-trip
+    secret-master-key: "bGlua2ZvcmdlLWl0LXdlYmhvb2stbWFzdGVyLWtleSE="
+    relay-fixed-delay-ms: 500
+    relay-initial-delay-ms: 500
+    relay-batch-size: 50
+    backoff-base-seconds: 1
+    backoff-max-seconds: 2
 
 logging:
   level:

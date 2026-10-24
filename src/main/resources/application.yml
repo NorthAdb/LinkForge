@@ -3,6 +3,12 @@ spring:
     name: linkforge
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:dev}
+  task:
+    scheduling:
+      # B5: the ClickOutboxRelay, reconciler and WebhookDeliveryRelay must not share
+      # one thread — a slow webhook endpoint must never delay click outbox catch-up.
+      pool:
+        size: ${LINKFORGE_SCHEDULING_POOL_SIZE:4}
   flyway:
     # Versioned migrations for every profile; empty DBs get V1, legacy volumes
     # (tables already present, no history) are baselined at 1 and skip V1.
@@ -72,6 +78,7 @@ mybatis-plus:
 server:
   port: ${SERVER_PORT:8080}
 
+
 linkforge:
   jwt:
     secret: ${JWT_SECRET}
@@ -102,6 +109,27 @@ linkforge:
     enabled: ${LINKFORGE_L1_ENABLED:true}
     maximum-size: ${LINKFORGE_L1_MAXIMUM_SIZE:10000}
     ttl-seconds: ${LINKFORGE_L1_TTL_SECONDS:10}
+  api-key:
+    # B4: per-key quotas fall back to these defaults; keys act as their creator.
+    default-quota-per-minute: ${LINKFORGE_APIKEY_QUOTA_PER_MINUTE:120}
+    default-quota-per-day: ${LINKFORGE_APIKEY_QUOTA_PER_DAY:10000}
+    max-active-per-user: ${LINKFORGE_APIKEY_MAX_ACTIVE:10}
+  webhook:
+    # B5: click webhooks built on the A7 outbox chain (consume -> delivery row -> relay).
+    enabled: ${LINKFORGE_WEBHOOK_ENABLED:true}
+    # Base64 of a 32-byte AES-256 master key; WITHOUT it the webhook feature degrades
+    # off (endpoints cannot be saved, no deliveries are enqueued or signed).
+    secret-master-key: ${LINKFORGE_WEBHOOK_SECRET_KEY:}
+    relay-fixed-delay-ms: ${LINKFORGE_WEBHOOK_RELAY_FIXED_DELAY_MS:2000}
+    relay-initial-delay-ms: ${LINKFORGE_WEBHOOK_RELAY_INITIAL_DELAY_MS:5000}
+    relay-batch-size: ${LINKFORGE_WEBHOOK_RELAY_BATCH_SIZE:50}
+    max-attempts: ${LINKFORGE_WEBHOOK_MAX_ATTEMPTS:8}
+    backoff-base-seconds: ${LINKFORGE_WEBHOOK_BACKOFF_BASE_SECONDS:10}
+    backoff-max-seconds: ${LINKFORGE_WEBHOOK_BACKOFF_MAX_SECONDS:3600}
+    connect-timeout-ms: ${LINKFORGE_WEBHOOK_CONNECT_TIMEOUT_MS:2000}
+    request-timeout-ms: ${LINKFORGE_WEBHOOK_REQUEST_TIMEOUT_MS:5000}
+    # SSRF guard escape hatch — IT-only, never true in prod (D-Bw2-15).
+    allow-private-targets: ${LINKFORGE_WEBHOOK_ALLOW_PRIVATE_TARGETS:false}
   mq:
     # A7: hot path writes lf_outbox (PENDING) in the click transaction; the relay
     # drains it to RabbitMQ. sync-click keeps the lf_click_log double write.

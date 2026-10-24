@@ -22,6 +22,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
+    private final ApiKeyAuthFilter apiKeyAuthFilter;
 
     /** false in prod: docs are denied at the filter chain before reaching springdoc. */
     @Value("${linkforge.docs-enabled:true}")
@@ -48,14 +49,31 @@ public class SecurityConfig {
                         auth.requestMatchers(docsPaths).denyAll()
                                 .requestMatchers(consolePaths).denyAll();
                     }
-                    auth.anyRequest().authenticated();
+                    // B-wave2 B4 explicit capability whitelist: API keys may use the
+                    // link/stats surface only; key and webhook management plus actuator
+                    // stay JWT-only, and everything else defaults to JWT-only as well.
+                    auth.requestMatchers("/api/links/**").hasAnyRole("USER", "API_KEY")
+                            .requestMatchers("/api/keys/**", "/api/webhooks/**").hasRole("USER")
+                            .requestMatchers("/actuator/**").hasRole("USER")
+                            .anyRequest().hasRole("USER");
                 })
-                .exceptionHandling(eh -> eh.authenticationEntryPoint((request, response, ex) -> {
-                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                    response.setContentType("application/json;charset=UTF-8");
-                    response.getWriter().write("{\"code\":401,\"message\":\"unauthorized\",\"data\":null}");
-                }))
-                .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+                .exceptionHandling(eh -> eh
+                        .authenticationEntryPoint((request, response, ex) -> {
+                            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                            response.setContentType("application/json;charset=UTF-8");
+                            response.getWriter().write("{\"code\":401,\"message\":\"unauthorized\",\"data\":null}");
+                        })
+                        // API keys are ROLE_API_KEY: anything not explicitly allowed above
+                        // (key/webhook management, actuator, anything else) is a JSON 403.
+                        .accessDeniedHandler((request, response, ex) -> {
+                            response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                            response.setContentType("application/json;charset=UTF-8");
+                            response.getWriter().write("{\"code\":403,\"message\":\"forbidden\",\"data\":null}");
+                        }))
+                // JWT first (Bearer parsing), then the X-API-Key filter; either one may
+                // establish the SecurityContext. Both together is a 400 from the key filter.
+                .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(apiKeyAuthFilter, JwtAuthFilter.class);
         return http.build();
     }
 
