@@ -39,3 +39,7 @@ application-local.yaml
 *.tmp
 *.bak
 .cache/
+
+# Local tracking archive (assistant docs; not product docs/)
+记录追踪/
+
