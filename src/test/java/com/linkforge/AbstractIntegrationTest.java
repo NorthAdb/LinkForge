@@ -45,8 +45,8 @@ public abstract class AbstractIntegrationTest {
 
     static final RabbitMQContainer RABBIT = new RabbitMQContainer(
             DockerImageName.parse("rabbitmq:3.13-management-alpine"))
-            .withEnv("RABBITMQ_DEFAULT_USER", "linkforge")
-            .withEnv("RABBITMQ_DEFAULT_PASS", "linkforge_pass");
+            .withAdminUser("linkforge")
+            .withAdminPassword("linkforge_pass");
 
     static {
         MYSQL.start();
