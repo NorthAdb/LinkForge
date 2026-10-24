@@ -41,6 +41,13 @@ public class ApiKeyService {
             throw new BizException(400, "active api key limit reached ("
                     + properties.getApiKey().getMaxActivePerUser() + ")");
         }
+        LinkForgeProperties.ApiKey cfg = properties.getApiKey();
+        if (request.getQuotaPerMinute() != null && request.getQuotaPerMinute() > cfg.getMaxQuotaPerMinute()) {
+            throw new BizException(400, "quotaPerMinute exceeds the cap of " + cfg.getMaxQuotaPerMinute());
+        }
+        if (request.getQuotaPerDay() != null && request.getQuotaPerDay() > cfg.getMaxQuotaPerDay()) {
+            throw new BizException(400, "quotaPerDay exceeds the cap of " + cfg.getMaxQuotaPerDay());
+        }
 
         String prefix = randomBase62(PREFIX_LENGTH);
         String secret = randomBase62(SECRET_LENGTH);
@@ -89,19 +96,16 @@ public class ApiKeyService {
         apiKeyMapper.updateById(key);
     }
 
-    /** Point lookup on the unique hash index; null when unknown or revoked. */
+    /** Point lookup on the unique hash index; null when the hash is unknown. Revoked keys
+     * come back as-is so the filter can tag them (result=revoked) and reject uniformly. */
     public ApiKey authenticate(String plaintextKey) {
-        ApiKey key = apiKeyMapper.selectOne(new LambdaQueryWrapper<ApiKey>()
+        return apiKeyMapper.selectOne(new LambdaQueryWrapper<ApiKey>()
                 .eq(ApiKey::getKeyHash, sha256Hex(plaintextKey)));
-        if (key == null || key.getRevokedAt() != null) {
-            return null;
-        }
-        return key;
     }
 
     /** Best-effort last_used_at stamp; the caller gates it to once per minute via SET NX. */
     public void touch(long id) {
-        apiKeyMapper.touch(id);
+        apiKeyMapper.touchLastUsed(id, LocalDateTime.now());
     }
 
     static ApiKeyDtos.View toView(ApiKey key) {

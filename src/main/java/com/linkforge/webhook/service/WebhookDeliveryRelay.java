@@ -65,15 +65,26 @@ public class WebhookDeliveryRelay {
     @Scheduled(fixedDelayString = "${linkforge.webhook.relay-fixed-delay-ms:2000}",
             initialDelayString = "${linkforge.webhook.relay-initial-delay-ms:5000}")
     public void drain() {
-        if (!properties.getWebhook().isEnabled() || !properties.getWebhook().isRelayEnabled()) {
+        LinkForgeProperties.Webhook cfg = properties.getWebhook();
+        if (!cfg.isEnabled() || !cfg.isRelayEnabled()) {
             return;
         }
-        List<WebhookDelivery> batch = deliveryMapper.selectPendingBatch(properties.getWebhook().getRelayBatchSize());
+        // S1-c: without a usable master key no delivery can be signed — skip the
+        // WHOLE batch without touching rows (no attempts consumed, no state change).
+        // Rows stay PENDING and flow as soon as the key is configured.
+        if (!cipher.isAvailable()) {
+            meterRegistry.counter("linkforge.webhook.relay.skipped", "reason", "master_key_unavailable").increment();
+            return;
+        }
+        List<WebhookDelivery> batch = deliveryMapper.selectPendingBatch(cfg.getRelayBatchSize());
         for (WebhookDelivery delivery : batch) {
             try {
                 deliver(delivery);
             } catch (Exception ex) {
+                // N7: a poisoned row must not be re-picked every tick — count the
+                // attempt and back it off (or fail it) like any other error.
                 log.warn("webhook delivery {} failed unexpectedly: {}", delivery.getId(), ex.getMessage());
+                scheduleRetry(delivery, null, "relay exception: " + ex.getClass().getSimpleName());
             }
         }
     }
@@ -89,10 +100,6 @@ public class WebhookDeliveryRelay {
             deliveryMapper.markFailed(delivery.getId(), null, "blocked target");
             meterRegistry.counter("linkforge.webhook.blocked").increment();
             meterRegistry.counter("linkforge.webhook.delivery", "result", "failed").increment();
-            return;
-        }
-        if (!cipher.isAvailable()) {
-            scheduleRetry(delivery, null, "master key unavailable");
             return;
         }
 
@@ -121,7 +128,7 @@ public class WebhookDeliveryRelay {
             HttpResponse<Void> response = httpClient.send(request, HttpResponse.BodyHandlers.discarding());
             statusCode = response.statusCode();
             if (statusCode >= 200 && statusCode < 300) {
-                deliveryMapper.markSent(delivery.getId(), statusCode);
+                deliveryMapper.markSent(delivery.getId(), statusCode, LocalDateTime.now());
                 meterRegistry.counter("linkforge.webhook.delivery", "result", "success").increment();
                 return;
             }
@@ -140,6 +147,11 @@ public class WebhookDeliveryRelay {
         }
     }
 
+    /**
+     * Schedules the next attempt on the DB clock (markRetry writes DATE_ADD(NOW(), ...)
+     * so JVM/DB timezone skew can never stretch or kill the backoff) and counts every
+     * attempt, including the final one. First retry waits base·2^1.
+     */
     private void scheduleRetry(WebhookDelivery delivery, Integer statusCode, String error) {
         int attempts = (delivery.getAttempts() == null ? 0 : delivery.getAttempts()) + 1;
         LinkForgeProperties.Webhook cfg = properties.getWebhook();
@@ -150,7 +162,7 @@ public class WebhookDeliveryRelay {
             return;
         }
         long backoffSeconds = Math.min(cfg.getBackoffMaxSeconds(), cfg.getBackoffBaseSeconds() * (1L << attempts));
-        deliveryMapper.markRetry(delivery.getId(), LocalDateTime.now().plusSeconds(backoffSeconds), statusCode, error);
+        deliveryMapper.markRetry(delivery.getId(), backoffSeconds, statusCode, error);
         meterRegistry.counter("linkforge.webhook.delivery", "result", "retry").increment();
     }
 }

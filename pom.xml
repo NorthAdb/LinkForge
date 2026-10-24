@@ -188,16 +188,37 @@
                 </configuration>
             </plugin>
             <!-- *Test = pure units (surefire, no Docker); *IT = Testcontainers
-                 integration (failsafe, bound to verify). -->
+                 integration (failsafe, bound to verify). WebhookRetryClockIT runs in
+                 its own fork pinned to Asia/Shanghai so the JVM(+8) vs DB(UTC) clock
+                 mismatch behind Bw2-M1 is exercised for real. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
                 <executions>
                     <execution>
+                        <id>default</id>
                         <goals>
                             <goal>integration-test</goal>
                             <goal>verify</goal>
                         </goals>
+                        <configuration>
+                            <excludes>
+                                <exclude>**/WebhookRetryClockIT.java</exclude>
+                            </excludes>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>webhook-tz-it</id>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                        <configuration>
+                            <argLine>-Duser.timezone=Asia/Shanghai</argLine>
+                            <includes>
+                                <include>**/WebhookRetryClockIT.java</include>
+                            </includes>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>

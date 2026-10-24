@@ -70,9 +70,9 @@ public class WebhookTargetGuard {
             return "host does not resolve";
         }
         for (InetAddress address : addresses) {
-            String violation = violationOf(address);
-            if (violation != null) {
-                return host + " resolves to " + address.getHostAddress() + " (" + violation + ")";
+            if (violationOf(address) != null) {
+                // Bw2-N6: the 400 body must not echo resolved addresses — one uniform reason
+                return "blocked target";
             }
         }
         return null;
@@ -86,26 +86,62 @@ public class WebhookTargetGuard {
         }
         byte[] bytes = address.getAddress();
         if (address instanceof Inet4Address) {
-            // CGNAT 100.64.0.0/10
+            // 0.0.0.0/8 ("this network"), CGNAT 100.64.0.0/10, benchmark 198.18.0.0/15,
+            // reserved 240.0.0.0/4 (incl. the broadcast 255.255.255.255)
+            if (bytes[0] == 0) {
+                return "this-network block (0.0.0.0/8)";
+            }
             if ((bytes[0] & 0xFF) == 100 && (bytes[1] & 0xC0) == 64) {
                 return "shared address space (CGNAT)";
             }
+            if ((bytes[0] & 0xFF) == 198 && (bytes[1] & 0xFE) == 18) {
+                return "benchmarking block (198.18.0.0/15)";
+            }
+            if ((bytes[0] & 0xF0) == 0xF0) {
+                return "reserved block (240.0.0.0/4)";
+            }
             return null;
         }
-        // IPv6: ULA fc00::/7, and IPv4-mapped addresses fall back to the v4 rules
-        boolean ipv4Mapped = bytes[0] == 0 && bytes[1] == 0
-                && Arrays.equals(Arrays.copyOfRange(bytes, 2, 12), new byte[10])
-                && bytes[10] == (byte) 0xFF && bytes[11] == (byte) 0xFF;
-        if (ipv4Mapped) {
+        // IPv6 with an embedded IPv4 falls back to the v4 rules; ULA fc00::/7 is blocked
+        byte[] embedded = embeddedIpv4(bytes);
+        if (embedded != null) {
             try {
-                InetAddress v4 = InetAddress.getByAddress(Arrays.copyOfRange(bytes, 12, 16));
-                return violationOf(v4);
+                return violationOf(InetAddress.getByAddress(embedded));
             } catch (UnknownHostException ex) {
-                return "unparseable ipv4-mapped address";
+                return "unparseable embedded ipv4";
             }
         }
         if ((bytes[0] & 0xFE) == 0xFC) {
             return "unique local address (fc00::/7)";
+        }
+        return null;
+    }
+
+    /**
+     * Extracts the IPv4 embedded in ::ffff:0:0/96 (mapped), ::/96 (compatible),
+     * 64:ff9b::/96 (NAT64) and 2002::/16 (6to4); null when the address embeds none.
+     */
+    private static byte[] embeddedIpv4(byte[] bytes) {
+        boolean allZeroPrefix = true;
+        for (int i = 0; i < 12; i++) {
+            if (bytes[i] != 0) {
+                allZeroPrefix = false;
+                break;
+            }
+        }
+        if (allZeroPrefix) {
+            if (bytes[10] == (byte) 0xFF && bytes[11] == (byte) 0xFF) {
+                return Arrays.copyOfRange(bytes, 12, 16); // ::ffff:a.b.c.d
+            }
+            return Arrays.copyOfRange(bytes, 12, 16); // ::a.b.c.d (::/96 compatible)
+        }
+        if (bytes[0] == 0x00 && bytes[1] == 0x64 && bytes[2] == (byte) 0xFF && bytes[3] == (byte) 0x9B
+                && bytes[4] == 0 && bytes[5] == 0 && bytes[6] == 0 && bytes[7] == 0
+                && bytes[8] == 0 && bytes[9] == 0 && bytes[10] == 0 && bytes[11] == 0) {
+            return Arrays.copyOfRange(bytes, 12, 16); // 64:ff9b::a.b.c.d
+        }
+        if (bytes[0] == 0x20 && bytes[1] == 0x02) {
+            return new byte[]{bytes[2], bytes[3], bytes[4], bytes[5]}; // 2002:a.b.c.d::/16
         }
         return null;
     }

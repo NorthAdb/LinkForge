@@ -16,6 +16,7 @@ import com.linkforge.webhook.support.WebhookTargetGuard;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -26,7 +27,9 @@ import java.util.Map;
  * Webhook endpoint management (JWT only, one endpoint per tenant) and the consume
  * hook that turns a freshly consumed click into a PENDING delivery row — inside
  * the dedup transaction, so every click eventId yields at most one delivery no
- * matter how often MQ or the reconciler replays it (D-Bw2-9/12).
+ * matter how often MQ or the reconciler replays it (D-Bw2-9/12). Enqueue is
+ * cipher-independent (S1-b); insert failures roll the consume transaction back
+ * so statistics and delivery intent stay atomic (S1-d).
  */
 @Slf4j
 @Service
@@ -132,15 +135,23 @@ public class WebhookService {
 
     /**
      * Called from ClickStatsService.consume INSIDE the dedup transaction, after the
-     * lf_consumed_event insert won. Every failure mode is swallowed: statistics must
-     * never break because webhook plumbing is down. Duplicate event ids cannot
-     * normally occur (the dedup gate is upstream) but the UK backstops anyway.
+     * lf_consumed_event insert won. Enqueue depends ONLY on the endpoint existing
+     * and being enabled — the secret is needed at send time, not here, so a missing
+     * master key still records the delivery intent as PENDING (S1-b; the relay
+     * skips batches until the key is configured, without consuming attempts).
+     *
+     * Insert failures ROLL BACK the consume transaction (S1-d, 萧北 confirmed):
+     * statistics and delivery intent commit or die together (D-Bw2-9 ③), the MQ
+     * semantics then handle the replay/DLQ. The only exception is a duplicate
+     * (endpoint_id, event_id) — already enqueued by a racing path, count and move on.
      */
     public void recordClickDelivery(ClickEvent event) {
+        boolean featureOff = !properties.getWebhook().isEnabled();
+        if (featureOff) {
+            // S1-a: clicks during an explicitly disabled feature are not back-delivered (README)
+            return;
+        }
         try {
-            if (!properties.getWebhook().isEnabled() || !cipher.isAvailable()) {
-                return;
-            }
             WebhookEndpoint endpoint = endpointMapper.selectOne(new LambdaQueryWrapper<WebhookEndpoint>()
                     .eq(WebhookEndpoint::getTenantId, event.getTenantId())
                     .eq(WebhookEndpoint::getEnabled, true));
@@ -175,8 +186,12 @@ public class WebhookService {
             delivery.setCreatedAt(LocalDateTime.now());
             deliveryMapper.insert(delivery);
             meterRegistry.counter("linkforge.webhook.enqueued").increment();
+        } catch (DuplicateKeyException ex) {
+            meterRegistry.counter("linkforge.webhook.enqueue.failed", "reason", "duplicate").increment();
         } catch (Exception ex) {
+            meterRegistry.counter("linkforge.webhook.enqueue.failed", "reason", ex.getClass().getSimpleName()).increment();
             log.warn("webhook delivery enqueue failed for event {}: {}", event.getEventId(), ex.getMessage());
+            throw ex instanceof RuntimeException runtime ? runtime : new IllegalStateException(ex);
         }
     }
 }

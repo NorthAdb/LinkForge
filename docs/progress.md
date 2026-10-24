@@ -914,21 +914,78 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 
 - `D:/tools/apache-maven-3.9.9/bin/mvn -B test` → `Tests run: 56, Failures: 0` + BUILD SUCCESS
 - 实机（kill 旧进程 → 新 jar 重启，.env 补 `LINKFORGE_WEBHOOK_SECRET_KEY`）：启动日志见 `Migrating schema to version "5 - api key"`、`"6 - webhook"`；手验与回归见执行记录
-- 连接预算：新增 2 个 @SpringBootTest 上下文（ApiKeyIT / WebhookDeliveryIT，各 `hikari.maximum-pool-size=4`）→ 峰值 ≈ 24×10 + 2×4 = 248 < 500，未动 `--max-connections`
+- 连接预算：21 个常规上下文（hikari 默认 10）+ 4 个收紧上下文（ApiKeyIT / WebhookDeliveryIT / BloomDisabledAtStartupIT / SingleFlightRedirectIT，各 4）→ 峰值 ≈ 21×10 + 4×4 = 226 < 500，未动 `--max-connections`
 
 ### 执行记录
 
 - 提交序：Bw1-N1/N2（aac251a）→ B4（f97ddf4）→ B5（b9393eb）→ docs。每单元编译/单测绿后提交。
 - 单测迭代红三次均为测试自身问题：Cipher 测试主密钥常量 33/30 字节非 32（AES-256 拒收，改精确 32）；Guard 测试桩把所有 host 解析成同一 IP（按 host 前缀区分公网/私网答案）；一次草稿转义笔误（改用 Pattern.quote）。
 - `.env`（本机，gitignore）补 `LINKFORGE_WEBHOOK_SECRET_KEY`；`.env.example` 同步说明；`application-test.yml` 配固定 32 字节测试主密钥；yml 中 `spring.task.scheduling` 放基础文档（首个 spring 键内，避免同文档重复键）。
-- **分支 CI 五红一绿（webhook IT 在共享套件里的三段修复史，跨上下文竞态家族新成员）**：①run 40104801146 红＝ApiKeyIT 期望 actuator 403 实得 401（过滤器没覆盖，手验同步抓到，8e770a2 修）；②run 40105127938 红＝三个链式用例超时且两段式取证报出 `last_error=blocked target`——**兄弟缓存上下文的 webhook relay 抢跑共享 `lf_webhook_delivery`**，其 allow-private-targets=false 的守卫把本上下文（开=true）的投递行标 FAILED；修＝`webhook.relay-enabled` 开关（eca1295），test yml 默认 false、仅 WebhookDeliveryIT 开（同 MqEndToEndIT 的 async/listener 模式）；③run 40107163544 红＝行未落库时 `queryForMap` 抛 EmptyResult 使 await 直接中止 + 桩脚本类级静态队列被并发投递互相消耗；修＝空安全 latestDeliveryFor + **每测试独立桩路径**（/hook-retry、/hook-max…，0ed64e0）；④run 40107773960 红＝maxAttempts 脚本只放一个 500（第二次尝试轮空得 200 → SENT attempts=2），「末位重复」注释从未实现；修＝脚本放满 8 个 500 + RECEIVED 断言只数本 event id（4df861f）。终态 run 40108332225 绿。
+- **分支 CI 六红一绿（webhook IT 在共享套件里的四段修复史，跨上下文竞态家族新成员）**：①run [40104801106](https://github.com/NorthAdb/LinkForge/actions/runs/40104801106) 红（@ad6189b docs）＝ApiKeyIT 期望 actuator 403 实得 401（过滤器没覆盖，手验同步抓到，8e770a2 修）；②run [40105717696](https://github.com/NorthAdb/LinkForge/actions/runs/40105717696) 红（@3c74452 docs，与③同因、修之前）；③run [40105127938](https://github.com/NorthAdb/LinkForge/actions/runs/40105127938) 红（@8e770a2）＝三个链式用例超时且两段式取证报出 `last_error=blocked target`——**兄弟缓存上下文的 webhook relay 抢跑共享 `lf_webhook_delivery`**，其 allow-private-targets=false 的守卫把本上下文（开=true）的投递行标 FAILED；修＝`webhook.relay-enabled` 开关（eca1295），test yml 默认 false、仅 WebhookDeliveryIT 开（同 MqEndToEndIT 的 async/listener 模式）；④run [40106585876](https://github.com/NorthAdb/LinkForge/actions/runs/40106585876) 红（@ca81c60）＝行未落库时 `queryForMap` 抛 EmptyResult 使 await 直接中止 + 桩脚本类级静态队列被并发投递互相消耗；修＝空安全 latestDeliveryFor + **每测试独立桩路径**（/hook-retry、/hook-max…，0ed64e0）；⑤run [40107163544](https://github.com/NorthAdb/LinkForge/actions/runs/40107163544) 红（@eca1295，同④残留）；⑥run [40107773960](https://github.com/NorthAdb/LinkForge/actions/runs/40107773960) 红（@0ed64e0）＝maxAttempts 脚本只放一个 500（第二次尝试轮空得 200 → SENT attempts=2），「末位重复」注释从未实现；修＝脚本放满 8 个 500 + RECEIVED 断言只数本 event id（4df861f）。终态 run [40108332225](https://github.com/NorthAdb/LinkForge/actions/runs/40108332225) 绿。
 - **实机手验抓到并修掉一个真缺口（`8e770a2`）**：`/actuator/metrics` 带 Key 得 401 而非 403——`shouldNotFilter` 原本把整个 actuator 都跳过，Key 请求没进过滤器而是匿名 401。修后 actuator（health 除外）也过 Key 过滤器，Key 得到干净 403（metrics/keys 实测 403，health 200）。分支首跑 CI 预期红在 ApiKeyIT 该用例，修复后重跑绿（见 CI 链）。
-- 实机手验（A9 起惯例，证据）：B4＝建 Key（prefix `lfk_iNfLfHm3`，list 无明文）→ Key 建链 302 → metrics/keys 403 → `quotaPerMinute=5` 第 5 请求 429 + `Retry-After: 60`；B5＝PUT endpoint（secret 明文一次、库列 `v1:OGKt…` 密文、GET 掩码）→ 跳转 → 本机桩收投递：**独立重算 HMAC 签名一致**、event id `evt_log-3955`、payload 无原始 IP、device=bot/refererHost=direct；首投 IOException（手验桩自身路径问题）→ 重试 SENT(attempts=2, 200)——重试路径真机实证；SSRF 关闭态 3 个私网/元数据/ftp 目标全 400。
+- 实机手验（A9 起惯例，证据）：B4＝建 Key（prefix `lfk_iNfLfHm3`，list 无明文）→ Key 建链 302 → metrics/keys 403 → `quotaPerMinute=5`：第 6 次请求起 429 + `Retry-After: 60`（前 5 次含一次被 403 的 /api/keys 请求——配额在授权检查前计数）；B5＝PUT endpoint（secret 明文一次、库列 `v1:OGKt…` 密文、GET 掩码）→ 跳转 → 本机桩收投递：**独立重算 HMAC 签名一致**、event id `evt_log-3955`、payload 无原始 IP、device=bot/refererHost=direct；首投 IOException（手验桩自身路径问题）→ 重试 SENT(attempts=2, 200)——重试路径真机实证；SSRF 关闭态 3 个私网/元数据/ftp 目标全 400。
 - 实机回归：`smoke.sh` **SMOKE OK**；`outbox-drill.sh` **OUTBOX DRILL OK**；`mq-drill.sh` **DRILL OK**（首跑 429 系本机注册限流窗口被手验打满，清本机 Redis 计数键后重跑绿，非产品缺陷）。
 
 ### 下一步（不混入本波）
 
 - 波 3+：B2/B6/B1/B10/B3/B9 及 backlog（Bw2-F1 聚合推送、Bw2-F2 租户级 Key），均需萧北指令再开。
+
+---
+## B 波 2 修复轮（Bw2-M1/S1/S2 + nit，fix/bw2-audit，发车基线 main@1b0a10b，2026-10-25）
+
+范围：交接单 `记录追踪/05-阶段交接/LinkForge-phase-B-wave2-fix-handoff.md`（来源审计 FAIL，1 must-fix）。只修波 2 审计项：M1 全必修、S1/S2 应修全做、必修 nit N1/N2/N6/N10/N11 全做、可选 nit 做 N3/N4/N7/N8、跳过 N5/N9/N12（见下）。V1–V6 文本零改、零新依赖、302 热路径语义零改。
+
+### 决策记录（D-Bw2fix-1）
+
+| # | 决策 | 理由 |
+|---|------|------|
+| D-Bw2fix-1 | **时钟规则**：调度列（只被 SQL 拿来与 NOW() 比较、不对外展示）＝**DB 时钟**（`lf_webhook_delivery.next_attempt_at`、A7 `lf_outbox.next_attempt_at` 已是）；业务列（对外 API 返回或给人看）＝**JVM 时钟**（`lf_api_key.created_at/revoked_at/last_used_at`、`lf_webhook_delivery.created_at/sent_at`、`lf_webhook_endpoint.*_at`）。落地：`markRetry` 只收 `backoffSeconds`，SQL `DATE_ADD(NOW(), INTERVAL #{backoffSeconds} SECOND)`（与 OutboxMapper 同式）；`markSent`/`touchLastUsed` 改收 `#{now}` 由 Java 传入 | 审计 M1/S2；混用两种时钟时（box：MySQL UTC、JVM +8）重试被推迟 ~8h、API 出现「先使用后创建」 |
+
+### 必修/应修处置
+
+| ID | 处置 | 证据 |
+|----|------|------|
+| **M1** | `markRetry` 改 DB 时钟（上表）；Relay 不再用 `LocalDateTime.now()` 算调度时间；回归 IT＝新建 `WebhookRetryClockIT`，**独立 failsafe execution `webhook-tz-it` 以 `-Duser.timezone=Asia/Shanghai` fork**（Testcontainers MySQL 仍 UTC，精确复现错配；默认 execution 排除该类，上下文数与连接预算不变）。断言①：`TIMESTAMPDIFF(SECOND, NOW(), next_attempt_at) ∈ [0, 20]`（首次退避 10·2^1=20s）；断言②：60s 内 retry 真正 fire 到 SENT | **旧实现下该断言红的证明**：本地对 Compose MySQL（UTC）实测——新式列值 `TIMESTAMPDIFF(SECOND, NOW(), DATE_ADD(NOW(), INTERVAL 20 SECOND))` = **20**（绿）；旧式（JVM+8 时钟字面值）`= 28820`（红，≈8h）。断言直接比对该差值，旧实现必红 |
+| **S1-a** | `webhook.enabled=false` 维持不落行；README 写明「关闭期间的点击不补投」 | `recordClickDelivery` 入口 featureOff 早退 |
+| **S1-b** | `enabled=true` 且主密钥缺失/无效：**照常落 PENDING 行**（入队只看 endpoint 存在且启用）；启动 WARN 保留、**不 fail-fast**（萧北确认） | `WebhookService.recordClickDelivery` 去掉 `!cipher.isAvailable()` 早退；IT `missingMasterKeyStillEnqueuesAndRelaySkipsWithoutConsumingAttempts`（@SpyBean cipher 置 false → 行落、attempts=0、`relay.skipped` 上涨 → reset 后自然 SENT） |
+| **S1-c** | 发送侧主密钥不可用：**drain 入口整批跳过**（不扫表、不耗 attempts、不改行），计 `linkforge.webhook.relay.skipped{reason=master_key_unavailable}` | `WebhookDeliveryRelay.drain` |
+| **S1-d** | 入队插入异常：计 `linkforge.webhook.enqueue.failed{reason=<简名>}` 后**向上抛**，随 consume 事务回滚（MQ 语义重放/DLQ，统计与回调意图同生共死，萧北确认回滚方案）；**唯一例外** `DuplicateKeyException` 计 `reason=duplicate` 后正常返回 | `recordClickDelivery` catch 重构；IT `enqueueFailureRollsBackTheConsumeTransaction`（@SpyBean mapper 抛异常 → consume 抛出、`lf_consumed_event` 0 行、`enqueue.failed` +1）、IT `duplicateEnqueueIsCountedAndHarmless` |
+| **S2** | `ApiKeyMapper.touch` → `touchLastUsed(id, #{now})`、`markSent(id, code, #{now})`，Java 传 `LocalDateTime.now()`；表结构零改 | IT `businessTimestampsFollowTheJvmClockEvenWithSkewedJvm`（+8 fork 下 `last_used_at >= created_at`、`sent_at >= created_at`；旧 NOW() 写法下 sent_at 落后 created_at ~8h → 红） |
+
+### 必修 nit 处置
+
+| ID | 处置 |
+|----|------|
+| **N1** | L1 回填挪到「行 URL 校验门 + 渲染校验」**两道之后**；`BloomRedirectIT.dirtyRedisValueNeverBackfillsTheLocalCache`：Redis 植入脏 URL + 行合法 → 410 且 L1 无该 code |
+| **N2** | `.env.example` 占位改空值 + `# openssl rand -base64 32（必须解码为 32 字节）`；照抄后走「未配置」WARN 而非「解码失败」（空值路径本来就不进解码分支，实测文案一致）；README 同步 |
+| **N6** | 守卫补拦 `0.0.0.0/8`、`198.18.0.0/15`、`240.0.0.0/4`（含 255.255.255.255）、IPv6 `::/96`（compatible）、`64:ff9b::/96`（NAT64）、`2002::/16`（6to4）——后三种先取内嵌 IPv4 再走 v4 规则；400 文案统一 `webhook target not allowed`（不回显解析 IP）。`WebhookTargetGuardTest` +4 例：0.1.2.3/198.18.0.1/198.19.255.255/240.0.0.1/255.255.255.255 全拦、NAT64/6to4/compat 包私网全拦、**公网 NAT64 `64:ff9b::808:808` 放行**、文案无 IP |
+| **N10** | `permanent4xx` 的 `RECEIVED.size()` 改为本 event id 过滤计数（顺序无关）；无用的 `@BeforeEach` import 已删；本地曾临时加 `@TestMethodOrder(Random)` 复核（不提交）——用例间已无共享可变状态依赖（每测试独立租户/桩路径，RECEIVED 按 event id 过滤） |
+| **N11** | progress 改口六处：「五红一绿」→**六红一绿**（补 40105717696/@3c74452 与 40106585876/@ca81c60 两跳）；run id `40104801146`→`40104801106`；「+11/TargetGuard 4」统一为 **+13/TargetGuard 6**；「56 单测」→**59**；连接预算 `24×10+2×4≈248`→**`21×10+4×4≈226`**；配额手验改「第 6 次请求起 429（前 5 次含一次被 403 的 /api/keys 请求——配额在授权检查前计数）」 |
+
+### 可选 nit 处置（N3/N4/N7/N8 做；N5/N9/N12 登记）
+
+| ID | 处置 |
+|----|------|
+| N3 | **做**：hash 命中但已吊销 → `result=revoked`（对外仍 401 同形）；`authenticate` 返回行、吊销判定移到过滤器 |
+| N4 | **做**：`linkforge.api-key.max-quota-per-minute/day`（默认 1000/100000），创建时超限 400，防自助提额 |
+| N7 | **做**：drain 的 catch 对当前行 `scheduleRetry`（按 attempts 走退避或 FAILED），毒行不再每 2s 热循环。**单 relay 顺序投递、慢接收方拖慢全体**：README 已有「诚实限制」口径，保持 |
+| N8 | **做（改文档口径）**：README 明确公式 `min(1h, 10s·2^attempts)`、attempts 从 1 起计（首次重试 20s）、**attempts 计入最终那一次** |
+| N5 | **不做（登记）**：活跃 Key 上限计数存在并发窗口，短暂突破可接受（演示规模）；`SELECT … FOR UPDATE` 需要事务改造，收益不成比例 |
+| N9 | **不做（登记）**：payload 时间戳维持 Jackson 默认 ISO（无偏移）；改 OffsetDateTime 是对外契约变更，等真实接收方需求出现再做 |
+| N12 | **不做（登记）**：429 的 `Retry-After` 维持分钟窗固定 60s（日窗已精确到次日 0 点秒数）；读窗口剩余 TTL 的增益小 |
+
+### 验证与手验
+
+- 本机 `mvn -B test` → **63 单测绿**（59+4：TargetGuard 扩面）；failsafe 双 execution：默认 86+3（S1 三例进 WebhookDeliveryIT）+ N1 一例（BloomRedirectIT 91）＋ `webhook-tz-it` fork 2 例 = **共 93 IT**；全量合计 **156 例**（CI 为准）
+- 连接预算：`WebhookRetryClockIT` 复用 WebhookDeliveryIT 的属性集（每 fork 各自起容器、不并存）→ 峰值仍 ≈ **226 < 500**
+- **时区说明（交接单 §5）**：Windows 实机 JVM 默认时区＝**Asia/Shanghai（+8，China Standard Time）**；本机 Compose MySQL＝**UTC**（`@@global.time_zone=SYSTEM` 且 `NOW() == UTC_TIMESTAMP`，docker-compose 未设 TZ）。B 波 2 手验「首投 IOException → 重试 SENT(attempts=2, 200)」之所以秒级成功，是因为当时的手验用 `UPDATE lf_webhook_delivery SET next_attempt_at=NULL` 做了重放——**NULL 视为立即可投，恰好把被 +8 时钟写歪的调度值清掉了**；bug 一直存在， Genuine 的退避重试在本机会推迟 ~28820s（SQL 实证，与 box 审计的 28761s 同阶）
+- **Bw2fix-8 手验（Compose 默认栈：MySQL UTC + JVM +8）**：新建租户配 endpoint → 桩首个请求 500 → 跳转 302 → 3s 后查库 `status=PENDING, attempts=1, TIMESTAMPDIFF(SECOND, NOW(), next_attempt_at)=18`（∈[0,20]，旧实现同位置实测口径 ≈28820）→ **重定向后 22s SENT（attempts=2）**——退避与重试全程 DB 时钟，无 8h 拉长
+- **Bw2fix-9 手验**：带主密钥配 endpoint → `unset LINKFORGE_WEBHOOK_SECRET_KEY` 重启（WARN 文案＝「master key unavailable」，N2 口径）→ 点击 302 → 投递行 **PENDING / attempts=0**，relay 跳过 9 轮（`relay.skipped`=9.0）→ 恢复主密钥重启 → 该行 **SENT / attempts=1**，无需重放。附带取证：无主密钥时 PUT 新 endpoint 返回 503（secret 落库必须加密，属 B 波 2 既定降级，S1-b 针对的是已配置 endpoint 的投递意图）
+- 期间踩坑一次：重启验证时 8080 上残留了无密钥的旧进程，PUT 打到旧进程得 503——杀干净后即 200；不影响结论
+- 三回归：`scripts/smoke.sh` **SMOKE OK**；`scripts/outbox-drill.sh` **OUTBOX DRILL OK**；`scripts/mq-drill.sh` **DRILL OK**（本机注册限流窗口按惯例先清本机 Redis 计数键）
+- **分支 CI 三红一绿（修复轮自己的教训）**：①run [40114155914](https://github.com/NorthAdb/LinkForge/actions/runs/40114155914) 红（@e5bb964）＝四件事：pom execution id 起名 default-it 没顶掉隐式 default 执行 → **整套 IT 跑了两遍**、时钟 IT 混进 UTC fork；queryForMap 的 DATETIME 返回 LocalDateTime、强转 Timestamp 抛 ClassCastException；脏值 `javascript:alert(1)` 其实过得了渲染校验（isRenderableUrl 只拦控制字符/解析失败，CRLF 注入串才是已知不可渲染形态）；duplicate 计数断言没按 tag 取（find 命中同名的另一个计数器）。修＝execution id 改 `default` + asLocalDateTime 兼容两种返回类型 + 脏值改 CRLF 串 + taggedCounter（08e3797）。②run [40114667946](https://github.com/NorthAdb/LinkForge/actions/runs/40114667946) 红＝转义笔误把 
+ 写成真实换行，字符串字面量断裂（42d7ef9 修）。③run [40114741958](https://github.com/NorthAdb/LinkForge/actions/runs/40114741958) 红＝asLocalDateTime 助手的 python 替换静默未命中、调用点已改导致缺方法（2248085 修）。终态 run [40114874266](https://github.com/NorthAdb/LinkForge/actions/runs/40114874266) 绿。教训：python 批量改代码必须 assert 替换发生；`&&` 链守提交（本轮起恢复，禁止 `;\)。
+- **修复后例数**：surefire **63**（59+4）＋ failsafe 默认 execution **90**（86+3 S1 例 +1 N1 例）＋ `webhook-tz-it` fork **2**（M1/S2 回归）＝ **合计 155 例全绿**；连接预算不变（时钟 IT 复用 WebhookDeliveryIT 属性集，fork 内容器不并存）≈ 226 < 500
 
 ---
 

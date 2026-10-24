@@ -80,6 +80,12 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
                 writeJson(response, 401, "{\"code\":401,\"message\":\"invalid api key\",\"data\":null}");
                 return;
             }
+            if (key.getRevokedAt() != null) {
+                // still a uniform 401 outside; the tag just separates the reasons (Bw2-N3)
+                meterRegistry.counter("linkforge.apikey.auth", "result", "revoked").increment();
+                writeJson(response, 401, "{\"code\":401,\"message\":\"invalid api key\",\"data\":null}");
+                return;
+            }
             if (!withinQuota(key, response)) {
                 return;
             }
