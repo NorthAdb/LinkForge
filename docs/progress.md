@@ -832,6 +832,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 
 - 提交序：A10-N1（3689cf5）→ B7（a692128）→ B8（ff76d50）→ IT（2f00d70）→ docs。每单元本地编译/单测绿后提交。单测总数实测 46（41 → +5）。
 - 本地单测红两次：A10-N1 测试缺 `CompletableFuture` import（已 amend 到绿提交）、IT 缺 `assertTrue` import（补后绿）。
+- **分支 CI 一红一绿**：首跑 40097755976 在 `LinkLifecycleIT.invalidLegacyTargetReturns410WithoutCountingClick` 红（期望 410 得 302）——B8 后 L1 仍持旧合法 URL，而该测试绕过服务直改 DB 行为脏 URL 且只清了 Redis，L1 命中把脏行遮蔽成 302。这是 B8 引入的真实语义缺口：修法＝**行级 URL 校验门**（`resolveTarget` 中行的 `original_url` 不可渲染一律 410，与缓存无关，`134301a`），README「多级缓存」登记为 B8 护栏。重跑 40098112881 绿。
 - 单测例数 41 → 46：SingleFlightTest +2（快照 forget 两态）、ShortLinkServiceTtlTest +3（抖动）。IT 66 → 73：BloomDisabledAtStartupIT +1（absent 命中跳 DB）、BloomRedirectIT +6。
 
 ### 下一步（不混入本波）

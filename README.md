@@ -233,6 +233,7 @@ MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.c
 - **B7 空值缓存**：只缓存「**DB 行读取结果为 null**」这一种负答（从未存在、逻辑删除、Bloom 误判后回源 null），key 独立为 `linkforge:absent:{code}`（哨兵 `"1"`，不污染正缓存）。**禁用（404）/过期（410）/URL 不可渲染（410）绝不写入**——这些码的行还在，启用/改期后必须立即生效。Bloom 负答路径不读不写 absent（Bloom 先拦）；`doCreate` 成功后 DEL absent（新码可能刚被扫成 absent）；TTL 默认 60s + 抖动 30s；`LINKFORGE_ABSENT_TTL_SECONDS<=0` 整体关闭。指标 `linkforge.cache.absent.hit` / `.put`；探查/写入异常一律 fail-open 当 miss
 - **TTL 抖动（防同批过期雪崩）**：正缓存与空值缓存 TTL 统一为 **`base + uniform[0, jitter]`（只向上抖）**：正缓存 `3600 + 300`（`LINKFORGE_CACHE_TTL_JITTER_SECONDS`），空值 `60 + 30`；jitter=0 时退化为裸 base。过期时间被打散，同一批创建的码不再同时失效
 - **B8 Caffeine L1**：进程内缓存**URL 字符串**（与 Redis L2 同形状，不缓存行），`maximum-size` 默认 10000、TTL 默认 **10s**（远小于 Redis TTL）。命中省一次 Redis 往返；**命中不跳过 singleflight/DB 行读**，禁用/过期语义零变化。写路径同触碰：`cacheUrl` 写穿 L1+L2（带抖动 TTL），`evictCache`/延迟双删同时失效 L1。指标 `linkforge.l1.hit` / `.miss`；`LINKFORGE_L1_ENABLED=false` 回到 A10 行为
+- **行级 URL 校验门（B8 引入的护栏）**：每次跳转都会读行，行的 `original_url` 不可渲染时**一律 410，与缓存命中与否无关**——带 B8 后「脏行 + 旧缓存未清」会被旧缓存遮蔽成 302，此门保证脏行永远不被旧缓存掩盖（`LinkLifecycleIT` legacy-dirty 契约钉住）
 - **多实例诚实口径**：L1 进程内、实例间**不同步**（无 pub/sub 广播）——实例 A 改了 URL，实例 B 在 L1 TTL（≤10s）内可能仍跳旧 URL，与 Redis 双删窗口叠加时取更长者；空值缓存在 Redis、多实例共享。Bloom 的多实例限制见「防穿透」
 
 **存量库迁移（Flyway，深化 A6）**：schema 已版本化在 `src/main/resources/db/migration`（`V1__baseline_schema.sql`），由应用启动时自动迁移（`spring.flyway.baseline-on-migrate=true`）：
