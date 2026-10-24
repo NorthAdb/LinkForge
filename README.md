@@ -212,7 +212,57 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 - `/actuator/metrics/**` 暴露业务计数器（`linkforge.links.created`、`linkforge.redirects`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`），需 Bearer Token
 - **公网部署前须收紧**（当前面向本地 Demo 全开放）：`management.endpoint.health.show-details` 改 `when_authorized`、设 `springdoc.api-docs.enabled=false` 关闭 Swagger、下线 `static/index.html` 控制台或加访问控制
 
-**Linux 复现提示**：Linux 无 `host.docker.internal`。测试/运行容器改用 `--network host`，并把 `SPRING_DATASOURCE_URL` / `SPRING_DATA_REDIS_HOST` / `SPRING_RABBITMQ_HOST` 指向 `127.0.0.1`（Compose 端口已映射到宿主机）；或指向 docker0 网桥 IP（通常 `172.17.0.1`）。审计环境（Debian 13 + Docker 26）已按此路径完整复现 41/41 绿。
+## 架构
+
+```mermaid
+flowchart LR
+    C[Client / 控制台]
+    subgraph APP[Spring Boot 3 · JWT]
+        API[管理 API /api/links /api/auth]
+        R[跳转 /r/code]
+        ST[stats API / clicks / CSV]
+    end
+    RD[(Redis\n缓存 linkforge:code\n限流计数 幂等键)]
+    MY[(MySQL\nlf_tenant/lf_user\nlf_short_link\nlf_click_log)]
+    MQ{{RabbitMQ\nclick.exchange}}
+    CONS[Consumer\neventId 幂等]
+    AGG[(lf_click_daily\n按天聚合)]
+    REC[Reconciler\n30s 对账追平]
+
+    C --> API --> MY
+    API --> RD
+    C --> R
+    R -->|1 限流 INCR| RD
+    R -->|2 读缓存| RD
+    R -->|3 校验行状态| MY
+    R -->|4 同步明细| MY
+    R -->|5 异步发布| MQ
+    MQ --> CONS --> AGG
+    MY -->|扫描未消费明细| REC --> AGG
+    C --> ST --> MY
+    ST -->|UV| MY
+```
+
+**跳转时序（GET /r/{code}）**：① 限流器按 IP 固定窗口 INCR（Redis，超限 429）→ ② 读缓存 `linkforge:code:{code}`（命中则省 URL 字段）→ ③ 无论命中与否都读 `lf_short_link` 行做禁用/过期判定（404/410，防脏缓存）→ ④ 目标 URL 严格校验后写入 `lf_click_log`（D7 同步明细）→ ⑤ 发布 `ClickEvent`（eventId=log-{id}）到 RabbitMQ → 返回 302。消费端以 eventId 唯一索引幂等累加 `lf_click_daily`；发布失败由 Reconciler 定时从明细补投（断 MQ 演练见 `scripts/mq-drill.sh`）。更新/禁用走写穿 + 1s 延迟双删防旧值回填。
+
+**本地 Demo 五步**：
+
+1. `cp .env.example .env && docker compose up -d`，等 `docker compose ps` 三容器 healthy（MySQL 首次初始化约 5 分钟）
+2. 构建：`mvn -B -DskipTests package`（无本地 Maven 用 README 上方的 Docker 命令）
+3. 启动：`set -a && . ./.env && set +a && java -jar target/linkforge-0.0.1-SNAPSHOT.jar`
+4. 浏览器打开 `http://localhost:8080/` 极简控制台：登录（demo/admin，口令在 .env）→ 建链 → 看统计
+5. 验证：`bash scripts/smoke.sh`（SMOKE OK）、`bash scripts/mq-drill.sh`（断 MQ 追平）、`curl -s localhost:8080/actuator/health`
+
+**Linux 复现**：Linux 无 `host.docker.internal`。测试/运行容器用 `--network host` 并把 `SPRING_DATASOURCE_URL`/`SPRING_DATA_REDIS_HOST`/`SPRING_RABBITMQ_HOST` 指向 `127.0.0.1`（Compose 已映射端口），或指向 docker0 网桥 `172.17.0.1`。CI（ubuntu-latest）即按此环境跑 `mvn -B verify`（Testcontainers 原生 Docker，无需 Compose）。示例：
+
+```bash
+docker run --rm --network host -v "$PWD":/app -v m2:/root/.m2 -w /app \
+  -e SPRING_DATASOURCE_PASSWORD=... -e SPRING_DATA_REDIS_HOST=127.0.0.1 \
+  -e SPRING_RABBITMQ_HOST=127.0.0.1 -e SPRING_RABBITMQ_PASSWORD=... -e JWT_SECRET=... \
+  maven:3.9-eclipse-temurin-17 mvn -B verify
+```
+
+**压测数字**：见 `docs/bench.md`（wrk 实测：health 基线 888 QPS；跳转写路径分解：关同步明细后 13→276 QPS、P50 678→31ms；缓存命中率 100%）。
 
 ## 许可证
 
