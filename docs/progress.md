@@ -921,6 +921,9 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 - 提交序：Bw1-N1/N2（aac251a）→ B4（f97ddf4）→ B5（b9393eb）→ docs。每单元编译/单测绿后提交。
 - 单测迭代红三次均为测试自身问题：Cipher 测试主密钥常量 33/30 字节非 32（AES-256 拒收，改精确 32）；Guard 测试桩把所有 host 解析成同一 IP（按 host 前缀区分公网/私网答案）；一次草稿转义笔误（改用 Pattern.quote）。
 - `.env`（本机，gitignore）补 `LINKFORGE_WEBHOOK_SECRET_KEY`；`.env.example` 同步说明；`application-test.yml` 配固定 32 字节测试主密钥；yml 中 `spring.task.scheduling` 放基础文档（首个 spring 键内，避免同文档重复键）。
+- **实机手验抓到并修掉一个真缺口（`8e770a2`）**：`/actuator/metrics` 带 Key 得 401 而非 403——`shouldNotFilter` 原本把整个 actuator 都跳过，Key 请求没进过滤器而是匿名 401。修后 actuator（health 除外）也过 Key 过滤器，Key 得到干净 403（metrics/keys 实测 403，health 200）。分支首跑 CI 预期红在 ApiKeyIT 该用例，修复后重跑绿（见 CI 链）。
+- 实机手验（A9 起惯例，证据）：B4＝建 Key（prefix `lfk_iNfLfHm3`，list 无明文）→ Key 建链 302 → metrics/keys 403 → `quotaPerMinute=5` 第 5 请求 429 + `Retry-After: 60`；B5＝PUT endpoint（secret 明文一次、库列 `v1:OGKt…` 密文、GET 掩码）→ 跳转 → 本机桩收投递：**独立重算 HMAC 签名一致**、event id `evt_log-3955`、payload 无原始 IP、device=bot/refererHost=direct；首投 IOException（手验桩自身路径问题）→ 重试 SENT(attempts=2, 200)——重试路径真机实证；SSRF 关闭态 3 个私网/元数据/ftp 目标全 400。
+- 实机回归：`smoke.sh` **SMOKE OK**；`outbox-drill.sh` **OUTBOX DRILL OK**；`mq-drill.sh` **DRILL OK**（首跑 429 系本机注册限流窗口被手验打满，清本机 Redis 计数键后重跑绿，非产品缺陷）。
 
 ### 下一步（不混入本波）
 
