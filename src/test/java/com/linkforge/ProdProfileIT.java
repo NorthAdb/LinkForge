@@ -27,8 +27,9 @@ class ProdProfileIT extends AbstractIntegrationTest {
         assertEquals(200, health.getStatusCode().value(), health.getBody());
         assertFalse(health.getBody().contains("components"), "prod must hide component details");
 
-        assertEquals(403, get("/v3/api-docs", null).getStatusCode().value(), "prod must deny api-docs");
-        assertEquals(403, get("/swagger-ui/index.html", null).getStatusCode().value(), "prod must deny swagger ui");
+        // unauthenticated + denyAll -> our 401 entry point fires before the 403 denial
+        assertEquals(401, get("/v3/api-docs", null).getStatusCode().value(), "prod must deny api-docs");
+        assertEquals(401, get("/swagger-ui/index.html", null).getStatusCode().value(), "prod must deny swagger ui");
         assertEquals(404, get("/", null).getStatusCode().value(), "prod must not serve the static console");
 
         assertTrue(get("/api/health", null).getStatusCode().is2xxSuccessful());
