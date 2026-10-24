@@ -13,6 +13,7 @@ import com.linkforge.link.dto.ShortLinkDetail;
 import com.linkforge.link.dto.UpdateShortLinkRequest;
 import com.linkforge.link.entity.ShortLink;
 import com.linkforge.link.mapper.ShortLinkMapper;
+import com.linkforge.link.support.CodeBloomFilter;
 import com.linkforge.link.support.CsvFormat;
 import com.linkforge.link.support.LinkValidations;
 import com.linkforge.link.support.ShortCodes;
@@ -51,6 +52,7 @@ public class ShortLinkService {
     private final ClickRecordService clickRecordService;
     private final RedisRateLimiter rateLimiter;
     private final MeterRegistry meterRegistry;
+    private final CodeBloomFilter codeBloom;
 
     private final ScheduledExecutorService evictor = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "cache-evictor");
@@ -162,6 +164,7 @@ public class ShortLinkService {
         }
 
         cacheUrl(link.getCode(), url);
+        codeBloom.put(link.getCode());
         meterRegistry.counter("linkforge.links.created").increment();
         if (idemKey != null) {
             stringRedisTemplate.opsForValue().set(idemKey, link.getCode(),
@@ -294,8 +297,9 @@ public class ShortLinkService {
     }
 
     /**
-     * Shared resolution for GET and HEAD: redirect rate-limit bucket, cache read,
-     * row state/expiry check and cache warm-up, one DB read for both callers.
+     * Shared resolution for GET and HEAD: redirect rate-limit bucket, Bloom gate
+     * (never-created codes 404 pre-DB), cache read, row state/expiry check and
+     * cache warm-up, one DB read for both callers.
      */
     private ResolvedRedirect resolveTarget(String code, HttpServletRequest request) {
         LinkForgeProperties.RateLimit rl = properties.getRateLimit();
@@ -303,6 +307,14 @@ public class ShortLinkService {
         if (!rateLimiter.tryAcquire(rlKey, rl.getRedirectMax(), rl.getRedirectWindowSeconds())) {
             meterRegistry.counter("linkforge.ratelimit.rejected", "entry", "redirect").increment();
             throw new BizException(429, "too many requests, retry later");
+        }
+
+        // A9: a negative Bloom answer is authoritative (code never created) — 404
+        // without touching MySQL. False positives and disabled/broken states fall
+        // through to the cache+DB path below, which stays the correctness arbiter.
+        if (!codeBloom.mightContain(code)) {
+            meterRegistry.counter("linkforge.bloom.rejected").increment();
+            throw new BizException(404, "short link not found");
         }
 
         String cacheKey = CACHE_KEY_PREFIX + code;

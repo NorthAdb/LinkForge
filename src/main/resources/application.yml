@@ -80,6 +80,12 @@ linkforge:
     # Redis key: linkforge:code:{code} -> originalUrl
     cache-ttl-seconds: 3600
     code-length: 7
+  bloom:
+    # A9: process-local Guava Bloom over short codes; a negative answer 404s the
+    # redirect before MySQL. False positives (fpp) just fall through to cache+DB.
+    enabled: ${LINKFORGE_BLOOM_ENABLED:true}
+    expected-insertions: ${LINKFORGE_BLOOM_EXPECTED_INSERTIONS:100000}
+    fpp: ${LINKFORGE_BLOOM_FPP:0.0001}
   mq:
     # A7: hot path writes lf_outbox (PENDING) in the click transaction; the relay
     # drains it to RabbitMQ. sync-click keeps the lf_click_log double write.
