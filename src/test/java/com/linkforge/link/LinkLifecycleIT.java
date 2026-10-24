@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
         "linkforge.rate-limit.register-max=1000"
 })
 @ActiveProfiles("test")
-class LinkLifecycleTest extends AbstractIntegrationTest {
+class LinkLifecycleIT extends AbstractIntegrationTest {
 
     private static final String KEY_PREFIX = "linkforge:code:";
 

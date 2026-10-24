@@ -13,6 +13,9 @@ import com.linkforge.link.dto.ShortLinkDetail;
 import com.linkforge.link.dto.UpdateShortLinkRequest;
 import com.linkforge.link.entity.ShortLink;
 import com.linkforge.link.mapper.ShortLinkMapper;
+import com.linkforge.link.support.CsvFormat;
+import com.linkforge.link.support.LinkValidations;
+import com.linkforge.link.support.ShortCodes;
 import com.linkforge.security.AuthUser;
 import com.linkforge.security.UserContext;
 import com.linkforge.stats.service.ClickRecordService;
@@ -25,16 +28,13 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
-import java.net.URI;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.regex.Pattern;
 
 @Slf4j
 @Service
@@ -42,16 +42,8 @@ import java.util.regex.Pattern;
 public class ShortLinkService {
 
     private static final String CACHE_KEY_PREFIX = "linkforge:code:";
-    private static final char[] CODE_ALPHABET =
-            "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".toCharArray();
-    private static final SecureRandom RANDOM = new SecureRandom();
     private static final int CODE_ATTEMPTS = 16;
     private static final long STALE_WRITEBACK_CLEAR_MS = 1000;
-    private static final Pattern CUSTOM_CODE_PATTERN = Pattern.compile("^[A-Za-z0-9_-]{4,16}$");
-    /** All >=4 chars: shorter reserved words never pass the length rule anyway. */
-    private static final Set<String> RESERVED_CODES = Set.of(
-            "actuator", "health", "auth", "login", "register", "links",
-            "export", "stats", "swagger", "docs", "static", "index");
 
     private final ShortLinkMapper shortLinkMapper;
     private final StringRedisTemplate stringRedisTemplate;
@@ -124,13 +116,13 @@ public class ShortLinkService {
 
     private CreateShortLinkResponse doCreate(CreateShortLinkRequest request, AuthUser user, String idemKey) {
         String url = request.getOriginalUrl().trim();
-        requireHttpUrl(url);
+        LinkValidations.requireHttpUrl(url);
         if (request.getExpireAt() != null && !request.getExpireAt().isAfter(LocalDateTime.now())) {
             throw new BizException("expireAt must be in the future");
         }
         String customCode = request.getCustomCode() == null ? null : request.getCustomCode().trim();
         if (customCode != null && !customCode.isEmpty()) {
-            requireValidCustomCode(customCode);
+            LinkValidations.requireValidCustomCode(customCode);
         }
 
         ShortLink link = new ShortLink();
@@ -156,7 +148,7 @@ public class ShortLinkService {
             }
         } else {
             for (int attempt = 0; attempt < CODE_ATTEMPTS && !inserted; attempt++) {
-                link.setCode(randomCode(properties.getShortLink().getCodeLength()));
+                link.setCode(ShortCodes.randomCode(properties.getShortLink().getCodeLength()));
                 try {
                     shortLinkMapper.insert(link);
                     inserted = true;
@@ -176,15 +168,6 @@ public class ShortLinkService {
                     Duration.ofSeconds(properties.getRateLimit().getIdempotencyTtlSeconds()));
         }
         return new CreateShortLinkResponse(link.getId(), link.getCode(), url, "/r/" + link.getCode());
-    }
-
-    private static void requireValidCustomCode(String code) {
-        if (!CUSTOM_CODE_PATTERN.matcher(code).matches()) {
-            throw new BizException("customCode must be 4-16 chars of letters, digits, underscore or hyphen");
-        }
-        if (RESERVED_CODES.contains(code.toLowerCase())) {
-            throw new BizException("customCode is reserved");
-        }
     }
 
     public PageResponse<ShortLinkDetail> list(int page, int size) {
@@ -222,22 +205,12 @@ public class ShortLinkService {
 
     private static String csvRow(ShortLinkDetail l) {
         return String.join(",",
-                csv(l.getCode()),
-                csv(l.getOriginalUrl()),
-                csv(l.getTitle()),
-                csv(l.getStatus() == null ? "" : String.valueOf(l.getStatus())),
-                csv(l.getExpireAt() == null ? "" : l.getExpireAt().toString()),
-                csv(l.getCreatedAt() == null ? "" : l.getCreatedAt().toString())) + "\n";
-    }
-
-    private static String csv(String value) {
-        if (value == null || value.isEmpty()) {
-            return "";
-        }
-        if (value.contains(",") || value.contains("\"") || value.contains("\n") || value.contains("\r")) {
-            return '"' + value.replace("\"", "\"\"") + '"';
-        }
-        return value;
+                CsvFormat.escape(l.getCode()),
+                CsvFormat.escape(l.getOriginalUrl()),
+                CsvFormat.escape(l.getTitle()),
+                CsvFormat.escape(l.getStatus() == null ? "" : String.valueOf(l.getStatus())),
+                CsvFormat.escape(l.getExpireAt() == null ? "" : l.getExpireAt().toString()),
+                CsvFormat.escape(l.getCreatedAt() == null ? "" : l.getCreatedAt().toString())) + "\n";
     }
 
     public ShortLinkDetail detail(String code) {
@@ -256,7 +229,7 @@ public class ShortLinkService {
         String effectiveUrl = link.getOriginalUrl();
         if (hasUrl) {
             String url = request.getOriginalUrl().trim();
-            requireHttpUrl(url);
+            LinkValidations.requireHttpUrl(url);
             effectiveUrl = url;
             link.setOriginalUrl(url);
         }
@@ -324,7 +297,7 @@ public class ShortLinkService {
         }
 
         String originalUrl = cached != null && !cached.isBlank() ? cached : link.getOriginalUrl();
-        if (!isRenderableUrl(originalUrl)) {
+        if (!LinkValidations.isRenderableUrl(originalUrl)) {
             throw new BizException(410, "short link target is invalid");
         }
         if (cached == null || cached.isBlank()) {
@@ -352,42 +325,6 @@ public class ShortLinkService {
         return user;
     }
 
-    private static void requireHttpUrl(String url) {
-        if (!(url.startsWith("http://") || url.startsWith("https://"))) {
-            throw new BizException("originalUrl must start with http:// or https://");
-        }
-        for (int i = 0; i < url.length(); i++) {
-            char c = url.charAt(i);
-            if (c < 0x20 || c == 0x7f) {
-                throw new BizException("originalUrl must not contain control characters");
-            }
-        }
-        try {
-            URI.create(url);
-        } catch (IllegalArgumentException ex) {
-            throw new BizException("originalUrl is not a valid URI");
-        }
-    }
-
-    /** Guards against legacy rows with malformed targets: never 500, never count the click. */
-    private static boolean isRenderableUrl(String url) {
-        if (url == null || url.isBlank()) {
-            return false;
-        }
-        for (int i = 0; i < url.length(); i++) {
-            char c = url.charAt(i);
-            if (c < 0x20 || c == 0x7f) {
-                return false;
-            }
-        }
-        try {
-            URI.create(url);
-            return true;
-        } catch (IllegalArgumentException ex) {
-            return false;
-        }
-    }
-
     private void cacheUrl(String code, String url) {
         long ttl = properties.getShortLink().getCacheTtlSeconds();
         stringRedisTemplate.opsForValue().set(CACHE_KEY_PREFIX + code, url, ttl, TimeUnit.SECONDS);
@@ -405,14 +342,6 @@ public class ShortLinkService {
                 log.warn("delayed cache clear failed for {}: {}", code, ex.getMessage());
             }
         }, STALE_WRITEBACK_CLEAR_MS, TimeUnit.MILLISECONDS);
-    }
-
-    private static String randomCode(int length) {
-        char[] buf = new char[length];
-        for (int i = 0; i < length; i++) {
-            buf[i] = CODE_ALPHABET[RANDOM.nextInt(CODE_ALPHABET.length)];
-        }
-        return new String(buf);
     }
 
     private static void sleepQuietly(long millis) {

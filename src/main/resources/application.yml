@@ -95,3 +95,25 @@ logging:
   level:
     com.linkforge: INFO
     com.baomidou.mybatisplus: WARN
+
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+  web:
+    resources:
+      # no static console in prod
+      add-mappings: false
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+linkforge:
+  docs-enabled: false
+management:
+  endpoint:
+    health:
+      show-details: when_authorized
+      show-components: when_authorized

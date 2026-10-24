@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "linkforge.rate-limit.register-max=1000"
 })
 @ActiveProfiles("test")
-class RegisterFlowTest extends AbstractIntegrationTest {
+class RegisterFlowIT extends AbstractIntegrationTest {
 
     @Autowired
     private TenantMapper tenantMapper;

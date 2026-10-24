@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "linkforge.rate-limit.register-max=1000"
 })
 @ActiveProfiles("test")
-class TenantIsolationTest extends AbstractIntegrationTest {
+class TenantIsolationIT extends AbstractIntegrationTest {
 
     @Test
     void crossUserAccessIsRejectedEverywhere() throws Exception {

@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
         "linkforge.rate-limit.trust-xff=true"
 })
 @ActiveProfiles("test")
-class XffTrustTest extends AbstractIntegrationTest {
+class XffTrustIT extends AbstractIntegrationTest {
 
     @Test
     void distinctForwardedIpsGetIndependentWindows() throws Exception {

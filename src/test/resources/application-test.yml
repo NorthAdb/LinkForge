@@ -1,25 +1,8 @@
-# Integration-test profile: runs against the real compose stack (MySQL/Redis/RabbitMQ).
-# Defaults point at host.docker.internal so the canonical in-container test path works:
-#   MSYS_NO_PATHCONV=1 docker run --rm -v "D:/LinkForge:/app" -v linkforge_m2:/root/.m2 -w /app \
-#     -e SPRING_DATASOURCE_PASSWORD=... -e SPRING_RABBITMQ_PASSWORD=... -e JWT_SECRET=... \
-#     maven:3.9-eclipse-temurin-17 mvn -B test
-# Override hosts via the standard SPRING_* env vars when running on the host itself.
+# Integration-test profile. Connection settings (MySQL/Redis/RabbitMQ) are injected
+# per-JVM by AbstractIntegrationTest from Testcontainers singletons; nothing here or
+# below points at a host Compose stack. Values below are non-connection defaults.
 spring:
-  datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://host.docker.internal:3306/linkforge?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false}
-    username: ${SPRING_DATASOURCE_USERNAME:linkforge}
-    password: ${SPRING_DATASOURCE_PASSWORD:linkforge_pass}
-    driver-class-name: com.mysql.cj.jdbc.Driver
-  data:
-    redis:
-      host: ${SPRING_DATA_REDIS_HOST:host.docker.internal}
-      port: ${SPRING_DATA_REDIS_PORT:6379}
-      password: ${SPRING_DATA_REDIS_PASSWORD:}
   rabbitmq:
-    host: ${SPRING_RABBITMQ_HOST:host.docker.internal}
-    port: ${SPRING_RABBITMQ_PORT:5672}
-    username: ${SPRING_RABBITMQ_USERNAME:linkforge}
-    password: ${SPRING_RABBITMQ_PASSWORD:linkforge_pass}
     listener:
       simple:
         auto-startup: false

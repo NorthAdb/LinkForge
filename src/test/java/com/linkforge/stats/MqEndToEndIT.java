@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "spring.rabbitmq.listener.simple.auto-startup=true"
 })
 @ActiveProfiles("test")
-class MqEndToEndTest extends AbstractIntegrationTest {
+class MqEndToEndIT extends AbstractIntegrationTest {
 
     @Test
     void redirectsAggregateThroughRealRabbit() throws Exception {

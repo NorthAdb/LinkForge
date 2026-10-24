@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "linkforge.rate-limit.redirect-max=1000"
 })
 @ActiveProfiles("test")
-class HealthEndpointTest extends AbstractIntegrationTest {
+class HealthEndpointIT extends AbstractIntegrationTest {
 
     @Test
     void actuatorHealthExposesDbRedisRabbitComponents() throws Exception {
