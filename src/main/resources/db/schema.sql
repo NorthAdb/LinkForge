@@ -1,3 +1,7 @@
+-- REFERENCE ONLY — the live schema is versioned in src/main/resources/db/migration
+-- (V1__baseline_schema.sql) and applied by Flyway at app startup or via
+-- scripts/migrate.sh. This file survives only as the legacy-volume shape for
+-- FlywayBaselineIT; do not add new DDL here.
 -- LinkForge MVP schema (MySQL 8)
 CREATE DATABASE IF NOT EXISTS linkforge DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE linkforge;
