@@ -293,8 +293,8 @@ docker compose start rabbitmq && sleep 10 && curl -s http://localhost:8080/actua
 
 ### 审计材料（P4 后更新）
 
-- 仓库：https://github.com/NorthAdb/LinkForge（分支 main，**P4 终态合并：880f0a6**）
-- **CI**：main 最新 run **success** — https://github.com/NorthAdb/LinkForge/actions/runs/40056206371（ubuntu-latest，63 个测试全绿：16 单测 + 47 集成）
+- 仓库：https://github.com/NorthAdb/LinkForge（分支 main，**P5 终态合并：4ce9a0b**）
+- **CI**：main 最新 run **success** — https://github.com/NorthAdb/LinkForge/actions/runs/40058854727（63 测试全绿）
 - 审计分层：103a199（P0–P3）→ 447dfdb（自审）→ c1ecd46（R2–R4）→ 7e8b9fe（hotfix）→ **880f0a6（P4）**
 - 复跑清单（P4 版）：
   1. 本机任何有 Docker 的 Linux：`mvn -B verify`（Testcontainers 全量，参照 README「Linux 复现」或直接看 CI）
@@ -345,6 +345,8 @@ README 新增「核心路径 vs 可选特性」表：核心 = 注册/登录、�
 ### (e) 明确不做复查
 
 grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无相关 artifact，源码无相关 import）；无独立 SPA（唯一前端为单文件静态控制台）；无云部署硬依赖（D5=仅本地 Compose，prod profile 仅收紧暴露面）。
+
+**P5 完成，完整项目交付，待实习JAVA_AI 终审。**（P0–P5 全部阶段闭环；审计分层：103a199 → 447dfdb → c1ecd46 → 7e8b9fe → 880f0a6 → 4ce9a0b）
 
 自审中评估后**不改**的两点（记录供审计人参断）：
 - 跳转路径每次仍读 DB 行做禁用/过期判定（缓存只省 URL 字段）：这是**主动选择**——只信缓存会让禁用/过期在 TTL 内放行 302，正确性优先于该读优化；P4 压测时再量化。（审计 L8 同判，留 P4 bench 量化。）
