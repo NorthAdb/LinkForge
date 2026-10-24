@@ -13,7 +13,7 @@
 
     <groupId>com.linkforge</groupId>
     <artifactId>linkforge</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>1.0.0</version>
     <name>linkforge</name>
     <description>LinkForge — multi-tenant short link + click analytics (MVP)</description>
 

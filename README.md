@@ -1,11 +1,11 @@
 # LinkForge
 
-多租户短链 + 访问分析后端（MVP 脚手架）。
+多租户短链 + 访问分析后端服务（v1.0.0，P0–P5 全阶段交付并通过两轮外部审计）。
 
-面向 2027 春招实习简历项目：用真实路径练 **MySQL / Redis / RabbitMQ / JWT**，业务壳是短链创建与 302 跳转。  
+面向 2027 春招实习简历项目：用真实路径练 **MySQL / Redis / RabbitMQ / JWT**，业务壳是短链创建与 302 跳转。
 本仓库为**自研骨架**，不是对任何开源短链项目的换皮。
 
-## 技术栈（MVP）
+## 技术栈
 
 | 层级 | 选型 |
 |------|------|
@@ -18,7 +18,7 @@
 | 鉴权 | JWT（Bearer）；可后续换 Sa-Token |
 | 构建 | Maven |
 
-**MVP 明确不做**：AI / PostgreSQL / Supabase、Spring Cloud、Seata、完整压测、前端 SPA。
+**边界与不做**：AI / PostgreSQL / Supabase / 向量库（整体延期，后续另立方案）；Spring Cloud / Seata / 多机房；独立前端 SPA（静态控制台已够用）；云公网部署（D5=本地 Compose，prod profile 已备好收紧开关）。
 
 ## 鉴权策略
 
@@ -86,7 +86,7 @@ source .env
 set +a
 mvn spring-boot:run
 # 或
-java -jar target/linkforge-0.0.1-SNAPSHOT.jar
+java -jar target/linkforge-1.0.0.jar
 ```
 
 默认端口 `8080`，profile `dev`。未设置下列必填变量时，Spring 占位符无法解析，进程起不来：
@@ -196,7 +196,7 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 |------|------|------|
 | **P0–P3** | Compose 三件套、登录/注册（限流）、短链 CRUD/禁用/过期、缓存跳转（写穿+双删）、MQ 异步聚合（幂等/对账/断链追平）、创建幂等、并发不撞码、限流、Actuator 组件健康 | ✅ 已交付并审计通过 |
 | **P4** | Testcontainers 测试隔离（63 测试）、GitHub Actions CI、bench.md 实测压测、架构 README、resume.md、prod profile | ✅ 已交付并审计通过 |
-| **P5** | 盘点补洞（migrate.sh、路由核对、文档收口） | ✅ 完成，完整项目交付 |
+| **P5** | 盘点补洞（migrate.sh、路由核对、文档收口） | ✅ 完成，**v1.0.0 完整交付**（git tag `v1.0.0`） |
 
 ## 核心路径 vs 可选特性
 
@@ -257,7 +257,7 @@ flowchart LR
 
 1. `cp .env.example .env && docker compose up -d`，等 `docker compose ps` 三容器 healthy（MySQL 首次初始化约 5 分钟；存量卷可 `bash scripts/migrate.sh` 幂等补表）
 2. 构建：`mvn -B -DskipTests package`（无本地 Maven 用 README 上方的 Docker 命令）
-3. 启动：`set -a && . ./.env && set +a && java -jar target/linkforge-0.0.1-SNAPSHOT.jar`
+3. 启动：`set -a && . ./.env && set +a && java -jar target/linkforge-1.0.0.jar`
 4. 核心链路：登录（`POST /api/auth/login`，demo/admin）→ 建链（`POST /api/links` 带 Bearer）→ 浏览器/curl 访问 `/r/{code}` 得 302（示例见上方冒烟段）
 5. 验证：`bash scripts/smoke.sh`（SMOKE OK）、`bash scripts/mq-drill.sh`（断 MQ 追平）、`curl -s localhost:8080/actuator/health`
 
