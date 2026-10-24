@@ -106,6 +106,14 @@ class WebhookRetryClockIT extends AbstractIntegrationTest {
         return rows.isEmpty() ? null : rows.get(0);
     }
 
+    /** Connector/J may hand DATETIME back as LocalDateTime or Timestamp depending on version. */
+    private static java.time.LocalDateTime asLocalDateTime(Object value) {
+        if (value instanceof java.time.LocalDateTime ldt) {
+            return ldt;
+        }
+        return ((java.sql.Timestamp) value).toLocalDateTime();
+    }
+
     private Long tenantIdOf(String token) {
         try {
             String[] parts = token.split(java.util.regex.Pattern.quote("."));
