@@ -38,6 +38,9 @@ class ClickIdempotencyIT extends AbstractIntegrationTest {
     @Autowired
     private ConsumedEventMapper consumedEventMapper;
 
+    @Autowired
+    private com.linkforge.stats.mapper.ClickLogMapper clickLogMapper;
+
     private final List<String> syntheticEventIds = new ArrayList<>();
     private final List<String> syntheticCodes = new ArrayList<>();
 
@@ -50,6 +53,9 @@ class ClickIdempotencyIT extends AbstractIntegrationTest {
         if (!syntheticCodes.isEmpty()) {
             clickDailyMapper.delete(new LambdaQueryWrapper<ClickDaily>()
                     .in(ClickDaily::getCode, syntheticCodes));
+            // consume() backfills lf_click_log for these synthetic UUID events (A7)
+            clickLogMapper.delete(new LambdaQueryWrapper<com.linkforge.stats.entity.ClickLog>()
+                    .in(com.linkforge.stats.entity.ClickLog::getCode, syntheticCodes));
         }
     }
 

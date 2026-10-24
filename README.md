@@ -44,7 +44,7 @@ com.linkforge
 ├── bootstrap   # 演示租户种子数据
 ├── user        # 租户 / 用户 / 登录
 ├── link        # 短链创建、302 跳转、健康检查
-└── stats       # 点击落库 + RabbitMQ 发布/消费/幂等聚合 + 对账追平 + stats API
+└── stats       # 点击同事务落库/Outbox + Relay 投递 + RabbitMQ 消费幂等聚合 + 对账追平 + stats API
 ```
 
 ## 快速开始
@@ -131,10 +131,11 @@ bash scripts/smoke.sh
 
 应用启动后：`http://localhost:8080/` 是**极简控制台**（可选特性；登录/注册、建链（支持自定义码与过期时间）、列表、启停/删除、点击与 UV 统计、CSV 导出入口）；接口文档在 `http://localhost:8080/swagger-ui/index.html`（springdoc 生成，prod 下关闭）。
 
-MQ 宕机演练（基线聚合 → 停 Rabbit 全部 302 → 恢复后追平）：
+MQ 宕机演练（两套，回归皆应绿）：
 
 ```bash
-bash scripts/mq-drill.sh
+bash scripts/mq-drill.sh      # sync 开 + 断 MQ → 恢复追平（P2 旧验收）
+bash scripts/outbox-drill.sh  # sync 关 + 断 MQ → 恢复追平（A7 硬验收；自带 8082 独立实例）
 ```
 
 ## 已实现接口
@@ -170,24 +171,25 @@ bash scripts/mq-drill.sh
 
 跳转路径缓存键：`linkforge:code:{code}`。更新/禁用会主动删除该键，下一次跳转回源后重建。  
 
-## 点击统计管道（D7 双写）
+## 点击统计管道（A7 Transactional Outbox）
 
-跳转产生一次点击后会**双写**：
+跳转产生一次点击后，在**同一 DB 事务**内写入：
 
-1. **同步明细**：插入 `lf_click_log`（开关 `LINKFORGE_SYNC_CLICK_ENABLED`，默认开）。
-2. **异步聚合**：发布 `ClickEvent` 到 RabbitMQ（开关 `LINKFORGE_ASYNC_CLICK_ENABLED`，默认开），真实消费者按 `eventId` 幂等写入 `lf_consumed_event` + 按天累加 `lf_click_daily`。
+1. **同步明细**（可选）：插入 `lf_click_log`（开关 `LINKFORGE_SYNC_CLICK_ENABLED`，默认开）。
+2. **Outbox**：插入 `lf_outbox`（PENDING；开关 `LINKFORGE_ASYNC_CLICK_ENABLED`，默认开）。eventId＝sync 开时 `log-{明细行id}`（确定性），sync 关时为稳定 UUID（持久在 outbox）。
 
-幂等设计：`eventId = "log-{click_log.id}"`（确定性），实时消费与对账重放共用同一键，同一次点击无论被投递多少次只计一次。消费失败的消息进死信队列 `linkforge.click.dlq`（不回队热循环）。
+**热路径不直接触碰 RabbitMQ**。`ClickOutboxRelay`（开关/批量/节奏见 `LINKFORGE_MQ_RELAY_*`，默认开、批量 100、2s 轮询）把 PENDING 行投递到 `linkforge.click.exchange`，成功标 SENT；失败 attempts+1 并按 2^n 秒退避（上限 60s）重试。消费端不变：真实消费者按 `eventId` 幂等写 `lf_consumed_event` + 按天累加 `lf_click_daily`，消费失败进死信队列 `linkforge.click.dlq`（不回队热循环）。
 
-**对账与追平**：`ClickLogReconciler` 定时（`LINKFORGE_MQ_RECONCILE_FIXED_DELAY_MS`，默认 30s）扫描 `lf_click_log` 中尚未出现在 `lf_consumed_event` 的行并重放聚合——MQ 宕机期间发布失败的点击由它自动补齐（`scripts/mq-drill.sh` 演练此场景）。手工对账：
+**关 sync 后的语义（A7 起与旧版不同）**：明细/UV **不再丢失**——消费者为 UUID 事件**回填** `lf_click_log`（行上打 `event_id` 标记），明细/UV 变为最终一致（延迟 ≈ Relay 轮询 + 消费）；聚合照常追平。断 MQ / 断 Relay 期间点击全部停在 outbox（跳转照常 302），恢复后自动补投。旧叙事「关 sync + MQ down 即丢失」已由演练证伪。
+
+**对账与追平**：`ClickLogReconciler`（`LINKFORGE_MQ_RECONCILE_FIXED_DELAY_MS`，默认 30s）降级为 **sync 开启时的安全网**（直连补聚合，`log-{id}` 去重，跳过消费端回填行）；**sync 关闭时不运行**，追平完全由 outbox 承担。手工对账（sync 开时两边应相等）：
 
 ```sql
--- 明细与聚合应一致（sync 开关开着时；库中不应有测试注入的合成事件）
 SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
        (SELECT IFNULL(SUM(clicks),0) FROM lf_click_daily) AS aggregate;
 ```
 
-**何时可关同步**：⚠️ **关同步（`LINKFORGE_SYNC_CLICK_ENABLED=false`）后，MQ 发布失败的点击无法由对账器追平**（无 outbox，新点击 eventId 为随机 UUID 且无明细行）；精确 UV / 点击明细也只覆盖历史数据。关之前必须：连续观察 `detail == aggregate`、确认 MQ 稳定、并接受上述边界；纯异步 + 可追平需要 outbox 改造（未实现）。保持默认双写。MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.click.dlx` / `linkforge.click.dlq`）。
+MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.click.dlx` / `linkforge.click.dlq`）。
 
 **存量库迁移（Flyway，深化 A6）**：schema 已版本化在 `src/main/resources/db/migration`（`V1__baseline_schema.sql`），由应用启动时自动迁移（`spring.flyway.baseline-on-migrate=true`）：
 
@@ -209,7 +211,7 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 
 | 类别 | 能力 | 说明 |
 |------|------|------|
-| **核心**（主路径 Demo 只依赖这些） | 注册/登录（JWT）、创建短链、`/r/{code}` 302 跳转、stats 统计、限流、点击双写 + 幂等消费 + 对账追平、CI / bench | 冒烟（smoke.sh）与断链演练（mq-drill.sh）覆盖的即主路径 |
+| **核心**（主路径 Demo 只依赖这些） | 注册/登录（JWT）、创建短链、`/r/{code}` 302 跳转、stats 统计、限流、同事务 Outbox + Relay 投递 + 幂等消费 + 断链追平、CI / bench | 冒烟（smoke.sh）与断链演练（mq-drill.sh / outbox-drill.sh）覆盖的即主路径 |
 | 可选（演示可用，面试可讲，主路径不强制） | 自定义短码、CSV 导出、Swagger UI、静态控制台、精确 UV / 点击明细 | R2–R4 提前落地，均有集成测试与隔离验证；prod profile 下文档与控制台默认关闭 |
 
 ## 配置要点
@@ -218,7 +220,8 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 
 - Schema 版本化迁移用 **Flyway**（`spring.flyway.*`，dev/test/prod 同生效）：空库自动跑 `db/migration`；存量库自动 baseline，详见上方「存量库迁移」
 
-- `linkforge.mq.async-click-enabled` 控制是否发 MQ
+- `linkforge.mq.async-click-enabled` 控制是否走 Outbox 管道；`ClickOutboxRelay` 用 `LINKFORGE_MQ_RELAY_ENABLED` / `_BATCH_SIZE`（默认 100）/ `_FIXED_DELAY_MS`（默认 2000）/ `_INITIAL_DELAY_MS`（默认 3000）
+- `LINKFORGE_MQ_RECONCILE_*` 旧对账器节奏（仅 sync 开启时运行，见「点击统计管道」）
 - `LINKFORGE_REGISTER_MAX` / `LINKFORGE_REGISTER_WINDOW_SECONDS` 注册限流阈值（默认 5 / 600 秒）
 - `LINKFORGE_CREATE_RATE_MAX` / `LINKFORGE_CREATE_RATE_WINDOW_SECONDS` 创建限流（默认 30 / 60 秒，按用户）
 - `LINKFORGE_REDIRECT_RATE_MAX` / `LINKFORGE_REDIRECT_RATE_WINDOW_SECONDS` 跳转限流（默认 300 / 60 秒，按 IP）

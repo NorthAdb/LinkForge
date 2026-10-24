@@ -12,9 +12,11 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * Backfills clicks whose MQ publish failed (e.g. during a broker outage). Replay uses
- * the same deterministic "log-{id}" eventIds as the live path, so rows already counted
- * are skipped and each click counts exactly once.
+ * Safety net for sync-written rows not yet consumed (A7: live delivery belongs to
+ * ClickOutboxRelay; this loop is skipped entirely while the sync write is off).
+ * Replay uses the same deterministic "log-{id}" eventIds as the outbox path, so rows
+ * already counted are skipped and each click counts exactly once. Detail rows the
+ * consumer backfilled carry their UUID eventId and are excluded by the scan.
  */
 @Slf4j
 @Component
@@ -28,7 +30,7 @@ public class ClickLogReconciler {
     @Scheduled(fixedDelayString = "${linkforge.mq.reconcile-fixed-delay-ms:30000}",
             initialDelayString = "${linkforge.mq.reconcile-initial-delay-ms:15000}")
     public void reconcile() {
-        if (!properties.getMq().isAsyncClickEnabled()) {
+        if (!properties.getMq().isAsyncClickEnabled() || !properties.getMq().isSyncClickEnabled()) {
             return;
         }
         try {

@@ -1,17 +1,21 @@
 package com.linkforge.stats.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.linkforge.common.util.ClientIps;
 import com.linkforge.config.LinkForgeProperties;
 import com.linkforge.link.entity.ShortLink;
 import com.linkforge.stats.entity.ClickLog;
+import com.linkforge.stats.entity.Outbox;
 import com.linkforge.stats.mapper.ClickLogMapper;
+import com.linkforge.stats.mapper.OutboxMapper;
 import com.linkforge.stats.mq.ClickEvent;
-import com.linkforge.stats.mq.ClickEventPublisher;
 import com.linkforge.security.UserContext;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -22,14 +26,18 @@ import java.util.UUID;
 public class ClickRecordService {
 
     private final ClickLogMapper clickLogMapper;
-    private final ClickEventPublisher clickEventPublisher;
+    private final OutboxMapper outboxMapper;
+    private final ObjectMapper objectMapper;
     private final LinkForgeProperties properties;
 
     /**
-     * D7=A double write: sync row in lf_click_log plus async publish. A failed publish
-     * is logged and later backfilled by ClickLogReconciler, so the redirect path never
-     * blocks on MQ.
+     * A7: the only writers are this transaction. The sync lf_click_log row (when
+     * enabled) and the PENDING outbox row commit atomically; the hot path never
+     * touches RabbitMQ, delivery is ClickOutboxRelay's job. eventId stays
+     * "log-{id}" while the sync write is on so replays dedupe, and becomes a
+     * stable UUID persisted in the outbox when it is off.
      */
+    @Transactional
     public void recordClick(ShortLink link, HttpServletRequest request) {
         LocalDateTime now = LocalDateTime.now();
         String ip = ClientIps.resolve(request, properties.getRateLimit().isTrustXff());
@@ -49,17 +57,27 @@ public class ClickRecordService {
         }
 
         if (properties.getMq().isAsyncClickEnabled()) {
-            try {
-                String eventId = logRow.getId() != null
-                        ? "log-" + logRow.getId()
-                        : UUID.randomUUID().toString();
-                Long userId = UserContext.get() == null ? null : UserContext.get().getUserId();
-                clickEventPublisher.publish(new ClickEvent(
-                        eventId, link.getTenantId(), link.getId(), link.getCode(),
-                        userId, ip, ua, referer, now));
-            } catch (Exception ex) {
-                log.warn("async click publish failed code={}: {}", link.getCode(), ex.getMessage());
-            }
+            String eventId = logRow.getId() != null
+                    ? "log-" + logRow.getId()
+                    : UUID.randomUUID().toString();
+            Long userId = UserContext.get() == null ? null : UserContext.get().getUserId();
+            ClickEvent event = new ClickEvent(
+                    eventId, link.getTenantId(), link.getId(), link.getCode(),
+                    userId, ip, ua, referer, now);
+            Outbox outbox = new Outbox();
+            outbox.setEventId(eventId);
+            outbox.setPayload(toJson(event));
+            outbox.setStatus(Outbox.STATUS_PENDING);
+            outbox.setAttempts(0);
+            outboxMapper.insert(outbox);
+        }
+    }
+
+    private String toJson(ClickEvent event) {
+        try {
+            return objectMapper.writeValueAsString(event);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("click event serialization failed", ex);
         }
     }
 

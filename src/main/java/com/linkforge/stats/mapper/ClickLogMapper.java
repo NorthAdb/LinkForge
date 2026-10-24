@@ -13,7 +13,8 @@ public interface ClickLogMapper extends BaseMapper<ClickLog> {
 
     @Select("SELECT l.* FROM lf_click_log l "
             + "LEFT JOIN lf_consumed_event c ON c.event_id = CONCAT('log-', l.id) "
-            + "WHERE c.event_id IS NULL ORDER BY l.id LIMIT #{limit}")
+            + "WHERE c.event_id IS NULL AND l.event_id IS NULL "
+            + "ORDER BY l.id LIMIT #{limit}")
     List<ClickLog> selectUnconsumed(@Param("limit") int limit);
 
     @Select("SELECT COUNT(DISTINCT ip) FROM lf_click_log "

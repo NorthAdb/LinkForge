@@ -45,10 +45,14 @@ public class ClickStatsService {
     }
 
     /**
-     * Idempotent consume. Dedup insert and daily increment share one short
-     * transaction, so a crash between them can neither double count nor silently
-     * drop a click. A duplicate key inside the callback is a plain skip: MySQL
-     * rolls back only the failed statement.
+     * Idempotent consume. Dedup insert, detail backfill and daily increment share one
+     * short transaction, so a crash between them can neither double count nor silently
+     * drop a click. A duplicate key inside the callback is a plain skip: MySQL rolls
+     * back only the failed statement.
+     *
+     * A7: "log-{id}" events already carry a sync-written lf_click_log row; events with
+     * a UUID eventId (sync write off) get their detail row here, so detail/UV degrade
+     * to eventual consistency instead of disappearing.
      */
     public boolean consume(ClickEvent event) {
         LocalDate date = event.getClickedAt() != null
@@ -62,6 +66,20 @@ public class ClickStatsService {
                 consumedEventMapper.insert(row);
             } catch (DuplicateKeyException ex) {
                 return false;
+            }
+            if (!event.getEventId().startsWith("log-")) {
+                ClickLog detail = new ClickLog();
+                detail.setTenantId(event.getTenantId());
+                detail.setLinkId(event.getLinkId());
+                detail.setCode(event.getCode());
+                detail.setIp(event.getIp());
+                detail.setUserAgent(event.getUserAgent());
+                detail.setReferer(event.getReferer());
+                detail.setClickedAt(event.getClickedAt() != null ? event.getClickedAt() : LocalDateTime.now());
+                // marker: this row is already counted under the UUID eventId, so the
+                // reconciler (which replays implicit log-{id} rows) must skip it
+                detail.setEventId(event.getEventId());
+                clickLogMapper.insert(detail);
             }
             clickDailyMapper.incrementClick(event.getTenantId(), event.getLinkId(), event.getCode(), date);
             return true;

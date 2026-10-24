@@ -30,7 +30,7 @@ import java.util.UUID;
  */
 public abstract class AbstractIntegrationTest {
 
-    static final MySQLContainer<?> MYSQL = new MySQLContainer<>(DockerImageName.parse("mysql:8.0"))
+    protected static final MySQLContainer<?> MYSQL = new MySQLContainer<>(DockerImageName.parse("mysql:8.0"))
             .withDatabaseName("linkforge")
             .withUsername("linkforge")
             .withPassword("linkforge_pass")
@@ -39,10 +39,10 @@ public abstract class AbstractIntegrationTest {
             .withCommand("--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci")
             .withStartupTimeout(java.time.Duration.ofMinutes(4));
 
-    static final GenericContainer<?> REDIS = new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
+    protected static final GenericContainer<?> REDIS = new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
             .withExposedPorts(6379);
 
-    static final RabbitMQContainer RABBIT = new RabbitMQContainer(
+    protected static final RabbitMQContainer RABBIT = new RabbitMQContainer(
             DockerImageName.parse("rabbitmq:3.13-management-alpine"))
             .withAdminUser("linkforge")
             .withAdminPassword("linkforge_pass");

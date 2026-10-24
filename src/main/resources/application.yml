@@ -75,10 +75,14 @@ linkforge:
     cache-ttl-seconds: 3600
     code-length: 7
   mq:
-    # D7=A double write: async publish on by default, sync lf_click_log kept for对账.
-    # Turn sync off only after reconciliation proves aggregate == detail (see README).
+    # A7: hot path writes lf_outbox (PENDING) in the click transaction; the relay
+    # drains it to RabbitMQ. sync-click keeps the lf_click_log double write.
     async-click-enabled: ${LINKFORGE_ASYNC_CLICK_ENABLED:true}
     sync-click-enabled: ${LINKFORGE_SYNC_CLICK_ENABLED:true}
+    relay-enabled: ${LINKFORGE_MQ_RELAY_ENABLED:true}
+    relay-batch-size: ${LINKFORGE_MQ_RELAY_BATCH_SIZE:100}
+    relay-fixed-delay-ms: ${LINKFORGE_MQ_RELAY_FIXED_DELAY_MS:2000}
+    relay-initial-delay-ms: ${LINKFORGE_MQ_RELAY_INITIAL_DELAY_MS:3000}
     reconcile-fixed-delay-ms: ${LINKFORGE_MQ_RECONCILE_FIXED_DELAY_MS:30000}
     reconcile-initial-delay-ms: ${LINKFORGE_MQ_RECONCILE_INITIAL_DELAY_MS:15000}
   bootstrap:

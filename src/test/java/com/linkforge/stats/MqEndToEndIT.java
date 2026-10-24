@@ -9,13 +9,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Real RabbitMQ path: redirect publishes -> consumer aggregates -> stats API reads.
- * The poll window absorbs consumer startup latency.
+ * Real RabbitMQ path: redirect -> outbox -> relay publishes -> consumer aggregates
+ * -> stats API reads. The poll window absorbs relay tick and consumer latency.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "linkforge.rate-limit.key-prefix=linkforge:rl:it-mqe2e:",
         "linkforge.rate-limit.register-max=1000",
         "linkforge.mq.async-click-enabled=true",
+        "linkforge.mq.relay-fixed-delay-ms=500",
+        "linkforge.mq.relay-initial-delay-ms=1000",
         "spring.rabbitmq.listener.simple.auto-startup=true"
 })
 @ActiveProfiles("test")

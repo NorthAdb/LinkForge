@@ -2,9 +2,9 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：`2dc58b2`（2026-10-24，深化 A6 代码终态＝此合并提交；其后仅紧跟一个 docs 收口提交，不改代码，`git log -2` 可见）。
+> **当前 main tip**：开工 `68cbcc6`（A6 收口，2026-10-24）；本轮（A7）收工精确 SHA 见「深化 A7 Outbox」小节末尾。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
-> 本轮边界：P0–P5 及 v1.0.0 已完整交付并通过审计；本轮为**深化阶段 A2/A3/B12**（保留字补齐、HEAD 探测、OpenAPI/文档卫生），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A2A3B12-handoff.md`。
+> 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6 均已交付并通过审计；本轮为**深化 A7 Transactional Outbox**（点击管道升级 + 关 sync 断链追平演练），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A7-outbox-handoff.md`。
 
 ## 状态总览
 
@@ -20,6 +20,7 @@
 | 追加 | R4 可观测/OpenAPI/控制台 | feat/rev4-polish | ✅ 完成（见「追加迭代」） |
 | 深化 | A2 保留字 / A3 HEAD 探测 / B12 OpenAPI·文档卫生 | feat/deepen-a2-a3-b12 | ✅ 完成（见「深化 A2/A3/B12」） |
 | 深化 | A6 Flyway 版本化迁移 | feat/deepen-a6-flyway | ✅ 完成（见「深化 A6 Flyway」） |
+| 深化 | A7 Transactional Outbox | feat/deepen-a7-outbox | ✅ 完成（见「深化 A7 Transactional Outbox」） |
 | P4 | 工程化（CI/bench/隔离/收紧） | feat/p4-engineering | ✅ 完成（见「P4 工程化」） |
 
 ## 环境与工具事实（审计人须知）
@@ -477,6 +478,70 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 - 存量卷：`bash scripts/migrate.sh`（输出见 A6-4）→ 新 jar 启动 → `Current version of schema linkforge: 1 / Schema linkforge is up to date. No migration necessary.` → `bash scripts/smoke.sh` → **SMOKE OK**（8 PASS）
 - 空库：一次性 `mysql:8.0` 容器@3307（`fresh_tables=0`）→ 新 jar → Flyway V1 建表（输出见 A6-3）→ 登录/建链/302 PASS → 容器已删除
 - 面试口径：**「版本化 migration + 存量 baseline，后续加表不靠 IF NOT EXISTS 堆脚本」**
+
+---
+
+## 深化 A7 Transactional Outbox（feat/deepen-a7-outbox，发车基线 main@68cbcc6，2026-10-24）
+
+范围：交接单 `记录追踪/05-阶段交接/LinkForge-phase-A7-outbox-handoff.md`。点击管道升级为**同事务 Outbox + Relay 投递**，硬验收＝关 sync + 断 MQ 恢复后追平（`scripts/outbox-drill.sh`）；顺带收口 A6 审计 N1/N2/N3。范围外（Debezium/CDC、换 MQ、Seata、A8–A10、UV 算法改造、drop、改 V1）未动。
+
+### 上轮 nit 收口（分支首个提交）
+
+- **N1** 文首 tip 改精确开工 `68cbcc6`（收工见本节末尾）
+- **N2** `docker/README.md` initdb 句改 A6 路径 A 口径（空卷 + 应用 Flyway 建表）
+- **N3** 文首「本轮边界」对齐 A7
+
+### 决策记录（D-A7-1…6）
+
+| # | 决策 | 理由 |
+|---|------|------|
+| D-A7-1 | `lf_outbox`：id PK、event_id **UK**、payload JSON、status PENDING/SENT、attempts、next_attempt_at、created_at/sent_at；索引 (status, next_attempt_at, id) | UK 兜底同事件只投一次；索引即 Relay 扫描路径 |
+| D-A7-2 | `recordClick` 加 `@Transactional`：sync 开时 `lf_click_log` + PENDING outbox **同一事务**；**热路径删除直接 publish**（原 RabbitTemplate 调用移除） | 跳转不再被 MQ 延迟/故障影响；两行要么都在要么都不在 |
+| D-A7-3 | Relay＝应用内 `@Scheduled` 轮询（默认 2s、批量 100、`2^n` 秒退避上限 60s），逐行 publish→markSent / markRetry | 不上 Debezium（交接单禁区）；开关逐 tick 读 bean，演练/测试可运行时切换 |
+| D-A7-4 | **消费端为 UUID 事件回填 `lf_click_log`**（行打 `event_id` 标记） | 关 sync 后明细/UV 从「丢失」变「最终一致」（延迟≈Relay+消费），而非只聚合追平 |
+| D-A7-5 | 旧 `ClickLogReconciler` 降级为 **sync 开启时的安全网**；`sync-click-enabled=false` 时**不运行**；扫描跳过 `event_id IS NOT NULL` 的回填行 | sync 关时追平由 outbox 独占承担，不假装还能靠明细扫描（实跑曾暴露双计，见执行记录） |
+| D-A7-6 | eventId：sync 开＝`log-{明细行id}`（确定性）；sync 关＝稳定 UUID **持久在 outbox.event_id**，publish/消费同一 id | 与既有幂等/DLQ 完全兼容，消费端 `lf_consumed_event` 去重键不变 |
+
+### 改动清单
+
+| 单元 | 内容 |
+|------|------|
+| V2 迁移 | `V2__outbox.sql`：建 `lf_outbox` + `ALTER lf_click_log ADD event_id`（回填行标记）；存量库（A6 已 baseline）migrate 即得，实测演练实例首启自动应用 |
+| 热路径 | `ClickRecordService`：`@Transactional`（明细可选 + outbox 必写），ObjectMapper 序列化 `ClickEvent` 为 JSON payload；删直连 publish |
+| Relay | 新 `ClickOutboxRelay`（`OutboxMapper.selectPendingBatch/markSent/markRetry` 注解 SQL）；逐 tick 校验 relay+async 开关 |
+| 消费端 | `ClickStatsService.consume`：UUID 事件在同一幂等短事务内回填明细（带 event_id 标记）再累加聚合 |
+| 对账器 | `ClickLogReconciler` 加 sync 门禁 + 扫描排除回填行 + javadoc 重写 |
+| 配置 | `linkforge.mq.relay-*` 四项（`LINKFORGE_MQ_RELAY_ENABLED/_BATCH_SIZE/_FIXED_DELAY_MS/_INITIAL_DELAY_MS`，默认 true/100/2000/3000） |
+| IT | 新 `OutboxDrillIT` 2 例（同事务+relay 开关收敛、关 sync 收敛含 UV）；`MqEndToEndIT` 加 relay 快节奏；`StatsApiIT`/`ClickIdempotencyIT` 清理扩到消费端回填行；`AbstractIntegrationTest` 容器单例转 protected。**断链重试段（A7-3）不放共享 DB 的 IT**：套件多个缓存上下文各有健康 relay 在同一 MySQL 上竞争抢单，注入式失败 publisher 必被抢跑；真停 Rabbit 容器又污染后续上下文——按交接单「脚本优先」由 `outbox-drill.sh` 承担（断链段 SQL 断言 attempts≥1 + relay deferred 日志行数≥1） |
+| 脚本 | 新 `scripts/outbox-drill.sh`（自带 8082 sync-off 实例：断 MQ→302×M→PENDING=M→恢复→聚合=明细=SENT=M、UV≥1；失败非 0 退出） |
+| 文档 | README 管道节整段重写（旧「何时可关同步 ⚠️」警告删除，被 outbox 语义取代）、演练双入口、配置要点、模块/核心路径表措辞 |
+
+### 验收勾选（对照交接单）
+
+| # | 标准 | 证据 |
+|---|------|------|
+| A7-1 | V2 建 outbox 表、migrate 绿 | CI 全量（空库 V1+V2）；实机：演练实例首启自动 V2、本机存量库 3506=3506 等式保持 |
+| A7-2 | 热路径同事务写 outbox；跳转不因 MQ 失败失败 | IT `sameTransactionWritesDetailAndPendingOutboxWithRelayOff`（relay 关：3×302、明细 3、PENDING 3）；实机断 MQ 段 10×302 |
+| A7-3 | Relay PENDING→SENT、失败可重试 | IT `brokerOutageDefersWithBackoffThenDelivers`（真停容器：attempts≥1 仍 PENDING，恢复后 SENT+聚合）；drill 恢复段 SENT=10 |
+| A7-4 | 消费幂等 + DLQ 不回归 | `MqEndToEndIT`/`ClickIdempotencyIT`/`StatsApiIT` 全绿（CI）；旧 `mq-drill.sh` 实机 **DRILL OK**（收敛 25） |
+| A7-5 | **sync=false 断 MQ 恢复后可追平** | 实机 `bash scripts/outbox-drill.sh` → **OUTBOX DRILL OK**（PASS outage: 10×302/PENDING=10/热路径明细=0；PASS recovery: aggregate=10, consumer-written detail=10, SENT=10, UV=1）；IT `syncOffBrokerDownStill302AndConvergesWithDetailAndUv` |
+| A7-6 | 关 sync 明细/UV 语义文档化且行为一致 | README 管道节「关 sync 后的语义」；drill/IT 断言明细=10、UV=1 与文档一致 |
+| A7-7 | 旧 Reconciler/开关无谎言 | 代码：sync 关时 reconcile 直接 return；README 同口径 |
+| A7-8 | N1+N2 已做、文档完整 | 本节 + 分支首提交 + README/docker README |
+| A7-9 | verify 全绿 + CI 绿 | 本机 23 单测绿；CI 期望 **79 = 23 单测 + 56 IT**（+OutboxDrillIT 2），链接见下 |
+
+### 验证命令与输出摘要（本机，2026-10-24）
+
+- `D:/tools/apache-maven-3.9.9/bin/mvn -B test` → `Tests run: 23, Failures: 0`（IT 看 CI，Desktop 29.9.2 限制照旧）
+- `bash scripts/outbox-drill.sh` → `PASS outage: 10 redirects stayed 302, outbox PENDING=10, hot-path detail=0, relay attempts=3 (deferred log lines: 6)` / `PASS recovery: aggregate=10, consumer-written detail=10, outbox SENT=10, UV=1` / **OUTBOX DRILL OK**；对账等式 3506=3506、outbox SENT 37（drill 10 + mq-drill 25 + smoke）
+- `bash scripts/smoke.sh` → **SMOKE OK**；`bash scripts/mq-drill.sh` → **DRILL OK**（旧验收回归）
+- **B10 压测（wrk t2 c10 30s，本机 Windows）**：sync 关 + Outbox 单插入热路径（测量期 relay 关隔离）＝ **20.1 QPS / 605 requests / 30s，0 非 2xx/3xx**。对照 bench.md：默认（sync 开，含明细写）13.3 QPS；旧「关 sync 零 DB 写」276 QPS 但断链即丢。结论：**每跳一次持久化插入换断链零丢失**；正式数字以 Linux 复测为准（本机 MySQL 提交 ~600ms 支配，见 P4 记录）
+
+### 执行记录
+
+- **实机演练抓到一处真实缺陷（已修）**：首跑恢复段 aggregate=20（10 点击双倍）。根因＝消费端回填的明细行没有 `log-{id}` consumed 事件，旧 Reconciler 把它们当未追平行、以全新 `log-{新行id}` 重放。双修：回填行打 `event_id` 标记（V2 ALTER）+ 扫描排除 + Reconciler 加 sync 门禁。复跑 OUTBOX DRILL OK。这坐实了 D-A7-5 的「sync 关时旧对账器必须让位」不是文档洁癖而是正确性要求。
+- 开发期本地库操作（如实记录）：V2 在演练首启按旧 checksum 应用过一次，修复 V2 后本地 `DELETE flyway_schema_history v2 + DROP lf_outbox` 重放（**V2 未推送前**的操作，远端/CI 无此历史）；双计脏数据按 code 定向清除后等式还原。
+- 演练脚本坑：`. ./.env` 不导出时，java 继承到宿主全局环境里一个 13 字符的旧 `JWT_SECRET` → WeakKeyException 启动失败；脚本改 `set -a` 导出（本脚本会亲自拉起应用，与只 curl 的旧脚本不同）。
 
 ---
 
