@@ -129,7 +129,7 @@ curl -s -D - -o /dev/null http://localhost:8080/r/CODE
 bash scripts/smoke.sh
 ```
 
-启动应用后打开 <http://localhost:8080/> 即是**极简控制台**（纯静态单页：登录/注册、建链（支持自定义码与过期时间）、列表、启停/删除、点击与 UV 统计、CSV 导出入口）。接口文档在 <http://localhost:8080/swagger-ui/index.html>（springdoc 生成）。
+应用启动后：`http://localhost:8080/` 是**极简控制台**（可选特性；登录/注册、建链（支持自定义码与过期时间）、列表、启停/删除、点击与 UV 统计、CSV 导出入口）；接口文档在 `http://localhost:8080/swagger-ui/index.html`（springdoc 生成，prod 下关闭）。
 
 MQ 宕机演练（基线聚合 → 停 Rabbit 全部 302 → 恢复后追平）：
 
@@ -194,9 +194,16 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 
 | 阶段 | 内容 | 状态 |
 |------|------|------|
-| **P0–P3（当前 main）** | Compose 三件套、登录/注册（限流）、短链 CRUD/禁用/过期、缓存跳转（写穿+双删）、MQ 异步聚合（幂等/对账/断链追平）、创建幂等、并发不撞码、限流、Actuator 组件健康 | ✅ 已交付（见 docs/progress.md） |
-| **P4** | CI、bench.md 压测数字、测试矩阵归档、简历条目 | 待外部审计后另定 |
-| **P5** | 自定义短码、CSV 导出、极简静态管理页、OpenAPI | 待外部审计后另定 |
+| **P0–P3** | Compose 三件套、登录/注册（限流）、短链 CRUD/禁用/过期、缓存跳转（写穿+双删）、MQ 异步聚合（幂等/对账/断链追平）、创建幂等、并发不撞码、限流、Actuator 组件健康 | ✅ 已交付并审计通过 |
+| **P4** | Testcontainers 测试隔离（63 测试）、GitHub Actions CI、bench.md 实测压测、架构 README、resume.md、prod profile | ✅ 已交付并审计通过 |
+| **P5** | 盘点补洞（migrate.sh、路由核对、文档收口） | ✅ 完成，完整项目交付 |
+
+## 核心路径 vs 可选特性
+
+| 类别 | 能力 | 说明 |
+|------|------|------|
+| **核心**（主路径 Demo 只依赖这些） | 注册/登录（JWT）、创建短链、`/r/{code}` 302 跳转、stats 统计、限流、点击双写 + 幂等消费 + 对账追平、CI / bench | 冒烟（smoke.sh）与断链演练（mq-drill.sh）覆盖的即主路径 |
+| 可选（演示可用，面试可讲，主路径不强制） | 自定义短码、CSV 导出、Swagger UI、静态控制台、精确 UV / 点击明细 | R2–R4 提前落地，均有集成测试与隔离验证；prod profile 下文档与控制台默认关闭 |
 
 ## 配置要点
 
@@ -208,9 +215,10 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 - `LINKFORGE_REDIRECT_RATE_MAX` / `LINKFORGE_REDIRECT_RATE_WINDOW_SECONDS` 跳转限流（默认 300 / 60 秒，按 IP）
 - `LINKFORGE_IDEMPOTENCY_TTL_SECONDS` 创建幂等键保留时长（默认 86400 秒）
 - `LINKFORGE_TRUST_XFF` 是否信任 X-Forwarded-For（默认 false，仅在可信反代后开启）
+- 限流覆盖说明：注册按 IP、创建按用户（**含自定义短码创建，共用 POST /api/links 的限额**）；CSV 导出与统计查询属管理 API（JWT 必需、租户隔离），未单独限流，导出有 1 万行上限保护
 - `/actuator/health` 展示组件细节（db / redis / rabbit / diskSpace），依赖 DOWN 时整体 503
 - `/actuator/metrics/**` 暴露业务计数器（`linkforge.links.created`、`linkforge.redirects`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`），需 Bearer Token
-- **公网部署前须收紧**（当前面向本地 Demo 全开放）：`management.endpoint.health.show-details` 改 `when_authorized`、设 `springdoc.api-docs.enabled=false` 关闭 Swagger、下线 `static/index.html` 控制台或加访问控制
+- **公网部署**：本地 Demo 一律默认 profile（全开放）；对外部署设 `SPRING_PROFILES_ACTIVE=prod` 一键收紧——health 细节转 `when_authorized`、springdoc 与静态控制台关闭、文档/控制台路径在过滤器层 denyAll（见 application.yml prod 段与 ProdProfileIT）
 
 ## 架构
 
@@ -245,13 +253,15 @@ flowchart LR
 
 **跳转时序（GET /r/{code}）**：① 限流器按 IP 固定窗口 INCR（Redis，超限 429）→ ② 读缓存 `linkforge:code:{code}`（命中则省 URL 字段）→ ③ 无论命中与否都读 `lf_short_link` 行做禁用/过期判定（404/410，防脏缓存）→ ④ 目标 URL 严格校验后写入 `lf_click_log`（D7 同步明细）→ ⑤ 发布 `ClickEvent`（eventId=log-{id}）到 RabbitMQ → 返回 302。消费端以 eventId 唯一索引幂等累加 `lf_click_daily`；发布失败由 Reconciler 定时从明细补投（断 MQ 演练见 `scripts/mq-drill.sh`）。更新/禁用走写穿 + 1s 延迟双删防旧值回填。
 
-**本地 Demo 五步**：
+**本地 Demo 五步**（只走核心路径）：
 
-1. `cp .env.example .env && docker compose up -d`，等 `docker compose ps` 三容器 healthy（MySQL 首次初始化约 5 分钟）
+1. `cp .env.example .env && docker compose up -d`，等 `docker compose ps` 三容器 healthy（MySQL 首次初始化约 5 分钟；存量卷可 `bash scripts/migrate.sh` 幂等补表）
 2. 构建：`mvn -B -DskipTests package`（无本地 Maven 用 README 上方的 Docker 命令）
 3. 启动：`set -a && . ./.env && set +a && java -jar target/linkforge-0.0.1-SNAPSHOT.jar`
-4. 浏览器打开 `http://localhost:8080/` 极简控制台：登录（demo/admin，口令在 .env）→ 建链 → 看统计
+4. 核心链路：登录（`POST /api/auth/login`，demo/admin）→ 建链（`POST /api/links` 带 Bearer）→ 浏览器/curl 访问 `/r/{code}` 得 302（示例见上方冒烟段）
 5. 验证：`bash scripts/smoke.sh`（SMOKE OK）、`bash scripts/mq-drill.sh`（断 MQ 追平）、`curl -s localhost:8080/actuator/health`
+
+可选入口：浏览器打开 `http://localhost:8080/` 极简控制台（登录/建链/启停删除/统计/CSV 一站式，属可选特性，非主路径依赖）。
 
 **Linux 复现**：Linux 无 `host.docker.internal`。测试/运行容器用 `--network host` 并把 `SPRING_DATASOURCE_URL`/`SPRING_DATA_REDIS_HOST`/`SPRING_RABBITMQ_HOST` 指向 `127.0.0.1`（Compose 已映射端口），或指向 docker0 网桥 `172.17.0.1`。CI（ubuntu-latest）即按此环境跑 `mvn -B verify`（Testcontainers 原生 Docker，无需 Compose）。示例：
 

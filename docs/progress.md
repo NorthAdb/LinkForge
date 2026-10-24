@@ -1,8 +1,8 @@
 # LinkForge 开发进度与验收记录
 
-> 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》P0→P3 顺序推进。
+> 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> 本轮边界：只做 P0–P3；P3 完成后停下等「实习JAVA_AI」审计，不开 P4/P5。
+> 本轮边界：P0–P4 已交付并通过实习JAVA_AI 审计；本轮为 **P5 抛光收尾**（盘点、补洞、文档收口），完成即完整项目交付。
 
 ## 状态总览
 
@@ -294,7 +294,7 @@ docker compose start rabbitmq && sleep 10 && curl -s http://localhost:8080/actua
 ### 审计材料（P4 后更新）
 
 - 仓库：https://github.com/NorthAdb/LinkForge（分支 main，**P4 终态合并：880f0a6**）
-- **CI**：main 最新 run **success** — https://github.com/NorthAdb/LinkForge/actions/runs/40056206371（ubuntu-latest，62+ 测试全绿：16 单测 + 47 集成）
+- **CI**：main 最新 run **success** — https://github.com/NorthAdb/LinkForge/actions/runs/40056206371（ubuntu-latest，63 个测试全绿：16 单测 + 47 集成）
 - 审计分层：103a199（P0–P3）→ 447dfdb（自审）→ c1ecd46（R2–R4）→ 7e8b9fe（hotfix）→ **880f0a6（P4）**
 - 复跑清单（P4 版）：
   1. 本机任何有 Docker 的 Linux：`mvn -B verify`（Testcontainers 全量，参照 README「Linux 复现」或直接看 CI）
@@ -305,6 +305,46 @@ docker compose start rabbitmq && sleep 10 && curl -s http://localhost:8080/actua
 - 文档入口：README「架构」节（mermaid + 时序 + Demo 五步 + Linux）；docs/bench.md（压测）；docs/resume.md（简历条目）
 
 **P4 完成，待实习JAVA_AI 审计后再定 P5 收尾。**
+
+---
+
+## P5 抛光收尾（feat/p5-polish，发车基线 main@880f0a6 / f27d4bc，运营者 2026-10-24 授权开跑）
+
+范围纪律：不做 AI/向量/LLM；不换栈；无独立 SPA；云部署非硬验收（D5）。R2–R4 已落地能力视为完成，只盘点、补洞、文档收口。发车词四项退出条件逐项勾选如下。
+
+### (a) 功能核对——已完成项「仍绿」证据（无真实缺口，未改业务代码）
+
+| 能力 | 证据 |
+|------|------|
+| 自定义短码（D6：字符集/保留字/占用 409/删除不可复用/跨用户隔离） | `CustomCodeIT` ×5（CI success run 40056206371） |
+| CSV 导出（仅链主、转义、鉴权） | `CsvExportIT` ×2 + 本轮手工：无 Token → 401；有效 Token → CSV 首行 `code,original_url,...` 且含本人码 |
+| 极简静态控制台（非 SPA） | `ObservabilityIT.apiDocsSwaggerUiAndStaticPageAreServed`（GET / 200）+ 本轮手工：页面含 create/disable/enable/delete/统计/CSV 入口与幂等头注入；`id="exportLink"` 实测指向 /api/links/export |
+| Swagger（dev 开放/prod 关闭） | 路由一致性核对（本轮实测）：`/v3/api-docs` 列 11 条路径，与控制器、README 接口表逐一吻合，无幽灵路由；prod 侧 `ProdProfileIT` 401 |
+| 点击明细 / 精确 UV / enable / delete | `StatsApiIT.uvIsExactDistinctIpAndClicksDetailIsOwnerScoped`、`LinkLifecycleIT.deleteRemovesLinkEverywhere` / `enableRestoresDisabledLink` |
+
+可选加分（已做）：`scripts/migrate.sh`（幂等迁移，实测对存量卷重放 schema.sql 成功，对应审计 L2）；README 补限流覆盖说明（自定义码共用创建限流；CSV 属管理 API 未单独限流、1 万行上限）。
+
+### (b) 文档收口
+
+README 新增「核心路径 vs 可选特性」表：核心 = 注册/登录、建链、302、stats、限流、双写+对账、CI/bench；可选 = 自定义短码、CSV、Swagger、控制台、UV/明细（「演示可用，面试可讲，主路径不强制」）。Demo 五步改为纯核心路径，控制台标注为可选入口。同步清偿 P4 文档债：测试计数统一 63（16+47，与 @Test 计数及 CI 一致）、公网收紧改为 `SPRING_PROFILES_ACTIVE=prod` 一句话、progress 文首边界改为「P0–P4 已交付，本轮 P5」。
+
+### (c) 方案 P5 四项勾选（对照《实施与验收方案》P5 节）
+
+- [x] 自定义短码（字符集/保留字/唯一冲突）——R2 提前完成，本轮复核仍绿（见上表）
+- [x] CSV 导出（鉴权）——R3 提前完成，复核仍绿
+- [x] 极简管理页（登录、建链、列表、统计；无 SPA）——R4 提前完成，复核仍绿
+- [x] OpenAPI（springdoc /swagger-ui，与真实行为一致）——R4 提前完成，本轮路由核对一致
+
+### (d) 回归
+
+- 本机 `mvn -B verify -DskipITs` → BUILD SUCCESS（16 单测绿；Windows 与 Testcontainers 不兼容见 P4 记录，63 全量以 CI 为权威）
+- `bash scripts/smoke.sh` → **SMOKE OK**；`bash scripts/mq-drill.sh` → **DRILL OK**（15 基线 / 断 MQ 全 302 / 追平 25）
+- 对账等式闭合：detail=3487 == aggregate=3487
+- CI：见文末审计材料的 run 链接
+
+### (e) 明确不做复查
+
+grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无相关 artifact，源码无相关 import）；无独立 SPA（唯一前端为单文件静态控制台）；无云部署硬依赖（D5=仅本地 Compose，prod profile 仅收紧暴露面）。
 
 自审中评估后**不改**的两点（记录供审计人参断）：
 - 跳转路径每次仍读 DB 行做禁用/过期判定（缓存只省 URL 字段）：这是**主动选择**——只信缓存会让禁用/过期在 TTL 内放行 302，正确性优先于该读优化；P4 压测时再量化。（审计 L8 同判，留 P4 bench 量化。）
@@ -354,7 +394,7 @@ docker compose start rabbitmq && sleep 10 && curl -s http://localhost:8080/actua
 
 - [x] (a) 测试隔离 + 单测分层 + 总数不减
   - 集成测试改 **Testcontainers 2.0.5**（MySQL 8.0 / Redis 7-alpine / RabbitMQ 3.13-management，静态单例 + @DynamicPropertySource），不再依赖本机 Compose；`*IT` 归 **failsafe**（绑 verify），纯单测 16 个归 surefire（LinkValidations/CsvFormat/ShortCodes/RedisRateLimiter——纯函数从 Service 抽到 `link/support` 工具类）
-  - **本机限制（如实记录）**：本开发机 Docker Desktop 29.9.2 与 docker-java（TC 1.19.8/1.21.3/1.21.4/2.0.5 全试过）不兼容——npipe 与挂载 socket 均 400/EOF，CLI 正常；已定位到 Desktop 29 的 API 代理层。本机用 `mvn -B verify -DskipITs`（16 单测绿，15s），**62 个测试的完整绿由 CI 的 ubuntu runner（只有 Docker、无 Compose）实证**，正合验收要求的机器形态
+  - **本机限制（如实记录）**：本开发机 Docker Desktop 29.9.2 与 docker-java（TC 1.19.8/1.21.3/1.21.4/2.0.5 全试过）不兼容——npipe 与挂载 socket 均 400/EOF，CLI 正常；已定位到 Desktop 29 的 API 代理层。本机用 `mvn -B verify -DskipITs`（16 单测绿，15s），**63 个测试的完整绿由 CI 的 ubuntu runner（只有 Docker、无 Compose）实证**，正合验收要求的机器形态
   - CI 实测：ubuntu-latest 上 47 个 IT 全跑（LinkLifecycleIT 15 例 5.6s），Testcontainers 原生工作
 - [x] (b) CI：`.github/workflows/ci.yml`（ubuntu-latest + Temurin 17 + m2 缓存 + `mvn -B verify`），push 到 main 与 feat/** 触发；无真实口令（测试口令仅 test profile 假值）。main 绿 run 链接见下「审计材料」
 - [x] (c) 压测：`scripts/bench.sh`（wrk，镜像 skandyla/wrk=wrk 4.x）+ `docs/bench.md`
@@ -362,7 +402,7 @@ docker compose start rabbitmq && sleep 10 && curl -s http://localhost:8080/actua
   - 限流压测期间临时调高（LINKFORGE_*_RATE_MAX=1000000），bench.md 已写明；机器规格/命令/原始输出齐备
   - 诚实结论：本机每次 MySQL 提交约 600ms（Windows 卷存储路径；CI Linux 上同类写操作毫秒级），同步明细写是跳转吞吐支配项——这正是「双写切纯异步需 outbox」论断的量化证据
 - [x] (d) 架构 README：mermaid 组件图（含 Reconciler 追平边）、跳转 5 步时序说明、「本地 Demo 五步」、Linux 复现小节（--network host / 172.17.0.1，附命令）
-- [x] (e) `docs/resume.md`：5 条中文 bullet，数字全部引用 bench.md（13→276 QPS、P50 678→31ms、命中率 100%、62 测试 CI 绿），限流如实写「Redis 固定窗口」
+- [x] (e) `docs/resume.md`：5 条中文 bullet，数字全部引用 bench.md（13→276 QPS、P50 678→31ms、命中率 100%、63 测试 CI 绿），限流如实写「Redis 固定窗口」
 - [x] (f) prod profile：`show-details: when_authorized`、springdoc 关闭、静态资源关闭；文档/控制台路径在 prod 由 SecurityFilterChain **denyAll（401）**（`linkforge.docs-enabled=false`）——比依赖 springdoc 关闭行为（实测会 500）更干净；dev/test 行为不变（ObservabilityIT 证全开放）
 - [x] (g) 收尾验证：本机 `mvn -B verify -DskipITs` 绿（16 单测）；`bash scripts/smoke.sh` → **SMOKE OK**；`bash scripts/mq-drill.sh` → **DRILL OK**（15/10 基线-断链-追平到 25）；CI 绿；合并推送
 
@@ -375,7 +415,6 @@ docker compose start rabbitmq && sleep 10 && curl -s http://localhost:8080/actua
 - 对账基线重置：压测产生的历史数据（UUID 事件已消费 + 明细表）造成 aggregate 虚高（4019 vs 3420），已 TRUNCATE 两表由 Reconciler 从 3420 条明细全量重建（本机速率 ~1.7 行/s，收敛需约 35 分钟；机制此前已多次实证：104=104、188=188、drill 25=25）。终态见「审计材料」的复查说明。
 
 ### 审计材料（hotfix 轮，历史存档）
-
 - 仓库：https://github.com/NorthAdb/LinkForge（分支 main，**自审后终态 commit：447dfdb**；P0–P3 首轮终态合并 103a199）
 - 复现环境：Windows + Docker Desktop + Git Bash；`cp .env.example .env && docker compose up -d`（等三容器 healthy，mysql 首次初始化约 5 分钟）
 - 复现命令清单（按序执行，全部应绿）：
