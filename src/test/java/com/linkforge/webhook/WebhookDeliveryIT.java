@@ -59,8 +59,11 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
     /** Recorded requests in arrival order: [path, eventIdHeader, timestampHeader, signatureHeader, body]. */
     private static final List<String[]> RECEIVED = new CopyOnWriteArrayList<>();
     private static final AtomicInteger PORT = new AtomicInteger();
-    /** Status codes the stub returns, consumed front-to-back; the last one repeats. */
-    private static final ConcurrentLinkedQueue<Integer> SCRIPT = new ConcurrentLinkedQueue<>();
+    /** Per-path status scripts: each test owns its own stub path, so concurrent
+     * deliveries (one row per test tenant, drained by the same relay) never
+     * consume each other's scripted statuses. */
+    private static final java.util.concurrent.ConcurrentHashMap<String, java.util.Queue<Integer>> SCRIPTS =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     @Autowired
     private JdbcTemplate jdbc;
@@ -84,7 +87,8 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
                 exchange.getRequestHeaders().getFirst(WebhookSigner.HEADER_TIMESTAMP),
                 exchange.getRequestHeaders().getFirst(WebhookSigner.HEADER_SIGNATURE),
                 new String(body, StandardCharsets.UTF_8)});
-        Integer scripted = SCRIPT.poll();
+        java.util.Queue<Integer> script = SCRIPTS.get(exchange.getRequestURI().getPath());
+        Integer scripted = script == null ? null : script.poll();
         int status = scripted != null ? scripted : 200;
         exchange.sendResponseHeaders(status, -1);
         exchange.close();
@@ -97,16 +101,11 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
         }
     }
 
-    @BeforeEach
-    void resetScriptAndRecords() {
-        SCRIPT.clear();
-        RECEIVED.clear();
-    }
-
-    private void configureEndpoint(String token) throws Exception {
+    private void configureEndpoint(String token, String path) throws Exception {
+        SCRIPTS.put(path, new java.util.concurrent.ConcurrentLinkedQueue<>());
         var resp = rest.exchange("/api/webhooks/endpoint", org.springframework.http.HttpMethod.PUT,
                 new org.springframework.http.HttpEntity<>(
-                        om.writeValueAsString(Map.of("url", "http://127.0.0.1:" + PORT.get() + "/hook", "enabled", true)),
+                        om.writeValueAsString(Map.of("url", "http://127.0.0.1:" + PORT.get() + path, "enabled", true)),
                         jsonHeaders(token)), String.class);
         assertEquals(200, resp.getStatusCode().value(), resp.getBody());
     }
@@ -119,10 +118,12 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
     }
 
     /** Tenant-scoped latest delivery row (each test owns one tenant and one click). */
-    private Map<String, Object> latestDeliveryFor(String token) throws Exception {
+    private Map<String, Object> latestDeliveryFor(String token) {
         Long tenantId = tenantIdOf(token);
-        return jdbc.queryForMap("SELECT status, attempts, last_status_code, last_error, event_id "
-                + "FROM lf_webhook_delivery WHERE tenant_id = ? ORDER BY id DESC LIMIT 1", tenantId);
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT status, attempts, last_status_code, last_error, event_id "
+                        + "FROM lf_webhook_delivery WHERE tenant_id = ? ORDER BY id DESC LIMIT 1", tenantId);
+        return rows.isEmpty() ? null : rows.get(0);
     }
 
     private int deliveryCount(String eventId) {
@@ -139,7 +140,7 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
     @Test
     void signedDeliveryFlowsThroughTheRealOutboxChain() throws Exception {
         String token = registerForToken();
-        configureEndpoint(token);
+        configureEndpoint(token, "/hook-signed");
         String secret = body(rest.exchange("/api/webhooks/endpoint", org.springframework.http.HttpMethod.GET,
                 new org.springframework.http.HttpEntity<>(jsonHeaders(token)), String.class))
                 .path("data").path("secretMasked").asText();
@@ -155,9 +156,11 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
         assertEquals(302, get("/r/" + code, null).getStatusCode().value());
 
         // stage 1: the outbox chain must converge into a SENT delivery row
-        await().atMost(java.time.Duration.ofSeconds(60)).untilAsserted(() ->
-                assertEquals("SENT", latestDeliveryFor(token).get("status"),
-                        "delivery row: " + latestDeliveryFor(token)));
+        await().atMost(java.time.Duration.ofSeconds(60)).untilAsserted(() -> {
+            Map<String, Object> row = latestDeliveryFor(token);
+            assertNotNull(row, "no delivery row yet");
+            assertEquals("SENT", row.get("status"), "delivery row: " + row);
+        });
         String eventId = String.valueOf(latestDeliveryFor(token).get("event_id"));
         assertTrue(eventId.startsWith("evt_log-"), "event id derives from the click eventId");
 
@@ -192,14 +195,15 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
     @Test
     void retryableFailuresBackOffThenSentWithStableEventId() throws Exception {
         String token = registerForToken();
-        configureEndpoint(token);
+        configureEndpoint(token, "/hook-retry");
 
-        SCRIPT.addAll(List.of(500, 500)); // third attempt (default 200) succeeds
+        SCRIPTS.get("/hook-retry").addAll(List.of(500, 500)); // third attempt (default 200) succeeds
         String code = createLink(token, "https://example.com/hook-retry");
         assertEquals(302, get("/r/" + code, null).getStatusCode().value());
 
         await().atMost(java.time.Duration.ofSeconds(60)).untilAsserted(() -> {
             Map<String, Object> row = latestDeliveryFor(token);
+            assertNotNull(row, "no delivery row yet");
             assertEquals("SENT", row.get("status"), "third attempt must settle the delivery: " + row);
             assertTrue(((Number) row.get("attempts")).intValue() >= 3, "attempts must count every try: " + row);
         });
@@ -212,14 +216,15 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
     @Test
     void permanent4xxFailsImmediatelyWithoutRetry() throws Exception {
         String token = registerForToken();
-        configureEndpoint(token);
+        configureEndpoint(token, "/hook-400");
 
-        SCRIPT.add(400); // every attempt returns 400
+        SCRIPTS.get("/hook-400").add(400); // every attempt returns 400
         String code = createLink(token, "https://example.com/hook-400");
         assertEquals(302, get("/r/" + code, null).getStatusCode().value());
 
         await().atMost(java.time.Duration.ofSeconds(60)).untilAsserted(() -> {
             Map<String, Object> row = latestDeliveryFor(token);
+            assertNotNull(row, "no delivery row yet");
             assertEquals("FAILED", row.get("status"), "a 400 must fail the delivery on the first try: " + row);
             assertEquals(1, ((Number) row.get("attempts")).intValue(), "no retry after a permanent 4xx: " + row);
         });
@@ -232,14 +237,15 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
     @Test
     void maxAttemptsEndsInFailed() throws Exception {
         String token = registerForToken();
-        configureEndpoint(token);
+        configureEndpoint(token, "/hook-max");
 
-        SCRIPT.add(500); // the last scripted status repeats forever
+        SCRIPTS.get("/hook-max").add(500); // the last scripted status repeats forever
         String code = createLink(token, "https://example.com/hook-dead");
         assertEquals(302, get("/r/" + code, null).getStatusCode().value());
 
         await().atMost(java.time.Duration.ofSeconds(90)).untilAsserted(() -> {
             Map<String, Object> row = latestDeliveryFor(token);
+            assertNotNull(row, "no delivery row yet");
             assertEquals("FAILED", row.get("status"), "exhausting max-attempts must end in FAILED: " + row);
             assertEquals(8, ((Number) row.get("attempts")).intValue(),
                     "attempts must stop at linkforge.webhook.max-attempts: " + row);
@@ -249,7 +255,7 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
     @Test
     void sameEventConsumedTwiceYieldsExactlyOneDelivery() throws Exception {
         String token = registerForToken();
-        configureEndpoint(token);
+        configureEndpoint(token, "/hook-idem");
 
         Long tenantId = tenantIdOf(token);
         String eventId = "evt-" + UUID.randomUUID();
