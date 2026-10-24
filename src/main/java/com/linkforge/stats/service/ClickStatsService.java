@@ -76,6 +76,9 @@ public class ClickStatsService {
                 detail.setUserAgent(event.getUserAgent());
                 detail.setReferer(event.getReferer());
                 detail.setClickedAt(event.getClickedAt() != null ? event.getClickedAt() : LocalDateTime.now());
+                // marker: this row is already counted under the UUID eventId, so the
+                // reconciler (which replays implicit log-{id} rows) must skip it
+                detail.setEventId(event.getEventId());
                 clickLogMapper.insert(detail);
             }
             clickDailyMapper.incrementClick(event.getTenantId(), event.getLinkId(), event.getCode(), date);

@@ -20,4 +20,6 @@ public class ClickLog {
     private String userAgent;
     private String referer;
     private LocalDateTime clickedAt;
+    /** NULL = hot-path sync row (implicit "log-{id}" eventId); set on consumer backfill. */
+    private String eventId;
 }

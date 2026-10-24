@@ -14,3 +14,8 @@ CREATE TABLE lf_outbox (
     UNIQUE KEY uk_outbox_event_id (event_id),
     KEY idx_outbox_pending (status, next_attempt_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- NULL (default): hot-path sync row, counted under the implicit "log-{id}" eventId.
+-- Non-NULL: detail backfilled by the consumer for a UUID outbox event; already
+-- counted, so ClickLogReconciler must skip it.
+ALTER TABLE lf_click_log ADD COLUMN event_id VARCHAR(64) NULL;

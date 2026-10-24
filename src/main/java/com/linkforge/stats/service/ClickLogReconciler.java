@@ -13,10 +13,10 @@ import java.util.List;
 
 /**
  * Safety net for sync-written rows not yet consumed (A7: live delivery belongs to
- * ClickOutboxRelay). Replay uses the same deterministic "log-{id}" eventIds as the
- * outbox path, so rows already counted are skipped and each click counts exactly
- * once. With the sync write off this loop finds nothing — detail rows then come from
- * the consumer itself and the outbox relay is the catch-up path.
+ * ClickOutboxRelay; this loop is skipped entirely while the sync write is off).
+ * Replay uses the same deterministic "log-{id}" eventIds as the outbox path, so rows
+ * already counted are skipped and each click counts exactly once. Detail rows the
+ * consumer backfilled carry their UUID eventId and are excluded by the scan.
  */
 @Slf4j
 @Component
@@ -30,7 +30,7 @@ public class ClickLogReconciler {
     @Scheduled(fixedDelayString = "${linkforge.mq.reconcile-fixed-delay-ms:30000}",
             initialDelayString = "${linkforge.mq.reconcile-initial-delay-ms:15000}")
     public void reconcile() {
-        if (!properties.getMq().isAsyncClickEnabled()) {
+        if (!properties.getMq().isAsyncClickEnabled() || !properties.getMq().isSyncClickEnabled()) {
             return;
         }
         try {
