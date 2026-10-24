@@ -50,7 +50,8 @@ class BloomRedirectIT extends AbstractIntegrationTest {
         String code = createLink(token, "https://example.com/l1-clean");
         assertEquals(302, get("/r/" + code, null).getStatusCode().value());
 
-        stringRedisTemplate.opsForValue().set("linkforge:code:" + code, "javascript:alert(1)");
+        stringRedisTemplate.opsForValue().set("linkforge:code:" + code, "https://example.com/a
+Injected: yes");
         urlLocalCache.invalidate(code); // force the next read onto the poisoned Redis value
 
         assertEquals(410, get("/r/" + code, null).getStatusCode().value(),

@@ -360,14 +360,20 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
                 "203.0.113.78", "Mozilla/5.0", null, LocalDateTime.now());
         assertTrue(clickStatsService.consume(event), "first consume wins");
 
-        double failed0 = counter("linkforge.webhook.enqueue.failed");
+        double failed0 = taggedCounter("linkforge.webhook.enqueue.failed", "duplicate");
         assertDoesNotThrow(() -> webhookService.recordClickDelivery(event), "duplicate must not throw");
-        assertTrue(counter("linkforge.webhook.enqueue.failed") > failed0, "the duplicate must be counted");
+        assertTrue(taggedCounter("linkforge.webhook.enqueue.failed", "duplicate") > failed0,
+                "the duplicate must be counted under its own tag");
         assertEquals(1, deliveryCount("evt_" + eventId), "still exactly one delivery row");
     }
 
     private double counter(String name) {
         var c = meterRegistry.find(name).counter();
+        return c == null ? 0.0 : c.count();
+    }
+
+    private double taggedCounter(String name, String tagValue) {
+        var c = meterRegistry.find(name).tag("reason", tagValue).counter();
         return c == null ? 0.0 : c.count();
     }
 

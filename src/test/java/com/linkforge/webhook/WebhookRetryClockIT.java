@@ -169,8 +169,8 @@ class WebhookRetryClockIT extends AbstractIntegrationTest {
             Map<String, Object> row = jdbc.queryForMap(
                     "SELECT created_at, last_used_at FROM lf_api_key WHERE id = ?", keyId);
             assertNotNull(row.get("last_used_at"), "the used key must have a last_used_at stamp: " + row);
-            assertTrue(((java.sql.Timestamp) row.get("last_used_at"))
-                            .compareTo((java.sql.Timestamp) row.get("created_at")) >= 0,
+            assertTrue(asLocalDateTime(row.get("last_used_at"))
+                            .compareTo(asLocalDateTime(row.get("created_at"))) >= 0,
                     "last_used_at must not predate created_at under JVM/DB skew: " + row);
         });
 
@@ -182,8 +182,8 @@ class WebhookRetryClockIT extends AbstractIntegrationTest {
             Map<String, Object> row = latestDeliveryFor(token);
             assertNotNull(row, "no delivery row yet");
             assertEquals("SENT", row.get("status"), "delivery row: " + row);
-            assertTrue(((java.sql.Timestamp) row.get("sent_at"))
-                            .compareTo((java.sql.Timestamp) row.get("created_at")) >= 0,
+            assertTrue(asLocalDateTime(row.get("sent_at"))
+                            .compareTo(asLocalDateTime(row.get("created_at"))) >= 0,
                     "sent_at must not predate created_at under JVM/DB skew: " + row);
         });
     }
