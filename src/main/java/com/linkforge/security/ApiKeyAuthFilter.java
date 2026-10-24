@@ -48,10 +48,15 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     private final MeterRegistry meterRegistry;
     private final StringRedisTemplate stringRedisTemplate;
 
-    /** Only /api/** inspects API keys; /r/**, actuator and docs never see this filter. */
+    /** /api/** and non-health actuator inspect keys (a presented key there earns a
+     * clean 403 instead of an anonymous 401); /r/** and health never see this filter. */
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !request.getRequestURI().startsWith("/api/");
+        String uri = request.getRequestURI();
+        if (uri.startsWith("/api/")) {
+            return false;
+        }
+        return !uri.startsWith("/actuator/") || uri.equals("/actuator/health");
     }
 
     @Override
