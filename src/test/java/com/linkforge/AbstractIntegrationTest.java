@@ -130,6 +130,10 @@ public abstract class AbstractIntegrationTest {
         return exchange(HttpMethod.GET, uri, null, token);
     }
 
+    protected ResponseEntity<String> head(String uri) {
+        return exchange(HttpMethod.HEAD, uri, null, null);
+    }
+
     protected ResponseEntity<String> delete(String uri, String token) {
         return exchange(HttpMethod.DELETE, uri, null, token);
     }

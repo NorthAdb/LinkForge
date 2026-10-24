@@ -279,6 +279,25 @@ public class ShortLinkService {
      * Records the click synchronously; optionally publishes to MQ when enabled.
      */
     public String resolveAndRecord(String code, HttpServletRequest request) {
+        ResolvedRedirect resolved = resolveTarget(code, request);
+        clickRecordService.recordClick(resolved.link(), request);
+        meterRegistry.counter("linkforge.redirects").increment();
+        return resolved.url();
+    }
+
+    /**
+     * HEAD probe variant: same jumpability semantics (rate limit, 404/410) but records
+     * no click, publishes nothing and does not bump the redirects counter.
+     */
+    public String resolveForProbe(String code, HttpServletRequest request) {
+        return resolveTarget(code, request).url();
+    }
+
+    /**
+     * Shared resolution for GET and HEAD: redirect rate-limit bucket, cache read,
+     * row state/expiry check and cache warm-up, one DB read for both callers.
+     */
+    private ResolvedRedirect resolveTarget(String code, HttpServletRequest request) {
         LinkForgeProperties.RateLimit rl = properties.getRateLimit();
         String rlKey = rl.getKeyPrefix() + "redirect:ip:" + ClientIps.resolve(request, rl.isTrustXff());
         if (!rateLimiter.tryAcquire(rlKey, rl.getRedirectMax(), rl.getRedirectWindowSeconds())) {
@@ -303,9 +322,10 @@ public class ShortLinkService {
         if (cached == null || cached.isBlank()) {
             cacheUrl(code, originalUrl);
         }
-        clickRecordService.recordClick(link, request);
-        meterRegistry.counter("linkforge.redirects").increment();
-        return originalUrl;
+        return new ResolvedRedirect(link, originalUrl);
+    }
+
+    private record ResolvedRedirect(ShortLink link, String url) {
     }
 
     private ShortLink getOwnedLink(String code) {

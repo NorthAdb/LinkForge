@@ -119,7 +119,7 @@ curl -s -X POST http://localhost:8080/api/links \
   -H 'Content-Type: application/json' \
   -d '{"originalUrl":"https://example.com","title":"demo"}'
 
-# 302 跳转（把 CODE 换成返回的 code；用 GET，`-I` 发 HEAD 会被安全链按未鉴权拒绝 403）
+# 302 跳转（把 CODE 换成返回的 code；`curl -I` 发 HEAD 也可探测：同 GET 语义返回 302/404/410，但不产生点击记录）
 curl -s -D - -o /dev/null http://localhost:8080/r/CODE
 ```
 
@@ -156,6 +156,7 @@ bash scripts/mq-drill.sh
 | GET | `/api/links/{code}/clicks?page=&size=` | 点击明细（仅链主）：时间/IP/UA/Referer，新到旧分页 |
 | GET | `/api/links/export` | 导出本人全部短链 CSV（UTF-8 BOM，逗号/引号转义） |
 | GET | `/r/{code}` | 302 跳转；Redis 缓存优先，未命中回源 MySQL；同步写 `lf_click_log` |
+| HEAD | `/r/{code}` | 可跳性探测：302（带 Location）/404/410 与 GET 同档，但**不写点击明细、不发 MQ、不计 UV**（共用按 IP 跳转限流） |
 
 **错误码语义（已写死）**：跳转遇 **禁用或不存在 → 404**，**过期 → 410**；管理接口的越权访问统一 **404**（不泄露他人短码存在性）；未携带/无效凭证 **401**；注册租户名冲突 **409**、自定义短码被占用 **409**；触发限流 **429**。
 
