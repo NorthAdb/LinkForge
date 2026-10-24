@@ -154,6 +154,7 @@ bash scripts/outbox-drill.sh  # sync 关 + 断 MQ → 恢复追平（A7 硬验�
 | POST | `/api/links/{code}/enable` | 重新启用（过期时间不受影响） |
 | DELETE | `/api/links/{code}` | 逻辑删除；**短码永久保留不可复用**（uk_code） |
 | GET | `/api/links/{code}/stats?days=7` | 点击统计（仅链主）：总量、**精确 UV**（按 IP 去重，来自同步明细）+ 按天序列，days 1..90 |
+| GET | `/api/links/{code}/stats/breakdown?dim=device\|referer_host&days=7` | **维度分布**（仅链主）：设备（mobile/desktop/tablet/bot/unknown）与来源 host（归一化，空→direct）各桶点击数降序，days 1..90；维度口径是点击数**不是 UV** |
 | GET | `/api/links/{code}/clicks?page=&size=` | 点击明细（仅链主）：时间/IP/UA/Referer，新到旧分页 |
 | GET | `/api/links/export` | 导出本人全部短链 CSV（UTF-8 BOM，逗号/引号转义） |
 | GET | `/r/{code}` | 302 跳转；Redis 缓存优先，未命中回源 MySQL；同步写 `lf_click_log` |
@@ -191,6 +192,18 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 
 MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.click.dlx` / `linkforge.click.dlq`）。
 
+**投递可靠性（A7 审计 S1/N3-N5 落地）**：publish 走 **correlated confirm + mandatory returns**，broker ack 后才标 SENT；nack / 路由不可达 / 确认超时（5s）一律退避重试。超过 `LINKFORGE_MQ_RELAY_MAX_ATTEMPTS`（默认 30）的行标 **FAILED**（指标 `linkforge.outbox.failed`，手工重放：`UPDATE lf_outbox SET status='PENDING', next_attempt_at=NULL WHERE status='FAILED'`）。多实例 Relay 无 SKIP LOCKED，可能重复投递——**at-least-once**，消费端 eventId 幂等兜底。SENT 行当前永久保留（自动清理未实现，登记为运维项；可用 `DELETE ... WHERE status='SENT' AND sent_at < NOW() - INTERVAL 30 DAY` 定期清理）。
+
+## 维度分析（A8 预聚合）
+
+**只做消费路径**：`consume` 在既有幂等事务内把 UA / Referer 解析进 `lf_click_dim_daily`（同事务＝同 eventId 幂等，重放不双计），302 热路径零新增计算。
+
+- **设备桶**（`dim=device`）：轻量确定性规则（无第三方库）——bot 优先（bot/spider/crawler/curl/wget/python-requests/java 等），次 tablet（iPad / Android 无 Mobile），次 mobile（iPhone / Android+Mobile / 含 mobile），次 desktop（Windows/Mac/X11/Linux），解析不出 → `unknown`
+- **来源桶**（`dim=referer_host`）：Referer 归一化 host（小写、去 `www.`、超长截断 128），缺失/非法 → `direct`
+- **API**：`GET /api/links/{code}/stats/breakdown?dim=device|referer_host&days=1..90`（仅链主，非法 dim 400）；控制台统计区同步展示设备/来源两行
+- **口径**：维度计数是**点击数**，与 UV（按 IP 去重）不同——一次设备点击 ≠ 一个访客
+- 历史明细（A8 上线前）不做回填；新点击自消费起进维度表
+
 **存量库迁移（Flyway，深化 A6）**：schema 已版本化在 `src/main/resources/db/migration`（`V1__baseline_schema.sql`），由应用启动时自动迁移（`spring.flyway.baseline-on-migrate=true`）：
 
 - **全新数据卷**：首次启动应用（或跑 `scripts/migrate.sh`）由 Flyway 建全部表；Compose 的 MySQL 不再挂载 initdb 脚本，容器 healthy 后直接起应用即可。
@@ -212,7 +225,7 @@ MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.c
 | 类别 | 能力 | 说明 |
 |------|------|------|
 | **核心**（主路径 Demo 只依赖这些） | 注册/登录（JWT）、创建短链、`/r/{code}` 302 跳转、stats 统计、限流、同事务 Outbox + Relay 投递 + 幂等消费 + 断链追平、CI / bench | 冒烟（smoke.sh）与断链演练（mq-drill.sh / outbox-drill.sh）覆盖的即主路径 |
-| 可选（演示可用，面试可讲，主路径不强制） | 自定义短码、CSV 导出、Swagger UI、静态控制台、精确 UV / 点击明细 | R2–R4 提前落地，均有集成测试与隔离验证；prod profile 下文档与控制台默认关闭 |
+| 可选（演示可用，面试可讲，主路径不强制） | 自定义短码、CSV 导出、Swagger UI、静态控制台、精确 UV / 点击明细、**维度分布（设备/来源）** | R2–R4 与深化 A8 落地，均有集成测试与隔离验证；prod profile 下文档与控制台默认关闭 |
 
 ## 配置要点
 
@@ -220,7 +233,7 @@ MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.c
 
 - Schema 版本化迁移用 **Flyway**（`spring.flyway.*`，dev/test/prod 同生效）：空库自动跑 `db/migration`；存量库自动 baseline，详见上方「存量库迁移」
 
-- `linkforge.mq.async-click-enabled` 控制是否走 Outbox 管道；`ClickOutboxRelay` 用 `LINKFORGE_MQ_RELAY_ENABLED` / `_BATCH_SIZE`（默认 100）/ `_FIXED_DELAY_MS`（默认 2000）/ `_INITIAL_DELAY_MS`（默认 3000）
+- `linkforge.mq.async-click-enabled` 控制是否走 Outbox 管道；`ClickOutboxRelay` 用 `LINKFORGE_MQ_RELAY_ENABLED` / `_BATCH_SIZE`（默认 100）/ `_FIXED_DELAY_MS`（默认 2000）/ `_INITIAL_DELAY_MS`（默认 3000）/ `_MAX_ATTEMPTS`（默认 30，超过标 FAILED）
 - `LINKFORGE_MQ_RECONCILE_*` 旧对账器节奏（仅 sync 开启时运行，见「点击统计管道」）
 - `LINKFORGE_REGISTER_MAX` / `LINKFORGE_REGISTER_WINDOW_SECONDS` 注册限流阈值（默认 5 / 600 秒）
 - `LINKFORGE_CREATE_RATE_MAX` / `LINKFORGE_CREATE_RATE_WINDOW_SECONDS` 创建限流（默认 30 / 60 秒，按用户）

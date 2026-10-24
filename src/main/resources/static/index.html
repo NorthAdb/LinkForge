@@ -151,11 +151,19 @@ async function loadLinks() {
 function turnPage(d) { page = Math.max(1, page + d); loadLinks(); }
 
 async function showStats(code) {
-  const r = await api('GET', `/api/links/${code}/stats?days=7`);
   const el = $('st-' + code);
+  el.textContent = '统计加载中…';
+  const [r, dev, ref] = await Promise.all([
+    api('GET', `/api/links/${code}/stats?days=7`),
+    api('GET', `/api/links/${code}/stats/breakdown?dim=device&days=7`),
+    api('GET', `/api/links/${code}/stats/breakdown?dim=referer_host&days=7`)
+  ]);
   if (r.error) { el.textContent = '统计加载失败'; return; }
   const days = r.data.daily.slice(-7).map(d => `${d.date.slice(5)}:${d.clicks}/UV${d.uv}`).join('  ');
-  el.textContent = `总点击 ${r.data.totalClicks} · 总 UV ${r.data.totalUv} | ${days}`;
+  const fmt = b => b.error ? '—' : b.data.slice(0, 5).map(x => `${esc(x.dimValue)} ${x.clicks}`).join(' · ');
+  el.innerHTML = `总点击 ${r.data.totalClicks} · 总 UV ${r.data.totalUv} | ${days}`
+    + `<br>设备：${fmt(dev)}`
+    + `<br>来源：${fmt(ref)}`;
 }
 async function toggle(code, isActive) {
   const r = await api('POST', `/api/links/${code}/${isActive ? 'disable' : 'enable'}`);

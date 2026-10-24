@@ -6,14 +6,17 @@ import com.linkforge.common.result.PageResponse;
 import com.linkforge.stats.dto.ClickDetail;
 import com.linkforge.stats.dto.DailyClicks;
 import com.linkforge.stats.dto.DailyUv;
+import com.linkforge.stats.dto.DimBreakdown;
 import com.linkforge.stats.dto.LinkStatsResponse;
 import com.linkforge.stats.entity.ClickDaily;
 import com.linkforge.stats.entity.ClickLog;
 import com.linkforge.stats.entity.ConsumedEvent;
 import com.linkforge.stats.mapper.ClickDailyMapper;
+import com.linkforge.stats.mapper.ClickDimDailyMapper;
 import com.linkforge.stats.mapper.ClickLogMapper;
 import com.linkforge.stats.mapper.ConsumedEventMapper;
 import com.linkforge.stats.mq.ClickEvent;
+import com.linkforge.stats.support.ClickDimensions;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -31,15 +34,18 @@ public class ClickStatsService {
 
     private final ConsumedEventMapper consumedEventMapper;
     private final ClickDailyMapper clickDailyMapper;
+    private final ClickDimDailyMapper clickDimDailyMapper;
     private final ClickLogMapper clickLogMapper;
     private final TransactionTemplate dedupTx;
 
     public ClickStatsService(ConsumedEventMapper consumedEventMapper,
                              ClickDailyMapper clickDailyMapper,
+                             ClickDimDailyMapper clickDimDailyMapper,
                              ClickLogMapper clickLogMapper,
                              PlatformTransactionManager transactionManager) {
         this.consumedEventMapper = consumedEventMapper;
         this.clickDailyMapper = clickDailyMapper;
+        this.clickDimDailyMapper = clickDimDailyMapper;
         this.clickLogMapper = clickLogMapper;
         this.dedupTx = new TransactionTemplate(transactionManager);
     }
@@ -82,8 +88,21 @@ public class ClickStatsService {
                 clickLogMapper.insert(detail);
             }
             clickDailyMapper.incrementClick(event.getTenantId(), event.getLinkId(), event.getCode(), date);
+            // A8: dimension buckets share the dedup transaction, so one eventId can
+            // never double count a bucket; parsing never throws (see ClickDimensions)
+            for (ClickDimensions.Dimension dim : ClickDimensions.of(event.getUserAgent(), event.getReferer())) {
+                clickDimDailyMapper.incrementClick(event.getTenantId(), event.getLinkId(),
+                        date, dim.type(), dim.value());
+            }
             return true;
         }));
+    }
+
+    /** Per-dimension_value click counts for the window, descending; owner check happens at the controller. */
+    public List<DimBreakdown> breakdown(long linkId, String dimType, int days) {
+        LocalDate today = LocalDate.now();
+        LocalDate from = today.minusDays(days - 1L);
+        return clickDimDailyMapper.selectBreakdown(linkId, dimType, from, today);
     }
 
     /**

@@ -2,7 +2,7 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：开工 `68cbcc6` → 收工 `18f918e`（A7 代码终态＝此合并；docs 收口提交紧随，`git log -2` 可见），2026-10-24。
+> **当前 main tip**：`b8d4b63`（2026-10-24，深化 A7 收口提交，`git rev-parse HEAD` 可对；代码终态＝合并 `18f918e`）。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
 > 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6 均已交付并通过审计；本轮为**深化 A7 Transactional Outbox**（点击管道升级 + 关 sync 断链追平演练），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A7-outbox-handoff.md`。
 
@@ -21,6 +21,7 @@
 | 深化 | A2 保留字 / A3 HEAD 探测 / B12 OpenAPI·文档卫生 | feat/deepen-a2-a3-b12 | ✅ 完成（见「深化 A2/A3/B12」） |
 | 深化 | A6 Flyway 版本化迁移 | feat/deepen-a6-flyway | ✅ 完成（见「深化 A6 Flyway」） |
 | 深化 | A7 Transactional Outbox | feat/deepen-a7-outbox | ✅ 完成（见「深化 A7 Transactional Outbox」） |
+| 深化 | A8 维度预聚合看板 | feat/deepen-a8-dimensions | ✅ 完成（见「深化 A8 维度预聚合」） |
 | P4 | 工程化（CI/bench/隔离/收紧） | feat/p4-engineering | ✅ 完成（见「P4 工程化」） |
 
 ## 环境与工具事实（审计人须知）
@@ -522,7 +523,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 |---|------|------|
 | A7-1 | V2 建 outbox 表、migrate 绿 | CI 全量（空库 V1+V2）；实机：演练实例首启自动 V2、本机存量库 3506=3506 等式保持 |
 | A7-2 | 热路径同事务写 outbox；跳转不因 MQ 失败失败 | IT `sameTransactionWritesDetailAndPendingOutboxWithRelayOff`（relay 关：3×302、明细 3、PENDING 3）；实机断 MQ 段 10×302 |
-| A7-3 | Relay PENDING→SENT、失败可重试 | IT `brokerOutageDefersWithBackoffThenDelivers`（真停容器：attempts≥1 仍 PENDING，恢复后 SENT+聚合）；drill 恢复段 SENT=10 |
+| A7-3 | Relay PENDING→SENT、失败可重试 | 实机 `outbox-drill.sh` 断链段：SQL `attempts≥1` + relay deferred 日志行数≥1、行保持 PENDING；恢复段 SENT=10（该段不进共享 DB 的 IT，见「改动清单·IT」栏原因）；IT `OutboxDrillIT` 两例证投递与收敛 |
 | A7-4 | 消费幂等 + DLQ 不回归 | `MqEndToEndIT`/`ClickIdempotencyIT`/`StatsApiIT` 全绿（CI）；旧 `mq-drill.sh` 实机 **DRILL OK**（收敛 25） |
 | A7-5 | **sync=false 断 MQ 恢复后可追平** | 实机 `bash scripts/outbox-drill.sh` → **OUTBOX DRILL OK**（PASS outage: 10×302/PENDING=10/热路径明细=0；PASS recovery: aggregate=10, consumer-written detail=10, SENT=10, UV=1）；IT `syncOffBrokerDownStill302AndConvergesWithDetailAndUv` |
 | A7-6 | 关 sync 明细/UV 语义文档化且行为一致 | README 管道节「关 sync 后的语义」；drill/IT 断言明细=10、UV=1 与文档一致 |
@@ -542,6 +543,69 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 - **实机演练抓到一处真实缺陷（已修）**：首跑恢复段 aggregate=20（10 点击双倍）。根因＝消费端回填的明细行没有 `log-{id}` consumed 事件，旧 Reconciler 把它们当未追平行、以全新 `log-{新行id}` 重放。双修：回填行打 `event_id` 标记（V2 ALTER）+ 扫描排除 + Reconciler 加 sync 门禁。复跑 OUTBOX DRILL OK。这坐实了 D-A7-5 的「sync 关时旧对账器必须让位」不是文档洁癖而是正确性要求。
 - 开发期本地库操作（如实记录）：V2 在演练首启按旧 checksum 应用过一次，修复 V2 后本地 `DELETE flyway_schema_history v2 + DROP lf_outbox` 重放（**V2 未推送前**的操作，远端/CI 无此历史）；双计脏数据按 code 定向清除后等式还原。
 - 演练脚本坑：`. ./.env` 不导出时，java 继承到宿主全局环境里一个 13 字符的旧 `JWT_SECRET` → WeakKeyException 启动失败；脚本改 `set -a` 导出（本脚本会亲自拉起应用，与只 curl 的旧脚本不同）。
+
+---
+
+## 深化 A8 维度预聚合（feat/deepen-a8-dimensions，发车基线 main@b8d4b63，2026-10-24）
+
+范围：交接单 `记录追踪/05-阶段交接/LinkForge-phase-A8-dimensions-handoff.md`。设备/来源维度预聚合 + breakdown API + 控制台展示，**不在 302 热路径加任何计算**；开头消化 A7 审计 S1/N1–N6。范围外（Geo/ES/ClickHouse/A9/A10/外网 GeoIP/UV 算法/全量回填）未动。
+
+### A7 审计项处置（对照交接单 §0.1）
+
+| # | 处置 | 落点 |
+|---|------|------|
+| **S1** | **完整落地**：correlated confirm + mandatory returns（dev/test yml 全开）；`publish()` 阻塞至 broker ack（超时 5s），nack/路由不可达/超时抛异常 → Relay 保持 PENDING 退避重试；ack 后才 markSent | `RabbitClickEventPublisher` 重写；回归实证＝confirm 开启下 SMOKE OK + **OUTBOX DRILL OK**（投递链路无回归） |
+| N1 | A7-3 证据行改指 drill 断链段与现存 IT 名 | progress A7 表已改 |
+| N2 | 文首 tip 钉精确 `b8d4b63` | progress 文首已改 |
+| N3 | **实现**：`relay-max-attempts`（默认 30，`LINKFORGE_MQ_RELAY_MAX_ATTEMPTS`）超限标 FAILED + 指标 `linkforge.outbox.failed`；README 写明手工重放 SQL | `ClickOutboxRelay` / `OutboxMapper.markFailed` |
+| N4 | **文档登记**：多实例 Relay at-least-once（无 SKIP LOCKED），消费端 eventId 幂等兜底 | README 管道节 |
+| N5 | **登记**：SENT 行永久保留，自动清理未实现（运维项，README 附定期清理 SQL） | README 管道节 |
+| N6 | publisher 接口注释去 RocketMQ 字样，改中性「可替换实现 + 必须确认后返回」 | `ClickEventPublisher` |
+
+### 决策记录（D-A8-1…8）
+
+| # | 决策 | 理由 |
+|---|------|------|
+| D-A8-1 | 首版维度＝`device`（mobile/desktop/tablet/bot/unknown）+ `referer_host`（归一化 host，空→direct）；os/browser 不做 | 交接单最小闭环；加分项在验收满足前不碰（Laziness） |
+| D-A8-2 | 解析只在消费成功路径（`consume` 幂等事务内）；热路径 `recordClick` 零改动 | 302 吞吐不受维度影响 |
+| D-A8-3 | `lf_click_dim_daily`：UK `(link_id, stat_date, dim_type, dim_value)` 计数表；upsert 用 `ON DUPLICATE KEY UPDATE clicks=clicks+1`（计数器场景，与决策 #11 否决的「重复探测」不同用例，交接单 §2.3.1 明示） | V3 迁移；重放不双计（与 `lf_consumed_event` 同事务） |
+| D-A8-4 | `GET /api/links/{code}/stats/breakdown?dim=device\|referer_host&days=1..90`，仅链主（复用 `detail` 404 语义），非法 dim 400 | 与既有 stats 同鉴权口径 |
+| D-A8-5 | Geo 本阶段不做 | 交接单默认延期 |
+| D-A8-6 | UA 解析＝**自写轻量确定性规则**（零依赖）：bot 优先（含 curl/wget/python-requests/java/okhttp 等 14 词）→ tablet → mobile → desktop → unknown；解析永不抛（null/垃圾串→unknown） | 桶粗但可控可测；yauaa/uap 引入大依赖不匹配项目体量；规则全部单测钉死 |
+| D-A8-7 | 历史明细不回填；新点击自消费起进维度表 | 交接单推荐；progress/README 双登记 |
+| D-A8-8 | 控制台 `showStats` 并行拉 stats+两维 breakdown，统计区渲染「设备/来源」两行（Top5 文本条） | 无图表库工程 |
+
+### 改动清单
+
+| 单元 | 内容 |
+|------|------|
+| V3 | `V3__click_dim_daily.sql` 建维度表；存量库 migrate 实测即得（本机启动日志 `Migrating schema … to version "3 - click dim daily"`）；V1/V2 未动 |
+| 解析 | `stats/support/ClickDimensions`（纯函数，`device()/refererHost()/of()`）；单测 7 例钉死桶规则（bot 优先、www 剥离、垃圾输入 direct/unknown、超长截断 128） |
+| 消费 | `ClickStatsService.consume` 幂等事务内追加维度 upsert；`ClickDimDailyMapper`（incrementClick / selectBreakdown） |
+| API | `StatsController.breakdown`（dim 白名单 400、days 1..90、链主 404）；`DimBreakdown` DTO |
+| 控制台 | `static/index.html` 统计区加设备/来源两行（esc 转义） |
+| 清理扩展 | `StatsApiIT`/`ClickIdempotencyIT` 合成数据清理扩到 `lf_click_dim_daily`（按 linkId） |
+| S1 等 | 见上表 |
+
+### 验收勾选（对照交接单）
+
+| # | 标准 | 证据 |
+|---|------|------|
+| A8-1 | V3 建表、migrate 绿、V1/V2 未改 | 实机启动日志（上表 V3 行）；CI 空库 V1→V2→V3 全跑 |
+| A8-2 | 新点击消费后入维度、eventId 幂等 | IT `DimBreakdownIT.breakdownBucketsDeviceAndRefererHost`（5 类请求 → 桶值精确断言）；`ClickIdempotencyIT` 回归（重放不双计，清理扩展后仍绿） |
+| A8-3 | breakdown 返回合理分桶、鉴权正确 | 实机：device=`bot 3/mobile 2/desktop 1`、referer_host=`direct 4/example.com 1/news.ycombinator.com 1`（与真实请求逐一吻合）；非链主 404、无 token 401、`dim=os` 400；IT 同断言 |
+| A8-4 | 热路径零新计算、解析不炸消费 | `recordClick` 无改动（diff 可查）；`ClickDimensions` 永不抛（单测 null/控制字符/垃圾串） |
+| A8-5 | 控制台可见两类维度 | 统计按钮渲染「设备/来源」两行（`showStats` 三路并行 fetch；实机同源接口手验） |
+| A8-6 | README/progress/OpenAPI 完整、D-A8 表齐 | 本节 + README「维度分析」节 + 接口表新行；springdoc 自动收录新 endpoint |
+| A8-7 | A7 N1+N2 已做、S1 已做、N3–N5 登记 | 见「A7 审计项处置」表 |
+| A8-8 | verify 全绿 + CI 绿 | 本机 `mvn -B test` → **30 单测绿**（+7）；CI 期望 **88 = 30 单测 + 58 IT**（+DimBreakdownIT 2），链接见下收口 |
+| A8-9 | 范围干净 | diff 复查：无 ES/外网 Geo/A9/A10；唯一新依赖＝无 |
+
+### 验证命令与输出摘要（本机，2026-10-24）
+
+- `D:/tools/apache-maven-3.9.9/bin/mvn -B test` → `Tests run: 30, Failures: 0, Errors: 0` + BUILD SUCCESS
+- 实机（A8 jar + 存量库自动 V3）：注册/建链（`dimdemo24388`）→ 6 次带不同 UA/Referer 的跳转 → `totalClicks=6` → breakdown 输出见 A8-3 行（桶与请求逐一吻合）；`dim=os` → 400；无 token → 401
+- 回归：`bash scripts/smoke.sh` → **SMOKE OK**；`bash scripts/outbox-drill.sh`（confirm 开启下）→ **OUTBOX DRILL OK**（PASS outage: attempts=3/deferred 7 行；PASS recovery: aggregate=10, detail=10, SENT=10, UV=1）
 
 ---
 
