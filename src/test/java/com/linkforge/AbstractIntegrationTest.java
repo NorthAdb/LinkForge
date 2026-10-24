@@ -36,7 +36,11 @@ public abstract class AbstractIntegrationTest {
             .withPassword("linkforge_pass")
             .withUrlParam("allowPublicKeyRetrieval", "true")
             .withUrlParam("useSSL", "false")
-            .withCommand("--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci")
+            // Every cached Spring context holds its own Hikari pool against this shared
+            // container; the default max_connections=151 went into "Too many connections"
+            // once the suite grew one more context (A9 BloomRedirectIT).
+            .withCommand("--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci",
+                    "--max-connections=500")
             .withStartupTimeout(java.time.Duration.ofMinutes(4));
 
     protected static final GenericContainer<?> REDIS = new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
