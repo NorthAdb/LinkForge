@@ -370,6 +370,11 @@ public class ShortLinkService {
             throw new BizException(410, "short link expired");
         }
 
+        // The row is authoritative for "is this target broken": a stale L1/L2 entry
+        // must never mask a dirty/poisoned row (legacy-dirty contract, LinkLifecycleIT).
+        if (!LinkValidations.isRenderableUrl(link.getOriginalUrl())) {
+            throw new BizException(410, "short link target is invalid");
+        }
         String originalUrl = cached != null && !cached.isBlank() ? cached : link.getOriginalUrl();
         if (!LinkValidations.isRenderableUrl(originalUrl)) {
             throw new BizException(410, "short link target is invalid");
