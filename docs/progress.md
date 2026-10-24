@@ -2,7 +2,7 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：`9dd60dfb24bf3204b47b98230b2e66166e43b09e`（2026-10-24，深化 A8 终态＝合并 `2ef4e01` + docs 收口 `9dd60df`；A8 审计 N1 指出的钉点漂移已在本轮开工提交补钉，`git rev-parse HEAD` 可对）。
+> **当前 main tip**：深化 A9 终态＝合并 `d6c97e0`（feat/deepen-a9-bloom 四单元 + 共享测试容器连接上限修复）+ docs 收口（本节末尾钉精确 SHA）；A8 终态 `9dd60df` 的钉点漂移已在本轮开工提交 `f6b7dbe` 补钉（A8-N1）。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
 > 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6、A7、A8 均已交付并通过审计（A8 审计 PASS_WITH_NITS @ `9dd60df`）；本轮为**深化 A9 Bloom 防非法短码穿透**（跳转热路径 DB 前短路），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A9-bloom-handoff.md`。
 
@@ -662,7 +662,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | A9-5 | 未与长链去重混淆；status 不进 Bloom | 组件只收 code 一个维度（代码可查）；README 与 D-A9-1/D-A9-8 声明 |
 | A9-6 | A8-N1+N2 已做；N3 已做 | 开工提交 `f6b7dbe`（见「A8 审计项处置」表） |
 | A9-7 | README/progress 完整；D-A9 决策表齐 | 本节 + README 五处同步 |
-| A9-8 | verify 全绿 + CI 绿 | 本机 `mvn -B test` → **35 单测绿**（+5）；CI 全量例数与 run 链接收口时按实补齐（分支 run、main 合并 run） |
+| A9-8 | verify 全绿 + CI 绿 | 本机 `mvn -B test` → **35 单测绿**（+5）；CI 全量 **95 例（35 单测 + 60 IT）0 失败**：分支 run [40088373910](https://github.com/NorthAdb/LinkForge/actions/runs/40088373910) ✅、main 合并 run [40088526167](https://github.com/NorthAdb/LinkForge/actions/runs/40088526167) ✅ |
 | A9-9 | 范围干净 | diff 复查：无 A10/Caffeine/空值缓存主路径/ES/长链去重 Bloom；唯一新依赖 guava；无新 migration（Flyway 仅 validate）；UV/Outbox/维度语义未动；`recordClick` 未改 |
 
 ### 验证命令与输出摘要（本机，2026-10-24）
@@ -675,6 +675,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 ### 执行记录
 
 - 开工提交先消化 A8 三条 nit（含 N3 从「可书面延期」升级为直接补断言），再按单元推进：核心（Guava+组件+接线，编译绿）→ 测试（本地 35 绿）→ 实机四态手验 + 指标核对 → 文档。
+- **分支 CI 一红一绿**：首跑 40088052132 在 `RegisterRateLimitIT` 上下文加载失败（`Too many connections`）——共享 Testcontainers MySQL 默认 `max_connections=151`，套件每多一个独立上下文（本轮新增 `BloomRedirectIT`）就多一份按需 Hikari 池，A8 末已贴边，本轮被推过线。修法＝共享容器加 `--max-connections=500`（一行，不动池语义），重跑 40088373910 绿。新测试本身全绿（BloomRedirectIT 2/2 首跑即过）。**教训入册**：与「跨上下文竞态」同族——共享 Testcontainers MySQL 是套件的公共容量池，新增 IT 上下文前要算连接预算。
 - 实机重启时旧后台启动任务随 kill 退出（预期）；A9 jar 启动一次成功，无回滚无重试。
 
 ### 下一步（不混入本轮）
