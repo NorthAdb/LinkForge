@@ -2,7 +2,7 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：开工 `0189e2a`（v1.0.0 发布合并，2026-10-24）；本轮收工 SHA 见文末「深化 A2/A3/B12」小节。
+> **当前 main tip**：开工 `0189e2a` → 收工合并 `2d3e070`（+本收口提交）；2026-10-24，本轮为深化 A2/A3/B12。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
 > 本轮边界：P0–P5 及 v1.0.0 已完整交付并通过审计；本轮为**深化阶段 A2/A3/B12**（保留字补齐、HEAD 探测、OpenAPI/文档卫生），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A2A3B12-handoff.md`。
 
@@ -415,7 +415,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 
 - `D:/tools/apache-maven-3.9.9/bin/mvn -B verify -DskipITs` → `Tests run: 16, Failures: 0, Errors: 0, Skipped: 0` + `BUILD SUCCESS`；`target/classes/META-INF/build-info.properties` 生成（`build.version=1.0.0`）
 - 实机（停旧进程解锁 jar → 新 jar `target/linkforge-1.0.0.jar` 启动，compose 三容器 healthy）：A2/A3/B12 逐项 curl 与 SQL 见上表；`bash scripts/smoke.sh` → **SMOKE OK**（8 PASS）
-- CI（全量 68 例 = 63 旧 + 5 新：`RedirectHeadIT` 4 + `OpenApiInfoIT` 1；`CustomCodeIT`/`LinkValidationsTest` 为既有用例加断言不增例数）：见下方收口记录
+- CI（全量 68 例 = 16 单测 + 52 IT，0 失败）：分支首跑抓到本阶段唯一缺陷——`RedirectHeadIT` 在 GET 后同步断言异步聚合值（`totalClicks` 读 `lf_click_daily`，消费延迟致 0），修为断言同步明细端点 `/clicks`（`e49acc8`）；终态分支 run [40072588187](https://github.com/NorthAdb/LinkForge/actions/runs/40072588187) ✅、main run [40072759677](https://github.com/NorthAdb/LinkForge/actions/runs/40072759677) ✅（`Tests run: 52` IT + `Tests run: 16` 单测）
 
 ---
 
