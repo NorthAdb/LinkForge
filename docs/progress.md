@@ -16,6 +16,7 @@
 | 追加 | R2 生命周期+自定义短码 | feat/rev2-lifecycle | ✅ 完成（见「追加迭代」） |
 | 追加 | R3 点击明细/UV/CSV | feat/rev3-analytics | ✅ 完成（见「追加迭代」） |
 | 追加 | R4 可观测/OpenAPI/控制台 | feat/rev4-polish | ✅ 完成（见「追加迭代」） |
+| P4 | 工程化（CI/bench/隔离/收紧） | feat/p4-engineering | ✅ 完成（见「P4 工程化」） |
 
 ## 环境与工具事实（审计人须知）
 
@@ -290,11 +291,20 @@ docker compose start rabbitmq && sleep 10 && curl -s http://localhost:8080/actua
 - 对账等式持续成立（R4 冒烟后实测 detail=188 == aggregate=188）
 - 全套测试 **41/41 绿**（Docker JDK17）；冒烟 SMOKE OK；应用运行中
 
-### 审计材料（R2–R4 后更新）
+### 审计材料（P4 后更新）
 
-- 仓库：https://github.com/NorthAdb/LinkForge（分支 main，**审计修复后终态 commit：7e8b9fe**，测试 46/46 绿；此前分层：103a199 → 447dfdb → c1ecd46）
-- 审计分层：P0–P3 首轮终态 103a199 → 自审修复终态 447dfdb → 追加迭代 R2/R3/R4（9307a19 / 391e5f2 / c1ecd46）。审计人可任选基线层次核对；R2 的自定义短码属 P5 项提前实施（运营者 2026-10-24 授权），请按 P5 验收口径（字符集/保留字/唯一冲突）审。
-- 复现命令不变（见上），全量测试期望 **46/46 绿**（7e8b9fe 起）；`bash scripts/mq-drill.sh` 期望 DRILL OK；对账 SQL 期望相等。
+- 仓库：https://github.com/NorthAdb/LinkForge（分支 main，**P4 终态合并：880f0a6**）
+- **CI**：main 最新 run **success** — https://github.com/NorthAdb/LinkForge/actions/runs/40056206371（ubuntu-latest，62+ 测试全绿：16 单测 + 47 集成）
+- 审计分层：103a199（P0–P3）→ 447dfdb（自审）→ c1ecd46（R2–R4）→ 7e8b9fe（hotfix）→ **880f0a6（P4）**
+- 复跑清单（P4 版）：
+  1. 本机任何有 Docker 的 Linux：`mvn -B verify`（Testcontainers 全量，参照 README「Linux 复现」或直接看 CI）
+  2. Windows 开发机（Docker Desktop 29 与 Testcontainers 不兼容，见 P4 执行记录）：`mvn -B verify -DskipITs`（16 单测绿）
+  3. `bash scripts/smoke.sh` → SMOKE OK；`bash scripts/mq-drill.sh` → DRILL OK（若刚跑过压测先 `rabbitmqctl purge_queue linkforge.click.queue` 并等消费端清空）
+  4. `bash scripts/bench.sh` → 复现 bench.md（约 5 分钟）
+  5. 对账 SQL：`SELECT (SELECT COUNT(*) FROM lf_click_log) detail, (SELECT IFNULL(SUM(clicks),0) FROM lf_click_daily) aggregate;` — P4 收尾时已 TRUNCATE 并由 Reconciler 全量重建（本机速率 ~1.7 行/s，从 3460 行起收敛约 35 分钟；若暂不相等，等待后复查即闭合；机制见前文多次实证）
+- 文档入口：README「架构」节（mermaid + 时序 + Demo 五步 + Linux）；docs/bench.md（压测）；docs/resume.md（简历条目）
+
+**P4 完成，待实习JAVA_AI 审计后再定 P5 收尾。**
 
 自审中评估后**不改**的两点（记录供审计人参断）：
 - 跳转路径每次仍读 DB 行做禁用/过期判定（缓存只省 URL 字段）：这是**主动选择**——只信缓存会让禁用/过期在 TTL 内放行 302，正确性优先于该读优化；P4 压测时再量化。（审计 L8 同判，留 P4 bench 量化。）
@@ -364,7 +374,7 @@ docker compose start rabbitmq && sleep 10 && curl -s http://localhost:8080/actua
 - 压测副产物：no-sync 场景 4150 次跳转仍异步发布 UUID 事件，Windows 卷消费速率 ~1.7 条/s 造成队列积压 8 千条，把 mq-drill 基线淹没——purge 队列 + 等消费端清空在途消息后 DRILL OK。这本身量化了「消费端吞吐受存储提交约束」的事实。
 - 对账基线重置：压测产生的历史数据（UUID 事件已消费 + 明细表）造成 aggregate 虚高（4019 vs 3420），已 TRUNCATE 两表由 Reconciler 从 3420 条明细全量重建（本机速率 ~1.7 行/s，收敛需约 35 分钟；机制此前已多次实证：104=104、188=188、drill 25=25）。终态见「审计材料」的复查说明。
 
-### 审计材料（更新）
+### 审计材料（hotfix 轮，历史存档）
 
 - 仓库：https://github.com/NorthAdb/LinkForge（分支 main，**自审后终态 commit：447dfdb**；P0–P3 首轮终态合并 103a199）
 - 复现环境：Windows + Docker Desktop + Git Bash；`cp .env.example .env && docker compose up -d`（等三容器 healthy，mysql 首次初始化约 5 分钟）
