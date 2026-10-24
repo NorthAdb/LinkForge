@@ -209,7 +209,9 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
         });
         String eventId = String.valueOf(latestDeliveryFor(token).get("event_id"));
         awaitStubSaw(eventId);
-        assertTrue(RECEIVED.stream().allMatch(r -> eventId.equals(r[1])), "event id must stay stable across retries");
+        long hitsForThisEvent = RECEIVED.stream().filter(r -> eventId.equals(r[1])).count();
+        assertTrue(hitsForThisEvent >= 3, "three attempts for " + eventId + ", stub saw " + hitsForThisEvent
+                + " of " + RECEIVED.size() + " total entries");
         assertEquals(1, deliveryCount(eventId), "still exactly one delivery row");
     }
 
@@ -239,7 +241,7 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
         String token = registerForToken();
         configureEndpoint(token, "/hook-max");
 
-        SCRIPTS.get("/hook-max").add(500); // the last scripted status repeats forever
+        SCRIPTS.get("/hook-max").addAll(List.of(500, 500, 500, 500, 500, 500, 500, 500)); // one per attempt up to max-attempts
         String code = createLink(token, "https://example.com/hook-dead");
         assertEquals(302, get("/r/" + code, null).getStatusCode().value());
 
