@@ -2,7 +2,7 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：深化 A10 终态＝合并 `fc02f5a`（feat/deepen-a10-singleflight：A9 收口 + V4 + singleflight，107 例全绿）+ docs 收口（完整 SHA 见文首钉子提交，其上至多一个纯 docs 钉子提交，审计以 `git rev-parse HEAD` 为准、钉点必为其祖先）。
+> **当前 main tip**：深化 A10 终态＝合并 `fc02f5a`（feat/deepen-a10-singleflight：A9 收口 + V4 + singleflight，107 例全绿）+ docs 收口 `efbc8875dee0c1e43143d904fb68c930cb4399e2`（其上至多一个纯 docs 钉子提交；审计以 `git rev-parse HEAD` 为准，`efbc8875dee0c1e43143d904fb68c930cb4399e2` 必为其祖先）。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
 > 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6、A7、A8、A9 均已交付并通过审计（A9 审计 PASS_WITH_NITS @ `ccff802`，无 must-fix）；本轮为**深化 A10 singleflight 防热点击穿**（+ A9 审计收口 + V4 短码区分大小写），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A10-singleflight-handoff.md`。
 
