@@ -16,6 +16,7 @@ public class LinkForgeProperties {
     private RateLimit rateLimit = new RateLimit();
     private Bloom bloom = new Bloom();
     private SingleFlight singleFlight = new SingleFlight();
+    private L1 l1 = new L1();
 
     @Data
     public static class Jwt {
@@ -74,6 +75,15 @@ public class LinkForgeProperties {
         private boolean enabled = true;
         /** Follower wait cap; on expiry the follower does its own DB read (fail-open). */
         private long waitTimeoutMs = 500;
+    }
+
+    @Data
+    public static class L1 {
+        /** B-wave1 B8: process-local URL cache in front of Redis; a hit never skips the DB row read. */
+        private boolean enabled = true;
+        private long maximumSize = 10_000;
+        /** Must stay well under the Redis positive-cache TTL. */
+        private long ttlSeconds = 10;
     }
 
     @Data

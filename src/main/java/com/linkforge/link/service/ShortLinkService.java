@@ -19,6 +19,7 @@ import com.linkforge.link.support.LinkValidations;
 import com.linkforge.link.support.ShortCodes;
 import com.linkforge.link.support.ShortLinkRowLoader;
 import com.linkforge.link.support.SingleFlight;
+import com.linkforge.link.support.UrlLocalCache;
 import com.linkforge.security.AuthUser;
 import com.linkforge.security.UserContext;
 import com.linkforge.stats.service.ClickRecordService;
@@ -61,6 +62,7 @@ public class ShortLinkService {
     private final CodeBloomFilter codeBloom;
     private final SingleFlight<String, ShortLink> singleFlight;
     private final ShortLinkRowLoader rowLoader;
+    private final UrlLocalCache urlLocalCache;
 
     private final ScheduledExecutorService evictor = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "cache-evictor");
@@ -344,7 +346,12 @@ public class ShortLinkService {
         }
 
         String cacheKey = CACHE_KEY_PREFIX + code;
-        String cached = stringRedisTemplate.opsForValue().get(cacheKey);
+        // B8 L1 (URL strings only, never the row) in front of the Redis L2; a hit
+        // saves a Redis round-trip but the row below is still read per request.
+        String cached = urlLocalCache.getIfPresent(code);
+        if (cached == null || cached.isBlank()) {
+            cached = stringRedisTemplate.opsForValue().get(cacheKey);
+        }
         // A10: concurrent same-code reads merge into one in-flight DB read (whether
         // or not Redis hit). The verdicts below still run per request on the row the
         // caller got: a follower may see a row at most one query latency older than
@@ -442,10 +449,12 @@ public class ShortLinkService {
     private void cacheUrl(String code, String url) {
         long ttl = jitteredTtlSeconds(properties.getShortLink().getCacheTtlSeconds(),
                 properties.getShortLink().getCacheTtlJitterSeconds());
+        urlLocalCache.put(code, url);
         stringRedisTemplate.opsForValue().set(CACHE_KEY_PREFIX + code, url, ttl, TimeUnit.SECONDS);
     }
 
     private void evictCache(String code) {
+        urlLocalCache.invalidate(code);
         stringRedisTemplate.delete(CACHE_KEY_PREFIX + code);
     }
 

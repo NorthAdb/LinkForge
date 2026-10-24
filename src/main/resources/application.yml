@@ -96,6 +96,12 @@ linkforge:
     # followers past wait-timeout do their own read (fail-open).
     enabled: ${LINKFORGE_SINGLEFLIGHT_ENABLED:true}
     wait-timeout-ms: ${LINKFORGE_SINGLEFLIGHT_WAIT_TIMEOUT_MS:500}
+  l1:
+    # B8: process-local Caffeine cache of URL strings in front of Redis. A hit saves
+    # a Redis round-trip only — the DB row is still read per request for status.
+    enabled: ${LINKFORGE_L1_ENABLED:true}
+    maximum-size: ${LINKFORGE_L1_MAXIMUM_SIZE:10000}
+    ttl-seconds: ${LINKFORGE_L1_TTL_SECONDS:10}
   mq:
     # A7: hot path writes lf_outbox (PENDING) in the click transaction; the relay
     # drains it to RabbitMQ. sync-click keeps the lf_click_log double write.
