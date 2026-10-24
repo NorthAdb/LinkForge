@@ -979,8 +979,10 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 - 本机 `mvn -B test` → **63 单测绿**（59+4：TargetGuard 扩面）；failsafe 双 execution：默认 86+3（S1 三例进 WebhookDeliveryIT）+ N1 一例（BloomRedirectIT 91）＋ `webhook-tz-it` fork 2 例 = **共 93 IT**；全量合计 **156 例**（CI 为准）
 - 连接预算：`WebhookRetryClockIT` 复用 WebhookDeliveryIT 的属性集（每 fork 各自起容器、不并存）→ 峰值仍 ≈ **226 < 500**
 - **时区说明（交接单 §5）**：Windows 实机 JVM 默认时区＝**Asia/Shanghai（+8，China Standard Time）**；本机 Compose MySQL＝**UTC**（`@@global.time_zone=SYSTEM` 且 `NOW() == UTC_TIMESTAMP`，docker-compose 未设 TZ）。B 波 2 手验「首投 IOException → 重试 SENT(attempts=2, 200)」之所以秒级成功，是因为当时的手验用 `UPDATE lf_webhook_delivery SET next_attempt_at=NULL` 做了重放——**NULL 视为立即可投，恰好把被 +8 时钟写歪的调度值清掉了**；bug 一直存在， Genuine 的退避重试在本机会推迟 ~28820s（SQL 实证，与 box 审计的 28761s 同阶）
-- Bw2fix-8 手验：见本轮执行记录（桩 500→200，秒级 SENT + `TIMESTAMPDIFF` 在退避范围内）
-- Bw2fix-9 手验：未配主密钥启动 → 点击 → PENDING 行且 attempts 不涨 → 配主密钥重启 → SENT
+- **Bw2fix-8 手验（Compose 默认栈：MySQL UTC + JVM +8）**：新建租户配 endpoint → 桩首个请求 500 → 跳转 302 → 3s 后查库 `status=PENDING, attempts=1, TIMESTAMPDIFF(SECOND, NOW(), next_attempt_at)=18`（∈[0,20]，旧实现同位置实测口径 ≈28820）→ **重定向后 22s SENT（attempts=2）**——退避与重试全程 DB 时钟，无 8h 拉长
+- **Bw2fix-9 手验**：带主密钥配 endpoint → `unset LINKFORGE_WEBHOOK_SECRET_KEY` 重启（WARN 文案＝「master key unavailable」，N2 口径）→ 点击 302 → 投递行 **PENDING / attempts=0**，relay 跳过 9 轮（`relay.skipped`=9.0）→ 恢复主密钥重启 → 该行 **SENT / attempts=1**，无需重放。附带取证：无主密钥时 PUT 新 endpoint 返回 503（secret 落库必须加密，属 B 波 2 既定降级，S1-b 针对的是已配置 endpoint 的投递意图）
+- 期间踩坑一次：重启验证时 8080 上残留了无密钥的旧进程，PUT 打到旧进程得 503——杀干净后即 200；不影响结论
+- 三回归：`scripts/smoke.sh` **SMOKE OK**；`scripts/outbox-drill.sh` **OUTBOX DRILL OK**；`scripts/mq-drill.sh` **DRILL OK**（本机注册限流窗口按惯例先清本机 Redis 计数键）
 
 ---
 
