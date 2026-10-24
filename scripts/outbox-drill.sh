@@ -71,7 +71,16 @@ P=$(sql "SELECT COUNT(*) FROM lf_outbox WHERE status='PENDING' AND JSON_UNQUOTE(
 [ "${P:-x}" = "$M" ] || fail "outbox PENDING=$P expected $M (sync off must still park every click)"
 D=$(sql "SELECT COUNT(*) FROM lf_click_log WHERE code='$CODE'")
 [ "${D:-x}" = "0" ] || fail "sync off wrote $D hot-path detail rows (expected 0)"
-echo "PASS outage: $M redirects stayed 302, outbox PENDING=$M, hot-path detail=0"
+A=0
+for i in $(seq 1 10); do
+  A=$(sql "SELECT COALESCE(MAX(attempts),0) FROM lf_outbox WHERE JSON_UNQUOTE(JSON_EXTRACT(payload,'\$.code'))='$CODE'")
+  [ "${A:-0}" -ge 1 ] 2>/dev/null && break
+  sleep 2
+done
+[ "${A:-0}" -ge 1 ] 2>/dev/null || fail "relay retry accounting missing: attempts=$A (expected >=1 while broker is down)"
+DEFERRED=$(grep -c "outbox relay deferred" /tmp/linkforge-outbox-drill.log)
+[ "${DEFERRED:-0}" -ge 1 ] || fail "no relay deferral log lines during outage"
+echo "PASS outage: $M redirects stayed 302, outbox PENDING=$M, hot-path detail=0, relay attempts=$A (deferred log lines: $DEFERRED)"
 
 # 2. recovery: relay delivers; aggregate + consumer-written detail + UV converge
 docker compose start rabbitmq >/dev/null 2>&1 || fail "could not start rabbitmq"

@@ -512,7 +512,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | 消费端 | `ClickStatsService.consume`：UUID 事件在同一幂等短事务内回填明细（带 event_id 标记）再累加聚合 |
 | 对账器 | `ClickLogReconciler` 加 sync 门禁 + 扫描排除回填行 + javadoc 重写 |
 | 配置 | `linkforge.mq.relay-*` 四项（`LINKFORGE_MQ_RELAY_ENABLED/_BATCH_SIZE/_FIXED_DELAY_MS/_INITIAL_DELAY_MS`，默认 true/100/2000/3000） |
-| IT | 新 `OutboxDrillIT` 3 例（同事务+relay 开关、关 sync 收敛含 UV、真停 Rabbit 容器断链退避后投递）；`MqEndToEndIT` 加 relay 快节奏；`StatsApiIT`/`ClickIdempotencyIT` 清理扩到消费端回填行；`AbstractIntegrationTest` 容器单例转 protected |
+| IT | 新 `OutboxDrillIT` 2 例（同事务+relay 开关收敛、关 sync 收敛含 UV）；`MqEndToEndIT` 加 relay 快节奏；`StatsApiIT`/`ClickIdempotencyIT` 清理扩到消费端回填行；`AbstractIntegrationTest` 容器单例转 protected。**断链重试段（A7-3）不放共享 DB 的 IT**：套件多个缓存上下文各有健康 relay 在同一 MySQL 上竞争抢单，注入式失败 publisher 必被抢跑；真停 Rabbit 容器又污染后续上下文——按交接单「脚本优先」由 `outbox-drill.sh` 承担（断链段 SQL 断言 attempts≥1 + relay deferred 日志行数≥1） |
 | 脚本 | 新 `scripts/outbox-drill.sh`（自带 8082 sync-off 实例：断 MQ→302×M→PENDING=M→恢复→聚合=明细=SENT=M、UV≥1；失败非 0 退出） |
 | 文档 | README 管道节整段重写（旧「何时可关同步 ⚠️」警告删除，被 outbox 语义取代）、演练双入口、配置要点、模块/核心路径表措辞 |
 
@@ -528,12 +528,12 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | A7-6 | 关 sync 明细/UV 语义文档化且行为一致 | README 管道节「关 sync 后的语义」；drill/IT 断言明细=10、UV=1 与文档一致 |
 | A7-7 | 旧 Reconciler/开关无谎言 | 代码：sync 关时 reconcile 直接 return；README 同口径 |
 | A7-8 | N1+N2 已做、文档完整 | 本节 + 分支首提交 + README/docker README |
-| A7-9 | verify 全绿 + CI 绿 | 本机 23 单测绿；CI 期望 **80 = 23 单测 + 57 IT**（+OutboxDrillIT 3），链接见下 |
+| A7-9 | verify 全绿 + CI 绿 | 本机 23 单测绿；CI 期望 **79 = 23 单测 + 56 IT**（+OutboxDrillIT 2），链接见下 |
 
 ### 验证命令与输出摘要（本机，2026-10-24）
 
 - `D:/tools/apache-maven-3.9.9/bin/mvn -B test` → `Tests run: 23, Failures: 0`（IT 看 CI，Desktop 29.9.2 限制照旧）
-- `bash scripts/outbox-drill.sh` → `PASS outage: 10 redirects stayed 302, outbox PENDING=10, hot-path detail=0` / `PASS recovery: aggregate=10, consumer-written detail=10, outbox SENT=10, UV=1` / **OUTBOX DRILL OK**；对账等式 3506=3506、outbox SENT 37（drill 10 + mq-drill 25 + smoke）
+- `bash scripts/outbox-drill.sh` → `PASS outage: 10 redirects stayed 302, outbox PENDING=10, hot-path detail=0, relay attempts=3 (deferred log lines: 6)` / `PASS recovery: aggregate=10, consumer-written detail=10, outbox SENT=10, UV=1` / **OUTBOX DRILL OK**；对账等式 3506=3506、outbox SENT 37（drill 10 + mq-drill 25 + smoke）
 - `bash scripts/smoke.sh` → **SMOKE OK**；`bash scripts/mq-drill.sh` → **DRILL OK**（旧验收回归）
 - **B10 压测（wrk t2 c10 30s，本机 Windows）**：sync 关 + Outbox 单插入热路径（测量期 relay 关隔离）＝ **20.1 QPS / 605 requests / 30s，0 非 2xx/3xx**。对照 bench.md：默认（sync 开，含明细写）13.3 QPS；旧「关 sync 零 DB 写」276 QPS 但断链即丢。结论：**每跳一次持久化插入换断链零丢失**；正式数字以 Linux 复测为准（本机 MySQL 提交 ~600ms 支配，见 P4 记录）
 
