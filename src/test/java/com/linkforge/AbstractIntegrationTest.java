@@ -37,7 +37,6 @@ public abstract class AbstractIntegrationTest {
             .withUrlParam("allowPublicKeyRetrieval", "true")
             .withUrlParam("useSSL", "false")
             .withCommand("--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci")
-            .withInitScript("db/schema.sql")
             .withStartupTimeout(java.time.Duration.ofMinutes(4));
 
     static final GenericContainer<?> REDIS = new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))

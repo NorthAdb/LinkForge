@@ -2,7 +2,7 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：开工 `0189e2a` → 收工合并 `2d3e070`（+本收口提交）；2026-10-24，本轮为深化 A2/A3/B12。
+> **当前 main tip**：`a781b55`（2026-10-24，深化 A2/A3/B12 收口提交；`git rev-parse HEAD` 可对）。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
 > 本轮边界：P0–P5 及 v1.0.0 已完整交付并通过审计；本轮为**深化阶段 A2/A3/B12**（保留字补齐、HEAD 探测、OpenAPI/文档卫生），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A2A3B12-handoff.md`。
 
@@ -19,6 +19,7 @@
 | 追加 | R3 点击明细/UV/CSV | feat/rev3-analytics | ✅ 完成（见「追加迭代」） |
 | 追加 | R4 可观测/OpenAPI/控制台 | feat/rev4-polish | ✅ 完成（见「追加迭代」） |
 | 深化 | A2 保留字 / A3 HEAD 探测 / B12 OpenAPI·文档卫生 | feat/deepen-a2-a3-b12 | ✅ 完成（见「深化 A2/A3/B12」） |
+| 深化 | A6 Flyway 版本化迁移 | feat/deepen-a6-flyway | ✅ 完成（见「深化 A6 Flyway」） |
 | P4 | 工程化（CI/bench/隔离/收紧） | feat/p4-engineering | ✅ 完成（见「P4 工程化」） |
 
 ## 环境与工具事实（审计人须知）
@@ -372,7 +373,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 
 ## 深化 A2/A3/B12（feat/deepen-a2-a3-b12，发车基线 main@0189e2a，2026-10-24）
 
-范围：交接单 `记录追踪/05-阶段交接/LinkForge-phase-A2A3B12-handoff.md`。A2 保留字补齐、A3 HEAD 探测不计点击、B12 OpenAPI/progress 卫生。范围外（A6 Flyway、A7 Outbox、A8–A10、UV 实现改造、上云）一律未动。
+范围：交接单 `记录追踪/05-阶段交接/LinkForge-phase-A2A3B12-handoff.md`。A2 保留字补齐、A3 HEAD 探测不计点击、B12 OpenAPI/progress 卫生。范围外（A6 Flyway、A7 Outbox、A8–A10、UV 实现改造、上云）一律未动。本段 diff（`0189e2a..2d3e070`，不含 .gitignore 杂务）＝ **13 文件 / +244 / -10**。
 
 ### 改动清单（分支内三单元提交）
 
@@ -416,6 +417,60 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 - `D:/tools/apache-maven-3.9.9/bin/mvn -B verify -DskipITs` → `Tests run: 16, Failures: 0, Errors: 0, Skipped: 0` + `BUILD SUCCESS`；`target/classes/META-INF/build-info.properties` 生成（`build.version=1.0.0`）
 - 实机（停旧进程解锁 jar → 新 jar `target/linkforge-1.0.0.jar` 启动，compose 三容器 healthy）：A2/A3/B12 逐项 curl 与 SQL 见上表；`bash scripts/smoke.sh` → **SMOKE OK**（8 PASS）
 - CI（全量 68 例 = 16 单测 + 52 IT，0 失败）：分支首跑抓到本阶段唯一缺陷——`RedirectHeadIT` 在 GET 后同步断言异步聚合值（`totalClicks` 读 `lf_click_daily`，消费延迟致 0），修为断言同步明细端点 `/clicks`（`e49acc8`）；终态分支 run [40072588187](https://github.com/NorthAdb/LinkForge/actions/runs/40072588187) ✅、main run [40072759677](https://github.com/NorthAdb/LinkForge/actions/runs/40072759677) ✅（`Tests run: 52` IT + `Tests run: 16` 单测）
+
+---
+
+## 深化 A6 Flyway（feat/deepen-a6-flyway，发车基线 main@a781b55，2026-10-24）
+
+范围：交接单 `记录追踪/05-阶段交接/LinkForge-phase-A6-flyway-handoff.md`。把「schema.sql + 幂等 migrate.sh 灌文件」换成 **Flyway 版本化 migration**；顺带收口上轮审计 nit（N1 必做 + N2/N3）。范围外（A7 Outbox、A8 维度、A9/A10、UV、上云、破坏性 migration、第二套迁移工具）未动。
+
+### 上轮 nit 收口（分支首个提交）
+
+- **N1** 文首 tip 改精确 `a781b55`（`git rev-parse HEAD` 可对，本节收工 tip 见文末更新）
+- **N2** 深化 A2/A3/B12 段落补真实口径 diff：`0189e2a..2d3e070`（不含 .gitignore）＝13 文件 / +244 / -10（`git diff --stat` 实测与审计一致）
+- **N3** `LinkValidationsTest` 新增 `@ParameterizedTest`（7 词逐例拒绝），单测 16→23
+
+### 改动清单
+
+| 单元 | 内容 |
+|------|------|
+| 依赖/配置 | pom 加 `flyway-core` + `flyway-mysql`（版本随 Boot 3.3.5 BOM＝**flyway 10.10.0**）；`application.yml` 基础段 `spring.flyway`（enabled/locations=classpath:db/migration/**baseline-on-migrate=true/baseline-version=1**，dev/test/prod 同生效）；未关 validateOnMigrate，无 clean |
+| V1 基线 | `src/main/resources/db/migration/V1__baseline_schema.sql`＝现网 6 表 DDL 原样迁入，去掉 CREATE DATABASE/USE 与 IF NOT EXISTS（空库才会跑到它，误跑应炸不应默静） |
+| Compose（选 A） | 删 `schema.sql → /docker-entrypoint-initdb.d` 挂载；新卷空启 MySQL，**表由应用启动时 Flyway 建** |
+| IT | `AbstractIntegrationTest` 去掉 `withInitScript`（每个 IT 上下文即「空库→V1」实测）；新增 `FlywayBaselineIT`（独立自起 legacy MySQL（schema.sql 作夹具，表齐无 history）+ Redis；rabbit 经 test profile listener/async 关闭不接触），断言 history 恰一行 BASELINE@1、V1 未重放、注册/建链/302 全通 |
+| 脚本 | `migrate.sh` 重写为 `mvn flyway-maven-plugin:migrate` 包装（插件版本 `${flyway.version}` 与 BOM 同源；连接参数来自 .env；失败非 0 退出） |
+| 文档 | README「存量库迁移」重写（新卷/存量卷/pre-P2 老卷三条路径）、「配置要点」加 Flyway 行；schema.sql 文首标注 REFERENCE ONLY |
+
+### 决策记录
+
+| # | 决策 | 理由 |
+|---|------|------|
+| D-A6-1 | baseline-version=1 与 V1 对齐 | 「表已在、无 history」的存量卷记一笔 baseline@1 后**跳过** V1，不重放 DDL、不要求删卷；空库不受 baseline 影响照跑 V1 |
+| D-A6-2 | Compose 选交接单推荐 A | 单一 schema 事实源（db/migration），杜绝 initdb 与 Flyway 双源打架 |
+| D-A6-3 | schema.sql 保留原地，标注 REFERENCE ONLY + 兼 FlywayBaselineIT legacy 夹具 | 不再被执行于任何生产路径（compose/IT/migrate.sh 均已切走）；pre-P2 老卷补两表仍按它手工补（见下条） |
+| D-A6-4 | pre-P2 部分表老卷：先按 schema.sql 补两表、再启动/跑 migrate.sh 完成 baseline | baseline@1 会跳过 V1，补不了缺表；本阶段交接单禁止写 V2（留给 A7/A8 的正规路径） |
+| D-A6-5 | migrate.sh 走 flyway-maven-plugin 而非 CLI 镜像 | 版本 `${flyway.version}` 继承 Boot BOM，与应用内 Flyway 同版本同配置，无镜像漂移 |
+| D-A6-6 | FlywayBaselineIT 独立容器不进 AbstractIntegrationTest 单例 | 套件共享 MySQL 已被首上下文迁移，baseline 场景必须无 history 的独立库 |
+
+### 验收勾选（对照交接单验收表）
+
+| # | 标准 | 证据 |
+|---|------|------|
+| A6-1 | 依赖/配置齐全启用 | pom（flyway-core/mysql 10.10.0）；实机启动日志 `Successfully validated ... DbMigrate`；`flyway_schema_history` 有行（两条实机路径均查到） |
+| A6-2 | 版本化 V1 与业务表对齐 | `V1__baseline_schema.sql` 6 表与 schema.sql 逐列一致（去掉 DB/USE/IF NOT EXISTS）；空库实测建出 7 表（6 业务 + history） |
+| A6-3 | 新库仅靠 Flyway 建库可用 | 一次性容器 mysql:8.0@3307（0 表）→ 新 jar 启动 → 日志 `Migrating schema linkforge to version "1 - baseline schema"` → `information_schema` 7 表 → 登录（bootstrap 在 Flyway 后由 ApplicationRunner 落库）/建链 `yRq28jZ`/302 全 PASS |
+| A6-4 | 存量库 baseline 不删卷 | 实机（本机 compose 卷，871 条链路数据在）：`MVN=… bash scripts/migrate.sh` → `Successfully baselined schema with version: 1`（exit 0）；history 恰一行 `1 / << Flyway Baseline >> / BASELINE / success=1`；数据保留（`lf_short_link` 871 行不变） |
+| A6-5 | migrate.sh 走 Flyway 不灌旧 schema | 脚本全量重写（读脚本可见）；上述实机跑通记录 |
+| A6-6 | IT 无双轨 | `AbstractIntegrationTest` 已无 withInitScript；`FlywayBaselineIT` 覆盖 baseline 路；CI 全量实证 |
+| A6-7 | README/progress 更新、N1 已做 | 本节 + README 三处；N1 于分支首提交完成 |
+| A6-8 | verify 全绿、CI 绿 | 本机 `mvn -B test` → **23 单测绿**；CI 全量（期望 77 = 23 单测 + 54 IT，含 FlywayBaselineIT 2 例）链接见下收口 |
+
+### 验证命令与输出摘要（本机，2026-10-24）
+
+- `D:/tools/apache-maven-3.9.9/bin/mvn -B test` → `Tests run: 23, Failures: 0, Errors: 0` + BUILD SUCCESS（本机 Desktop 29.9.2 与 Testcontainers 不兼容，IT 看 CI，P4 已记录）
+- 存量卷：`bash scripts/migrate.sh`（输出见 A6-4）→ 新 jar 启动 → `Current version of schema linkforge: 1 / Schema linkforge is up to date. No migration necessary.` → `bash scripts/smoke.sh` → **SMOKE OK**（8 PASS）
+- 空库：一次性 `mysql:8.0` 容器@3307（`fresh_tables=0`）→ 新 jar → Flyway V1 建表（输出见 A6-3）→ 登录/建链/302 PASS → 容器已删除
+- 面试口径：**「版本化 migration + 存量 baseline，后续加表不靠 IF NOT EXISTS 堆脚本」**
 
 ---
 

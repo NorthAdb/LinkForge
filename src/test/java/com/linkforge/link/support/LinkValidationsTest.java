@@ -2,6 +2,8 @@ package com.linkforge.link.support;
 
 import com.linkforge.common.exception.BizException;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -55,5 +57,11 @@ class LinkValidationsTest {
         assertThrows(BizException.class, () -> LinkValidations.requireValidCustomCode("ADMIN"));
         assertThrows(BizException.class, () -> LinkValidations.requireValidCustomCode("favicon"));
         assertDoesNotThrow(() -> LinkValidations.requireValidCustomCode("docs2"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"admin", "ADMIN", "console", "metrics", "assets", "error", "favicon"})
+    void eachReservedWordIsRejected(String reserved) {
+        assertThrows(BizException.class, () -> LinkValidations.requireValidCustomCode(reserved), reserved);
     }
 }

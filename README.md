@@ -189,7 +189,13 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 
 **何时可关同步**：⚠️ **关同步（`LINKFORGE_SYNC_CLICK_ENABLED=false`）后，MQ 发布失败的点击无法由对账器追平**（无 outbox，新点击 eventId 为随机 UUID 且无明细行）；精确 UV / 点击明细也只覆盖历史数据。关之前必须：连续观察 `detail == aggregate`、确认 MQ 稳定、并接受上述边界；纯异步 + 可追平需要 outbox 改造（未实现）。保持默认双写。MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.click.dlx` / `linkforge.click.dlq`）。
 
-**存量库迁移注记**：`lf_click_daily` / `lf_consumed_event` 两张表只会在**全新数据卷**上由 schema.sql 自动创建；已有旧卷的库需手动执行 `src/main/resources/db/schema.sql` 中对应的两段 `CREATE TABLE IF NOT EXISTS`（幂等，可重复跑）。
+**存量库迁移（Flyway，深化 A6）**：schema 已版本化在 `src/main/resources/db/migration`（`V1__baseline_schema.sql`），由应用启动时自动迁移（`spring.flyway.baseline-on-migrate=true`）：
+
+- **全新数据卷**：首次启动应用（或跑 `scripts/migrate.sh`）由 Flyway 建全部表；Compose 的 MySQL 不再挂载 initdb 脚本，容器 healthy 后直接起应用即可。
+- **已到 v1.0.0 schema 的存量卷**（表齐、无 `flyway_schema_history`）：应用启动或 `migrate.sh` 会自动记一笔 baseline（version 1）并跳过 V1，**无需删卷**，幂等可重复跑。
+- **P2 之前的更老卷**（缺 `lf_click_daily` / `lf_consumed_event`）：baseline 会跳过 V1 补不了缺口——先按参考文件 `src/main/resources/db/schema.sql` 里的两段 `CREATE TABLE IF NOT EXISTS` 补表（幂等），再启动应用完成 baseline。
+
+`db/schema.sql` 仅作历史参考与上述补表用途，**不再被执行**；新增 DDL 一律写 `db/migration` 新版本。
 
 ## 当前状态 vs 后续
 
@@ -209,6 +215,8 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 ## 配置要点
 
 见 `src/main/resources/application.yml`。口令与 `JWT_SECRET` 只有环境变量，没有写在 yml 或 Java 默认值里。本地示例见 `.env.example`。
+
+- Schema 版本化迁移用 **Flyway**（`spring.flyway.*`，dev/test/prod 同生效）：空库自动跑 `db/migration`；存量库自动 baseline，详见上方「存量库迁移」
 
 - `linkforge.mq.async-click-enabled` 控制是否发 MQ
 - `LINKFORGE_REGISTER_MAX` / `LINKFORGE_REGISTER_WINDOW_SECONDS` 注册限流阈值（默认 5 / 600 秒）
@@ -256,7 +264,7 @@ flowchart LR
 
 **本地 Demo 五步**（只走核心路径）：
 
-1. `cp .env.example .env && docker compose up -d`，等 `docker compose ps` 三容器 healthy（MySQL 首次初始化约 5 分钟；存量卷可 `bash scripts/migrate.sh` 幂等补表）
+1. `cp .env.example .env && docker compose up -d`，等 `docker compose ps` 三容器 healthy（MySQL 首次初始化约 5 分钟；表由应用启动时 Flyway 自动建，见下方「存量库迁移」；存量卷可 `bash scripts/migrate.sh` 幂等迁移）
 2. 构建：`mvn -B -DskipTests package`（无本地 Maven 用 README 上方的 Docker 命令）
 3. 启动：`set -a && . ./.env && set +a && java -jar target/linkforge-1.0.0.jar`
 4. 核心链路：登录（`POST /api/auth/login`，demo/admin）→ 建链（`POST /api/links` 带 Bearer）→ 浏览器/curl 访问 `/r/{code}` 得 302（示例见上方冒烟段）
