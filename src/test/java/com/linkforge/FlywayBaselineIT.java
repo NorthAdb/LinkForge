@@ -78,7 +78,8 @@ class FlywayBaselineIT {
         Map<String, Object> baseline = rows.get(0);
         assertEquals("1", String.valueOf(baseline.get("version")));
         assertEquals("BASELINE", String.valueOf(baseline.get("type")));
-        assertEquals("1", String.valueOf(baseline.get("success")));
+        // MySQL: success is bit(1), JDBC maps it to Boolean.
+        assertEquals(Boolean.TRUE, baseline.get("success"));
         // V1 was skipped, so the schema still carries zero data rows beyond the bootstrap:
         assertFalse(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM lf_tenant)", Boolean.class),
                 "no seed data expected on this volume");

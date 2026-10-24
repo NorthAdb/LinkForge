@@ -21,6 +21,10 @@
         <java.version>17</java.version>
         <mybatis-plus.version>3.5.9</mybatis-plus.version>
         <jjwt.version>0.12.6</jjwt.version>
+        <!-- Testcontainers 2.0.5 expects newer commons-lang3 than the Boot 3.3.5 BOM's
+             3.14.0 (NoSuchMethodError SystemProperties.getUserName on CI); lang3 is
+             binary-compatible upward, so one override aligns every consumer. -->
+        <commons-lang3.version>3.18.0</commons-lang3.version>
         <!-- Testcontainers 2.0.x: Boot-managed 1.x docker-java is rejected by Docker Desktop 29. -->
         <testcontainers.version>2.0.5</testcontainers.version>
     </properties>
