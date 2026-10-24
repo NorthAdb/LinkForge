@@ -24,4 +24,6 @@ public class Outbox {
 
     public static final String STATUS_PENDING = "PENDING";
     public static final String STATUS_SENT = "SENT";
+    /** Terminal state after relay-max-attempts failed publishes; manual replay is a SQL UPDATE back to PENDING. */
+    public static final String STATUS_FAILED = "FAILED";
 }

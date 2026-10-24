@@ -41,6 +41,12 @@ spring:
     port: ${SPRING_RABBITMQ_PORT:5672}
     username: ${SPRING_RABBITMQ_USERNAME:linkforge}
     password: ${SPRING_RABBITMQ_PASSWORD}
+    # A7 audit S1: correlated confirms + mandatory returns; the outbox relay marks
+    # SENT only after the broker acks.
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
     listener:
       simple:
         # Consumer runs by default now that the real consumer is in place.
@@ -83,6 +89,7 @@ linkforge:
     relay-batch-size: ${LINKFORGE_MQ_RELAY_BATCH_SIZE:100}
     relay-fixed-delay-ms: ${LINKFORGE_MQ_RELAY_FIXED_DELAY_MS:2000}
     relay-initial-delay-ms: ${LINKFORGE_MQ_RELAY_INITIAL_DELAY_MS:3000}
+    relay-max-attempts: ${LINKFORGE_MQ_RELAY_MAX_ATTEMPTS:30}
     reconcile-fixed-delay-ms: ${LINKFORGE_MQ_RECONCILE_FIXED_DELAY_MS:30000}
     reconcile-initial-delay-ms: ${LINKFORGE_MQ_RECONCILE_INITIAL_DELAY_MS:15000}
   bootstrap:

@@ -38,6 +38,8 @@ public class LinkForgeProperties {
         private int relayBatchSize = 100;
         private long relayFixedDelayMs = 2000;
         private long relayInitialDelayMs = 3000;
+        /** A7 audit N3: attempts beyond this mark the row FAILED instead of retrying forever. */
+        private int relayMaxAttempts = 30;
     }
 
     @Data

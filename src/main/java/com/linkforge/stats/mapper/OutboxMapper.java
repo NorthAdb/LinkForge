@@ -18,6 +18,9 @@ public interface OutboxMapper extends BaseMapper<Outbox> {
     @Update("UPDATE lf_outbox SET status = 'SENT', sent_at = NOW() WHERE id = #{id}")
     int markSent(@Param("id") long id);
 
+    @Update("UPDATE lf_outbox SET status = 'FAILED' WHERE id = #{id}")
+    int markFailed(@Param("id") long id);
+
     @Update("UPDATE lf_outbox SET attempts = attempts + 1, next_attempt_at = "
             + "DATE_ADD(NOW(), INTERVAL #{backoffSeconds} SECOND) WHERE id = #{id}")
     int markRetry(@Param("id") long id, @Param("backoffSeconds") long backoffSeconds);

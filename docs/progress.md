@@ -2,7 +2,7 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：开工 `68cbcc6` → 收工 `18f918e`（A7 代码终态＝此合并；docs 收口提交紧随，`git log -2` 可见），2026-10-24。
+> **当前 main tip**：`b8d4b63`（2026-10-24，深化 A7 收口提交，`git rev-parse HEAD` 可对；代码终态＝合并 `18f918e`）。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
 > 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6 均已交付并通过审计；本轮为**深化 A7 Transactional Outbox**（点击管道升级 + 关 sync 断链追平演练），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A7-outbox-handoff.md`。
 
@@ -522,7 +522,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 |---|------|------|
 | A7-1 | V2 建 outbox 表、migrate 绿 | CI 全量（空库 V1+V2）；实机：演练实例首启自动 V2、本机存量库 3506=3506 等式保持 |
 | A7-2 | 热路径同事务写 outbox；跳转不因 MQ 失败失败 | IT `sameTransactionWritesDetailAndPendingOutboxWithRelayOff`（relay 关：3×302、明细 3、PENDING 3）；实机断 MQ 段 10×302 |
-| A7-3 | Relay PENDING→SENT、失败可重试 | IT `brokerOutageDefersWithBackoffThenDelivers`（真停容器：attempts≥1 仍 PENDING，恢复后 SENT+聚合）；drill 恢复段 SENT=10 |
+| A7-3 | Relay PENDING→SENT、失败可重试 | 实机 `outbox-drill.sh` 断链段：SQL `attempts≥1` + relay deferred 日志行数≥1、行保持 PENDING；恢复段 SENT=10（该段不进共享 DB 的 IT，见「改动清单·IT」栏原因）；IT `OutboxDrillIT` 两例证投递与收敛 |
 | A7-4 | 消费幂等 + DLQ 不回归 | `MqEndToEndIT`/`ClickIdempotencyIT`/`StatsApiIT` 全绿（CI）；旧 `mq-drill.sh` 实机 **DRILL OK**（收敛 25） |
 | A7-5 | **sync=false 断 MQ 恢复后可追平** | 实机 `bash scripts/outbox-drill.sh` → **OUTBOX DRILL OK**（PASS outage: 10×302/PENDING=10/热路径明细=0；PASS recovery: aggregate=10, consumer-written detail=10, SENT=10, UV=1）；IT `syncOffBrokerDownStill302AndConvergesWithDetailAndUv` |
 | A7-6 | 关 sync 明细/UV 语义文档化且行为一致 | README 管道节「关 sync 后的语义」；drill/IT 断言明细=10、UV=1 与文档一致 |

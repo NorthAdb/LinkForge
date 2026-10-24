@@ -3,6 +3,11 @@
 # below points at a host Compose stack. Values below are non-connection defaults.
 spring:
   rabbitmq:
+    # same confirm posture as dev: relay delivery in ITs runs the ack path
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
     listener:
       simple:
         auto-startup: false
