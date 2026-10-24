@@ -157,12 +157,12 @@ bash scripts/outbox-drill.sh  # sync 关 + 断 MQ → 恢复追平（A7 硬验�
 | GET | `/api/links/{code}/stats/breakdown?dim=device\|referer_host&days=7` | **维度分布**（仅链主）：设备（mobile/desktop/tablet/bot/unknown）与来源 host（归一化，空→direct）各桶点击数降序，days 1..90；维度口径是点击数**不是 UV** |
 | GET | `/api/links/{code}/clicks?page=&size=` | 点击明细（仅链主）：时间/IP/UA/Referer，新到旧分页 |
 | GET | `/api/links/export` | 导出本人全部短链 CSV（UTF-8 BOM，逗号/引号转义） |
-| GET | `/r/{code}` | 302 跳转；Bloom 前置（从未存在的码 404 不查库，见「防穿透」），Redis 缓存优先，未命中回源 MySQL；同步写 `lf_click_log` |
+| GET | `/r/{code}` | 302 跳转；短码**区分大小写**、原样精确匹配；Bloom 前置（从未存在的码 404 不查库，见「防穿透」），Redis 缓存优先，未命中回源 MySQL；同步写 `lf_click_log` |
 | HEAD | `/r/{code}` | 可跳性探测：302（带 Location）/404/410 与 GET 同档，但**不写点击明细、不发 MQ、不计 UV**（共用按 IP 跳转限流） |
 
 **错误码语义（已写死）**：跳转遇 **禁用或不存在 → 404**，**过期 → 410**；管理接口的越权访问统一 **404**（不泄露他人短码存在性）；未携带/无效凭证 **401**；注册租户名冲突 **409**、自定义短码被占用 **409**；触发限流 **429**。
 
-**自定义短码**：`customCode` 需 4-16 位字母/数字/下划线/连字符，保留字（admin、login、stats、actuator、console、metrics 等，大小写不敏感）不可用，短于 4 位的词（api、r）天然被长度规则挡住；已被占用（含已删除链占用的码）返回 409。随机码与自定义码共用 `uk_code` 唯一索引，并发安全。
+**自定义短码**：`customCode` 需 4-16 位字母/数字/下划线/连字符，保留字（admin、login、stats、actuator、console、metrics 等，大小写不敏感）不可用，短于 4 位的词（api、r）天然被长度规则挡住；已被占用（含已删除链占用的码）返回 409。随机码与自定义码共用 `uk_code` 唯一索引，并发安全。**短码区分大小写**（A10 V4，列排序规则 `utf8mb4_0900_bin`）：`AbC123` 与 `abc123` 是两个独立的码，跳转与管理 API 都按原样精确匹配（尾随空格也不等价，NO PAD）；保留字检查仍不区分大小写，防 `ADMIN` 绕过。
 
 **限流（P3）**：注册按 IP 5 次/10 分钟；创建按用户 30 次/分钟；公开跳转按 IP 300 次/分钟。全部为 Redis 固定窗口，超限 429，阈值见下方环境变量。限流器在 Redis 故障时放行（degrade open）。客户端 IP 默认取 socket 地址、**不信任** `X-Forwarded-For`（该头可伪造、会被用来绕限流）；仅在可信反向代理后部署时设 `LINKFORGE_TRUST_XFF=true`。同一客户端经 IPv4/IPv6 两个协议访问会各占一个计数桶（本机 `127.0.0.1` 与 `::1` 并存属预期现象）。
 

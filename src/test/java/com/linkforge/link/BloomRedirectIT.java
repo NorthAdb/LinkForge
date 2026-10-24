@@ -72,4 +72,25 @@ class BloomRedirectIT extends AbstractIntegrationTest {
             properties.getBloom().setEnabled(true);
         }
     }
+
+    @Test
+    void caseVariantsAreDistinctShortCodes() throws Exception {
+        // A9 audit S2 / V4: short codes match exact-case only, both behind the Bloom
+        // gate (negative pre-DB) and in the DB itself (utf8mb4_0900_bin).
+        String token = registerForToken();
+        String mixed = "Aa" + Long.toString(System.nanoTime(), 36);
+        String lower = mixed.toLowerCase();
+
+        assertEquals(mixed, createCustomLink(token, mixed, "https://example.com/case-mixed"));
+
+        double before = rejectedCount();
+        assertEquals(404, get("/r/" + lower, null).getStatusCode().value(),
+                "lower-case variant must not resolve while only the exact case exists");
+        assertTrue(rejectedCount() > before, "case-variant miss must be bloom-rejected pre-DB");
+
+        // the variant is a genuinely different code: creating it must succeed (no 409)
+        assertEquals(lower, createCustomLink(token, lower, "https://example.com/case-lower"));
+        assertEquals(302, get("/r/" + mixed, null).getStatusCode().value());
+        assertEquals(302, get("/r/" + lower, null).getStatusCode().value());
+    }
 }

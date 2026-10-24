@@ -83,11 +83,19 @@ class FlywayBaselineIT {
         assertEquals(Boolean.TRUE, baseline.get("success"));
         assertTrue(rows.stream().noneMatch(r -> "1".equals(String.valueOf(r.get("version")))
                 && "SQL".equals(String.valueOf(r.get("type")))), "V1 must not re-run: " + rows);
-        // V2 (outbox, deepen A7) and V3 (click dims, deepen A8) apply on top of the baseline
+        // V2 (outbox, deepen A7), V3 (click dims, deepen A8) and V4 (case-sensitive
+        // short codes, deepen A10) apply on top of the baseline
         assertTrue(rows.stream().anyMatch(r -> "2".equals(String.valueOf(r.get("version")))
                 && "SQL".equals(String.valueOf(r.get("type")))), "V2 must apply after baseline: " + rows);
         assertTrue(rows.stream().anyMatch(r -> "3".equals(String.valueOf(r.get("version")))
                 && "SQL".equals(String.valueOf(r.get("type")))), "V3 must apply after baseline: " + rows);
+        assertTrue(rows.stream().anyMatch(r -> "4".equals(String.valueOf(r.get("version")))
+                && "SQL".equals(String.valueOf(r.get("type")))), "V4 must apply after baseline: " + rows);
+        // A9 audit S2: the short-code column must be case-sensitive binary collation
+        assertEquals("utf8mb4_0900_bin", jdbc.queryForObject(
+                "SELECT COLLATION_NAME FROM information_schema.COLUMNS "
+                        + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'lf_short_link' AND COLUMN_NAME = 'code'",
+                String.class), "lf_short_link.code collation: ");
         // V1 was skipped, so the schema still carries zero data rows beyond the bootstrap:
         assertFalse(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM lf_tenant)", Boolean.class),
                 "no seed data expected on this volume");
