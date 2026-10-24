@@ -348,6 +348,19 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 
 **P5 完成，完整项目交付，待实习JAVA_AI 终审。**（P0–P5 全部阶段闭环；审计分层：103a199 → 447dfdb → c1ecd46 → 7e8b9fe → 880f0a6 → 4ce9a0b）
 
+---
+
+## v1.0.0 发布（终审通过后，运营者 2026-10-24 授权）
+
+终审结论：通过。发布动作：
+
+- 全文档终审：README 去 MVP 化（标题/技术栈/边界段重写，状态表标注 v1.0.0）、`docker/README.md` 充实（原仅一句话）、jar 名引用全量联动（README×2、bench.sh×2）；progress 内历史记录中的 MVP 字样与旧 jar 名按历史存档保留
+- 版本：pom `0.0.1-SNAPSHOT` → **`1.0.0`**，产出 `target/linkforge-1.0.0.jar`
+- 验证：`mvn -B verify -DskipITs` BUILD SUCCESS（16 单测）；1.0.0 jar 实机启动 + `smoke.sh` **SMOKE OK**；CI 见最新 main run
+- 发布标识：git tag **`v1.0.0`** 推送远端
+
+**v1.0.0 发布完成。后续迭代方向另行讨论（AI 模块、云公网部署等仍不在本仓库范围）。**
+
 自审中评估后**不改**的两点（记录供审计人参断）：
 - 跳转路径每次仍读 DB 行做禁用/过期判定（缓存只省 URL 字段）：这是**主动选择**——只信缓存会让禁用/过期在 TTL 内放行 302，正确性优先于该读优化；P4 压测时再量化。（审计 L8 同判，留 P4 bench 量化。）
 - 未鉴权访问管理接口返回 403（Spring Security 默认）而非 401：**R2 已改为统一 401 JSON**（见追加迭代），本条已过时。

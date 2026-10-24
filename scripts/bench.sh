@@ -22,7 +22,7 @@ trap stop_app EXIT
 start_app() { # $1 = extra env assignments ("K=V K=V")
   set -a; . ./.env; set +a
   env $1 LINKFORGE_REDIRECT_RATE_MAX=1000000 LINKFORGE_CREATE_RATE_MAX=1000000 \
-    java -jar target/linkforge-0.0.1-SNAPSHOT.jar >"$APP_LOG" 2>&1 &
+    java -jar target/linkforge-1.0.0.jar >"$APP_LOG" 2>&1 &
   APP_PID=$!
   for i in $(seq 1 45); do curl -sf "$BASE_URL/api/health" >/dev/null 2>&1 && return 0; sleep 2; done
   tail -5 "$APP_LOG"; fail "app did not start ($1)"
@@ -34,7 +34,7 @@ run_wrk() { # $1 url  $2 "-tN -cN -dS"
 
 curl -sf "$BASE_URL/api/health" >/dev/null 2>&1 && fail "port 8080 busy, stop the running app first"
 [ -f .env ] || fail "no .env (cp .env.example .env)"
-[ -f target/linkforge-0.0.1-SNAPSHOT.jar ] || fail "build the jar first (mvn -DskipTests package)"
+[ -f target/linkforge-1.0.0.jar ] || fail "build the jar first (mvn -DskipTests package)"
 docker info >/dev/null 2>&1 || fail "docker not reachable"
 docker image inspect "$WRK_IMAGE" >/dev/null 2>&1 || docker pull -q "$WRK_IMAGE" || fail "cannot pull $WRK_IMAGE"
 
