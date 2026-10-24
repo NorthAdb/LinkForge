@@ -2,7 +2,7 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：`ccff8026fa491d529d2f06e26d91bc6d30d4a939`（2026-10-24，深化 A9 终态＝合并 `d6c97e0` + docs 收口 `ee86f01` + 纯钉子提交 `ccff802`，`git rev-parse HEAD` 可对）。
+> **当前 main tip**：深化 A10 终态＝合并 `fc02f5a`（feat/deepen-a10-singleflight：A9 收口 + V4 + singleflight，107 例全绿）+ docs 收口（完整 SHA 见文首钉子提交，其上至多一个纯 docs 钉子提交，审计以 `git rev-parse HEAD` 为准、钉点必为其祖先）。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
 > 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6、A7、A8、A9 均已交付并通过审计（A9 审计 PASS_WITH_NITS @ `ccff802`，无 must-fix）；本轮为**深化 A10 singleflight 防热点击穿**（+ A9 审计收口 + V4 短码区分大小写），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A10-singleflight-handoff.md`。
 
@@ -739,7 +739,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | A10-6 | A9-S1/N1/N2/N4 已修、N3 有 IT | 见「A9 审计项处置」表 |
 | A10-7 | S2：V4 + collation + 双上下文 404 + 大小写共存 + 保留字 + 基线断言 + 文档 | 实机 information_schema 三列核对（short_link=0900_bin，click_log/click_daily=0900_ai_ci）；建 `A10x…` → 302、小写变体 → 404（Bloom 开 rejected、Bloom 关 DB miss 两 IT）；`FlywayBaselineIT` 断 V4 + collation；`LinkValidationsTest` 保留字用例保持绿；README/OpenAPI/progress 成文 |
 | A10-8 | README/progress 完整、连接预算一行 | 本节 + README；预算：既有 ~21 上下文 + 本轮 2 个新上下文（BloomDisabledAtStartupIT、SingleFlightRedirectIT，均设 `hikari.maximum-pool-size=4`）→ 峰值连接 ≈ 21×10+2×4=218 < 500，未动 `--max-connections` |
-| A10-9 | verify 全绿 + CI 绿、测例增量 | 本机 `mvn -B test` → **41 单测绿**（+6：SingleFlightTest 5 + S1 用例 1）；CI 全量与 run 链接收口时按实补齐 |
+| A10-9 | verify 全绿 + CI 绿、测例增量 | 本机 `mvn -B test` → **41 单测绿**（+6：SingleFlightTest 5 + S1 用例 1）；CI 全量 **107 例（41 单测 + 66 IT）0 失败**（+12 vs A9 的 95）：分支 run [40092974948](https://github.com/NorthAdb/LinkForge/actions/runs/40092974948) ✅（一次绿）、main 合并 run [40093152270](https://github.com/NorthAdb/LinkForge/actions/runs/40093152270) ✅（head `fc02f5a`） |
 | A10-10 | 范围干净 | diff 复查：无空值缓存/TTL 抖动/Caffeine/分布式锁/XFetch 实现/RedisBloom/长链 Bloom；V1–V3 未改；`recordClick`/Outbox/维度/UV 零 diff；**零新依赖**（JDK 并发包） |
 
 ### 验证命令与输出摘要（本机，2026-10-24）
@@ -757,6 +757,8 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 - 开工按交接单顺序：A9 收口（S1/N1/N2/N4）→ V4（S2 + N3 上下文）→ singleflight 组件与接线 → 测试 → 实机 → 文档。每单元本地编译/单测绿后提交。
 - 本地单测两轮红均为测试自身断言写错（`v0/v1` 计数错位、无残留断言期望值写反），组件行为正确；修正后 41/41 绿。`Thread.ofPlatform()`（JDK 21 API）替换为 JDK 17 兼容写法一次。
 - 手验过程重启应用三次（正常 / singleflight-off / 正常），V4 只在首次启动迁移，后续 validate。
+- **CI 分支一次绿**（连接预算生效，无 A9 那轮的容量事故）；main 合并与 docs 提交全绿。本轮无竞态抖动、无回滚。
+- 代码合并点 `fc02f5a`；收口内容提交（本节所在的 docs 提交）由文首钉子提交钉住完整 SHA，审计以 `git rev-parse HEAD` 为准，钉点必为其祖先（A8-N1 家族的结构化解法，A9 起沿用）。
 
 ### 下一步（不混入本轮）
 
