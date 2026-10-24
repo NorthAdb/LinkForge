@@ -907,7 +907,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | Bw2-12 | 指标齐 + README 同步 | README 指标清单（apikey/webhook 计数器）；手验 actuator |
 | Bw2-13 | V5/V6 新增、V1–V4 零改、Baseline 覆盖 V6、存量卷 Migrating to "5"/"6" | FlywayBaselineIT + 实机启动日志 |
 | Bw2-14 | README/progress 完整 + 连接预算 | 本节 + README；预算：新增 2 上下文（ApiKeyIT、WebhookDeliveryIT）各 hikari 4 → 24×10+2×4 ≈ 248 < 500 |
-| Bw2-15 | verify 全绿 + CI 绿 + 钉子口径 | 本机 `mvn -B test` → **56 单测绿**（46+10）；CI run 链接收口补齐 |
+| Bw2-15 | verify 全绿 + CI 绿 + 钉子口径 | 本机 `mvn -B test` → **59 单测绿**（46+13：SignerTest 2 + WebhookSecretCipherTest 5 + WebhookTargetGuardTest 6）；CI 全量 **145 例（59 单测 + 86 IT）0 失败**（+26 vs B 波 1 的 119）：分支终态 run [40108332225](https://github.com/NorthAdb/LinkForge/actions/runs/40108332225) ✅（五红史见执行记录）、main 合并 run [40108536357](https://github.com/NorthAdb/LinkForge/actions/runs/40108536357) ✅（head `d73aa80`） |
 | Bw2-16 | 范围干净 | diff 复查：无 Resilience4j/OAuth/UI/波 3+；`resolveTarget` 除 N1 外零改；零新依赖（桩走 JDK 模块）；V1–V4 零改 |
 
 ### 验证命令与输出摘要（本机，2026-10-24）
