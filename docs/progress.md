@@ -2,7 +2,7 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：`b8d4b63`（2026-10-24，深化 A7 收口提交，`git rev-parse HEAD` 可对；代码终态＝合并 `18f918e`）。
+> **当前 main tip**：`2ef4e01`（2026-10-24，深化 A8 代码终态＝此合并；docs 收口提交紧随，`git log -2` 可见）。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
 > 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6 均已交付并通过审计；本轮为**深化 A7 Transactional Outbox**（点击管道升级 + 关 sync 断链追平演练），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A7-outbox-handoff.md`。
 
@@ -598,7 +598,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | A8-5 | 控制台可见两类维度 | 统计按钮渲染「设备/来源」两行（`showStats` 三路并行 fetch；实机同源接口手验） |
 | A8-6 | README/progress/OpenAPI 完整、D-A8 表齐 | 本节 + README「维度分析」节 + 接口表新行；springdoc 自动收录新 endpoint |
 | A8-7 | A7 N1+N2 已做、S1 已做、N3–N5 登记 | 见「A7 审计项处置」表 |
-| A8-8 | verify 全绿 + CI 绿 | 本机 `mvn -B test` → **30 单测绿**（+7）；CI 期望 **88 = 30 单测 + 58 IT**（+DimBreakdownIT 2），链接见下收口 |
+| A8-8 | verify 全绿 + CI 绿 | 本机 `mvn -B test` → **30 单测绿**（+7）；CI 全量 **88 例（30 单测 + 58 IT）0 失败**：分支终态 run [40085174839](https://github.com/NorthAdb/LinkForge/actions/runs/40085174839) ✅、main run [40085344679](https://github.com/NorthAdb/LinkForge/actions/runs/40085344679) ✅（`Tests run: 58` IT + `Tests run: 30` 单测） |
 | A8-9 | 范围干净 | diff 复查：无 ES/外网 Geo/A9/A10；唯一新依赖＝无 |
 
 ### 验证命令与输出摘要（本机，2026-10-24）
