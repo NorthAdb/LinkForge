@@ -42,9 +42,13 @@ class StatsApiIT extends AbstractIntegrationTest {
     @Autowired
     private ClickLogMapper clickLogMapper;
 
+    @Autowired
+    private com.linkforge.stats.mapper.ClickDimDailyMapper clickDimDailyMapper;
+
     private final List<String> syntheticEventIds = new ArrayList<>();
     private final List<String> syntheticCodes = new ArrayList<>();
     private final List<Long> syntheticLogIds = new ArrayList<>();
+    private final List<Long> syntheticLinkIds = new ArrayList<>();
 
     @AfterEach
     void cleanSyntheticStats() {
@@ -64,6 +68,11 @@ class StatsApiIT extends AbstractIntegrationTest {
             // consume() now backfills lf_click_log for UUID (non log-) synthetic events
             clickLogMapper.delete(new LambdaQueryWrapper<ClickLog>()
                     .in(ClickLog::getCode, syntheticCodes));
+        }
+        if (!syntheticLinkIds.isEmpty()) {
+            // consume() also writes dimension buckets now (A8)
+            clickDimDailyMapper.delete(new LambdaQueryWrapper<com.linkforge.stats.entity.ClickDimDaily>()
+                    .in(com.linkforge.stats.entity.ClickDimDaily::getLinkId, syntheticLinkIds));
         }
     }
 
@@ -87,6 +96,7 @@ class StatsApiIT extends AbstractIntegrationTest {
         syntheticCodes.add(code);
         var detail = body(get("/api/links/" + code, tokenA)).path("data");
         long linkId = detail.path("id").asLong();
+        syntheticLinkIds.add(linkId);
         long tenantId = 1L;
         String stamp = String.valueOf(System.currentTimeMillis());
 
@@ -124,6 +134,7 @@ class StatsApiIT extends AbstractIntegrationTest {
         String code = createLink(tokenA, "https://example.com/uv-" + System.currentTimeMillis());
         syntheticCodes.add(code);
         long linkId = body(get("/api/links/" + code, tokenA)).path("data").path("id").asLong();
+        syntheticLinkIds.add(linkId);
 
         LocalDateTime now = LocalDateTime.now();
         insertClick(linkId, code, "1.1.1.1", now);

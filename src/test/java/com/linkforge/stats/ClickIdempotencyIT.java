@@ -41,8 +41,12 @@ class ClickIdempotencyIT extends AbstractIntegrationTest {
     @Autowired
     private com.linkforge.stats.mapper.ClickLogMapper clickLogMapper;
 
+    @Autowired
+    private com.linkforge.stats.mapper.ClickDimDailyMapper clickDimDailyMapper;
+
     private final List<String> syntheticEventIds = new ArrayList<>();
     private final List<String> syntheticCodes = new ArrayList<>();
+    private final List<Long> syntheticLinkIds = new ArrayList<>();
 
     @AfterEach
     void cleanSyntheticStats() {
@@ -57,6 +61,11 @@ class ClickIdempotencyIT extends AbstractIntegrationTest {
             clickLogMapper.delete(new LambdaQueryWrapper<com.linkforge.stats.entity.ClickLog>()
                     .in(com.linkforge.stats.entity.ClickLog::getCode, syntheticCodes));
         }
+        if (!syntheticLinkIds.isEmpty()) {
+            // consume() also writes dimension buckets now (A8)
+            clickDimDailyMapper.delete(new LambdaQueryWrapper<com.linkforge.stats.entity.ClickDimDaily>()
+                    .in(com.linkforge.stats.entity.ClickDimDaily::getLinkId, syntheticLinkIds));
+        }
     }
 
     @Test
@@ -69,6 +78,7 @@ class ClickIdempotencyIT extends AbstractIntegrationTest {
                 null, "127.0.0.1", "it-ua", null, LocalDateTime.now());
         syntheticEventIds.add(event.getEventId());
         syntheticCodes.add(code);
+        syntheticLinkIds.add(linkId);
 
         assertTrue(clickStatsService.consume(event), "first delivery must count");
         assertFalse(clickStatsService.consume(event), "replay must be skipped");
@@ -83,6 +93,7 @@ class ClickIdempotencyIT extends AbstractIntegrationTest {
         long linkId = linkIdOf(code, token);
         long stamp = System.currentTimeMillis();
         syntheticCodes.add(code);
+        syntheticLinkIds.add(linkId);
 
         ClickEvent yesterday = new ClickEvent("it-a" + stamp, 1L, linkId, code,
                 null, null, null, null, LocalDateTime.now().minusDays(1));
