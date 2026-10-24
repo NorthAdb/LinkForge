@@ -26,6 +26,11 @@ public class LinkForgeProperties {
     @Data
     public static class ShortLink {
         private long cacheTtlSeconds = 3600;
+        /** B-wave1: positive-cache TTL = base + uniform [0, jitter] (upward only). */
+        private long cacheTtlJitterSeconds = 300;
+        /** B-wave1: negative-cache (confirmed-absent codes) base TTL; <= 0 disables the negative cache. */
+        private long absentTtlSeconds = 60;
+        private long absentTtlJitterSeconds = 30;
         private int codeLength = 7;
     }
 

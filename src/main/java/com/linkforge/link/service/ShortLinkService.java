@@ -38,6 +38,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
@@ -46,6 +47,8 @@ import java.util.concurrent.TimeUnit;
 public class ShortLinkService {
 
     private static final String CACHE_KEY_PREFIX = "linkforge:code:";
+    private static final String ABSENT_KEY_PREFIX = "linkforge:absent:";
+    private static final String ABSENT_SENTINEL = "1";
     private static final int CODE_ATTEMPTS = 16;
     private static final long STALE_WRITEBACK_CLEAR_MS = 1000;
 
@@ -169,6 +172,7 @@ public class ShortLinkService {
         }
 
         codeBloom.put(link.getCode());
+        clearAbsent(link.getCode());
         cacheUrl(link.getCode(), url);
         meterRegistry.counter("linkforge.links.created").increment();
         if (idemKey != null) {
@@ -331,6 +335,14 @@ public class ShortLinkService {
             throw new BizException(404, "short link not found");
         }
 
+        // B7 negative cache: the DB has confirmed this code absent recently. Only
+        // confirmed-absent codes live here — never disabled (404) or expired (410),
+        // whose rows still exist and must take effect again immediately.
+        if (absentKnown(code)) {
+            meterRegistry.counter("linkforge.cache.absent.hit").increment();
+            throw new BizException(404, "short link not found");
+        }
+
         String cacheKey = CACHE_KEY_PREFIX + code;
         String cached = stringRedisTemplate.opsForValue().get(cacheKey);
         // A10: concurrent same-code reads merge into one in-flight DB read (whether
@@ -338,7 +350,13 @@ public class ShortLinkService {
         // caller got: a follower may see a row at most one query latency older than
         // its arrival (ms, well under the existing 1s double-delete window).
         ShortLink link = singleFlight.run(code, () -> rowLoader.load(code));
-        if (link == null || link.getStatus() == null || link.getStatus() != 1) {
+        if (link == null) {
+            // B7: DB says the code does not exist (Bloom false positive, logical
+            // delete, or Bloom off) — remember for a short jittered TTL.
+            markAbsent(code);
+            throw new BizException(404, "short link not found");
+        }
+        if (link.getStatus() == null || link.getStatus() != 1) {
             throw new BizException(404, "short link not found");
         }
         if (link.getExpireAt() != null && link.getExpireAt().isBefore(LocalDateTime.now())) {
@@ -375,8 +393,55 @@ public class ShortLinkService {
         return user;
     }
 
+    /** B-wave1 D-Bw1-5: TTL = base + uniform [0, jitter] (upward only); jitter<=0 degenerates to base. */
+    static long jitteredTtlSeconds(long baseSeconds, long jitterSeconds) {
+        if (jitterSeconds <= 0) {
+            return baseSeconds;
+        }
+        return baseSeconds + ThreadLocalRandom.current().nextLong(jitterSeconds + 1);
+    }
+
+    private boolean absentKnown(String code) {
+        if (properties.getShortLink().getAbsentTtlSeconds() <= 0) {
+            return false;
+        }
+        try {
+            return ABSENT_SENTINEL.equals(stringRedisTemplate.opsForValue().get(ABSENT_KEY_PREFIX + code));
+        } catch (Exception ex) {
+            // fail-open: a broken probe must not break redirects (Bw1 D-Bw1-12)
+            log.warn("absent probe failed for {}: {}", code, ex.getMessage());
+            return false;
+        }
+    }
+
+    private void markAbsent(String code) {
+        if (properties.getShortLink().getAbsentTtlSeconds() <= 0) {
+            return;
+        }
+        long ttl = jitteredTtlSeconds(properties.getShortLink().getAbsentTtlSeconds(),
+                properties.getShortLink().getAbsentTtlJitterSeconds());
+        try {
+            stringRedisTemplate.opsForValue().set(ABSENT_KEY_PREFIX + code, ABSENT_SENTINEL, ttl, TimeUnit.SECONDS);
+            meterRegistry.counter("linkforge.cache.absent.put").increment();
+        } catch (Exception ex) {
+            log.warn("absent write failed for {}: {}", code, ex.getMessage());
+        }
+    }
+
+    private void clearAbsent(String code) {
+        if (properties.getShortLink().getAbsentTtlSeconds() <= 0) {
+            return;
+        }
+        try {
+            stringRedisTemplate.delete(ABSENT_KEY_PREFIX + code);
+        } catch (Exception ex) {
+            log.warn("absent clear failed for {}: {}", code, ex.getMessage());
+        }
+    }
+
     private void cacheUrl(String code, String url) {
-        long ttl = properties.getShortLink().getCacheTtlSeconds();
+        long ttl = jitteredTtlSeconds(properties.getShortLink().getCacheTtlSeconds(),
+                properties.getShortLink().getCacheTtlJitterSeconds());
         stringRedisTemplate.opsForValue().set(CACHE_KEY_PREFIX + code, url, ttl, TimeUnit.SECONDS);
     }
 

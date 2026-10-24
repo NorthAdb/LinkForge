@@ -77,8 +77,13 @@ linkforge:
     secret: ${JWT_SECRET}
     expire-hours: ${JWT_EXPIRE_HOURS:24}
   short-link:
-    # Redis key: linkforge:code:{code} -> originalUrl
+    # Redis key: linkforge:code:{code} -> originalUrl; TTL = base + uniform [0, jitter]
     cache-ttl-seconds: 3600
+    cache-ttl-jitter-seconds: ${LINKFORGE_CACHE_TTL_JITTER_SECONDS:300}
+    # B7: negative cache for codes the DB confirms absent (never disables/expiry);
+    # linkforge:absent:{code}, <=0 disables. Keeps Bloom-off/missed codes off the DB.
+    absent-ttl-seconds: ${LINKFORGE_ABSENT_TTL_SECONDS:60}
+    absent-ttl-jitter-seconds: ${LINKFORGE_ABSENT_TTL_JITTER_SECONDS:30}
     code-length: 7
   bloom:
     # A9: process-local Guava Bloom over short codes; a negative answer 404s the
