@@ -215,6 +215,17 @@ MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.c
 - **容量**：`LINKFORGE_BLOOM_EXPECTED_INSERTIONS`（默认 100000）/ `LINKFORGE_BLOOM_FPP`（默认 0.0001）；实际插入量长期超过预期会劣化误判率（更「宁可误判回源」，不会漏），届时调大容量重启即可
 - **已知限制**：多实例各自装载、不共享——在实例 B 新建的码，在实例 A **重启前**是负答 → A 上 404（**真正的假阴性**；Demo 只跑单实例所以可接受，生产需换 RedisBloom 或广播 put，后置）。与「长链去重 Bloom」是**两个不同结构**，不得混用
 
+## 防击穿（A10 singleflight）
+
+**先说实话（本项目不是经典击穿形状）**：经典击穿是「缓存 key 过期 → 一窝请求同时打 DB」。LinkForge 为了强一致，`resolveTarget` **每个请求都要读一次 DB 行**判禁用/过期（Redis 只省 URL 字段，不替 DB 挡流量），所以热点码的 DB 读压力和 QPS 成正比、与缓存过期无关。A10 的 singleflight 合并的就是「每请求读行」本身：同一短码的并发读行合并成**一次在途读**，其余请求跟车拿同一份行，把 DB 读压成「每个在途窗口（一次查询耗时）1 次」。
+
+- **只合并读行**：限流、Bloom、Redis GET、状态/过期判定、URL 校验、缓存回填、点击记录仍在每个请求自己的线程上；过期判定用**本请求**的 `now()`，404/410 结论不共享。同步点击明细照旧每次一写——DB 总负载只省掉读那一半
+- **实现**：进程内 `ConcurrentHashMap<code, CompletableFuture<行>>`；领头 `putIfAbsent` 后在**自己线程上**同步读库，完成即摘除条目（`remove(key, future)` 两参版）——**不是结果缓存**，无 TTL、无最近值。跟车等待超时（`LINKFORGE_SINGLEFLIGHT_WAIT_TIMEOUT_MS`，默认 500ms）就**自己读一次库**（fail-open，计 `linkforge.singleflight.timeout`），合并器故障不会造成 5xx/误 404
+- **一致性窗口**：跟车拿到的行最多比它到达时早一个查询耗时（毫秒级），小于既有 1s 延迟双删窗口。写路径收紧：`update` / 禁用/启用 / 删除提交后调 `forget(code)` 摘掉在途条目，写后到达的请求重新领头读新行（有 IT 钉住「disable 后的 GET 不跟车旧行」）
+- **Bloom 在合并器之前**：负答 404 永远不进 flight；Bloom 误判/已删码的并发 miss 也合并（同一时刻只读 1 次库），但 null 不缓存（空值缓存是 B7，后置）
+- **多实例**：合并是进程内的，最坏「每实例每在途窗口 1 次」，DB 读压力上限＝实例数（Demo 可接受）。**不引入分布式锁**（Redisson / `SET NX`）：在「每请求必须读行」的前提下，分布式互斥只会把读串行化、拉长尾延迟，收益不成立
+- **面试对照**：mutex（`synchronized`/单飞锁）把同码请求全串行、等待面大；singleflight（本实现）只在读库这点上并赃合并、完成即散；XFetch（概率早刷新）提前续期把击穿概率压到趋零，但需要 TTL 语义配合——本项目行读无 TTL 可续，故选 singleflight。指标：`linkforge.singleflight.loads`（领头真读库次数）/ `shared`（跟车复用）/ `timeout`（超时退化），开关 `LINKFORGE_SINGLEFLIGHT_ENABLED=false` 回到 A9 行为（计数器不注册）
+
 **存量库迁移（Flyway，深化 A6）**：schema 已版本化在 `src/main/resources/db/migration`（`V1__baseline_schema.sql`），由应用启动时自动迁移（`spring.flyway.baseline-on-migrate=true`）：
 
 - **全新数据卷**：首次启动应用（或跑 `scripts/migrate.sh`）由 Flyway 建全部表；Compose 的 MySQL 不再挂载 initdb 脚本，容器 healthy 后直接起应用即可。
@@ -250,11 +261,12 @@ MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.c
 - `LINKFORGE_CREATE_RATE_MAX` / `LINKFORGE_CREATE_RATE_WINDOW_SECONDS` 创建限流（默认 30 / 60 秒，按用户）
 - `LINKFORGE_REDIRECT_RATE_MAX` / `LINKFORGE_REDIRECT_RATE_WINDOW_SECONDS` 跳转限流（默认 300 / 60 秒，按 IP）
 - `LINKFORGE_BLOOM_ENABLED` / `LINKFORGE_BLOOM_EXPECTED_INSERTIONS` / `LINKFORGE_BLOOM_FPP` 跳转防穿透 Bloom（默认 true / 100000 / 0.0001，见「防穿透」；装载失败自动 fail-open）
+- `LINKFORGE_SINGLEFLIGHT_ENABLED` / `LINKFORGE_SINGLEFLIGHT_WAIT_TIMEOUT_MS` 同码并发读行合并（默认 true / 500ms，见「防击穿」；超时退化自读）
 - `LINKFORGE_IDEMPOTENCY_TTL_SECONDS` 创建幂等键保留时长（默认 86400 秒）
 - `LINKFORGE_TRUST_XFF` 是否信任 X-Forwarded-For（默认 false，仅在可信反代后开启）
 - 限流覆盖说明：注册按 IP、创建按用户（**含自定义短码创建，共用 POST /api/links 的限额**）；CSV 导出与统计查询属管理 API（JWT 必需、租户隔离），未单独限流，导出有 1 万行上限保护
 - `/actuator/health` 展示组件细节（db / redis / rabbit / diskSpace），依赖 DOWN 时整体 503
-- `/actuator/metrics/**` 暴露业务计数器（`linkforge.links.created`、`linkforge.redirects`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`、`linkforge.bloom.rejected` / `linkforge.bloom.loaded` / `linkforge.bloom.loadfailed`、`linkforge.outbox.failed`），需 Bearer Token
+- `/actuator/metrics/**` 暴露业务计数器（`linkforge.links.created`、`linkforge.redirects`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`、`linkforge.bloom.rejected` / `linkforge.bloom.loaded` / `linkforge.bloom.loadfailed`、`linkforge.singleflight.loads` / `linkforge.singleflight.shared` / `linkforge.singleflight.timeout`、`linkforge.outbox.failed`），需 Bearer Token
 - **公网部署**：本地 Demo 一律默认 profile（全开放）；对外部署设 `SPRING_PROFILES_ACTIVE=prod` 一键收紧——health 细节转 `when_authorized`、springdoc 与静态控制台关闭、文档/控制台路径在过滤器层 denyAll（见 application.yml prod 段与 ProdProfileIT）
 
 ## 架构
@@ -288,7 +300,7 @@ flowchart LR
     ST -->|UV| MY
 ```
 
-**跳转时序（GET /r/{code}）**：① 限流器按 IP 固定窗口 INCR（Redis，超限 429）→ ② **Bloom 门（A9）：从未存在的码直接 404，不碰 Redis/MySQL** → ③ 读缓存 `linkforge:code:{code}`（命中则省 URL 字段）→ ④ 无论命中与否都读 `lf_short_link` 行做禁用/过期判定（404/410，防脏缓存；Bloom 误判也走这里，正确性不变）→ ⑤ 目标 URL 严格校验后写入 `lf_click_log`（D7 同步明细）→ ⑥ 发布 `ClickEvent`（eventId=log-{id}）到 RabbitMQ → 返回 302。消费端以 eventId 唯一索引幂等累加 `lf_click_daily`；发布失败由 Reconciler 定时从明细补投（断 MQ 演练见 `scripts/mq-drill.sh`）。更新/禁用走写穿 + 1s 延迟双删防旧值回填。
+**跳转时序（GET /r/{code}）**：① 限流器按 IP 固定窗口 INCR（Redis，超限 429）→ ② **Bloom 门（A9）：从未存在的码直接 404，不碰 Redis/MySQL** → ③ 读缓存 `linkforge:code:{code}`（命中则省 URL 字段）→ ④ 无论命中与否都读 `lf_short_link` 行做禁用/过期判定（404/410，防脏缓存；**同码并发读行经 singleflight 合并为一次在途读（A10），其余跟车拿同一份行**；Bloom 误判也走这里，正确性不变）→ ⑤ 目标 URL 严格校验后写入 `lf_click_log`（D7 同步明细）→ ⑥ 发布 `ClickEvent`（eventId=log-{id}）到 RabbitMQ → 返回 302。消费端以 eventId 唯一索引幂等累加 `lf_click_daily`；发布失败由 Reconciler 定时从明细补投（断 MQ 演练见 `scripts/mq-drill.sh`）。更新/禁用走写穿 + 1s 延迟双删防旧值回填。
 
 **本地 Demo 五步**（只走核心路径）：
 
