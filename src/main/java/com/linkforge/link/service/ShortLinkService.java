@@ -35,6 +35,7 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -247,10 +248,12 @@ public class ShortLinkService {
             link.setExpireAt(request.getExpireAt());
         }
         link.setUpdatedAt(LocalDateTime.now());
+        // Snapshot the in-flight row read BEFORE the commit so the post-write forget
+        // can never kill a flight that started after it and reads the fresh row
+        // (A10 audit N1).
+        CompletableFuture<ShortLink> priorFlight = singleFlight.peek(code);
         shortLinkMapper.updateById(link);
-        // Drop the in-flight row read so requests arriving after this commit re-lead
-        // and read the fresh row instead of riding a pre-commit read (A10 D-A10-5).
-        singleFlight.forget(code);
+        singleFlight.forget(code, priorFlight);
         // Write-through now, then a delayed delete clears any stale write-back a racing
         // reader may have cached from the pre-commit row. Final consistency window ~1s.
         cacheUrl(code, effectiveUrl);
@@ -270,8 +273,9 @@ public class ShortLinkService {
         ShortLink link = getOwnedLink(code);
         link.setStatus(status);
         link.setUpdatedAt(LocalDateTime.now());
+        CompletableFuture<ShortLink> priorFlight = singleFlight.peek(code);
         shortLinkMapper.updateById(link);
-        singleFlight.forget(code);
+        singleFlight.forget(code, priorFlight);
         evictCache(code);
         scheduleStaleClear(code);
     }
@@ -279,8 +283,9 @@ public class ShortLinkService {
     /** Logical delete: the code stays reserved (uk_code) and cannot be reused. */
     public void delete(String code) {
         ShortLink link = getOwnedLink(code);
+        CompletableFuture<ShortLink> priorFlight = singleFlight.peek(code);
         shortLinkMapper.deleteById(link.getId());
-        singleFlight.forget(code);
+        singleFlight.forget(code, priorFlight);
         evictCache(code);
         scheduleStaleClear(code);
     }

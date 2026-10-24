@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -153,6 +154,52 @@ class SingleFlightTest {
     }
 
     @Test
+    void forgetWithStaleSnapshotSparesThePostWriteFlight() throws Exception {
+        // A10 audit N1: the write path snapshots before committing; a flight that
+        // started after the commit (reading the fresh row) must survive the forget.
+        SingleFlight<String, String> flight = newFlight();
+        GatedLoader preWrite = new GatedLoader("old-row");
+        Thread preWriteLead = new Thread(() -> flight.run("k", preWrite));
+        preWriteLead.start();
+        assertTrue(preWrite.started.await(5, TimeUnit.SECONDS));
+        CompletableFuture<String> snapshot = flight.peek("k");
+
+        preWrite.release.countDown();
+        preWriteLead.join(5000); // pre-write flight settles and removes itself
+
+        GatedLoader postWrite = new GatedLoader("fresh-row");
+        Thread postWriteLead = new Thread(() -> flight.run("k", postWrite));
+        postWriteLead.start();
+        assertTrue(postWrite.started.await(5, TimeUnit.SECONDS));
+
+        flight.forget("k", snapshot); // the write path's snapshot-based forget
+
+        CompletableFuture<String> current = flight.peek("k");
+        assertTrue(current != null && current != snapshot,
+                "the post-write flight must survive the stale-snapshot forget");
+
+        // a rider that joins the surviving flight still gets the fresh row
+        java.util.concurrent.FutureTask<String> rider =
+                new java.util.concurrent.FutureTask<>(() -> flight.run("k", () -> "RIDER-MUST-NOT-RUN"));
+        Thread riderThread = new Thread(rider, "sf-rider");
+        riderThread.start();
+        awaitAllWaiting(List.of(riderThread));
+
+        postWrite.release.countDown();
+        postWriteLead.join(5000);
+        assertEquals("fresh-row", rider.get(5, TimeUnit.SECONDS));
+    }
+
+    @Test
+    void forgetWithNullSnapshotIsANoOp() {
+        SingleFlight<String, String> flight = newFlight();
+
+        flight.forget("k", null); // nothing was in flight; must not throw
+
+        assertEquals("v", flight.run("k", () -> "v"));
+    }
+
+    @Test
     void forgetDropsTheInFlightEntrySoNextCallerReleads() throws Exception {
         SingleFlight<String, String> flight = newFlight();
         GatedLoader loader = new GatedLoader("stale");
@@ -160,7 +207,7 @@ class SingleFlightTest {
         leader.start();
         assertTrue(loader.started.await(5, TimeUnit.SECONDS));
 
-        flight.forget("w"); // write path drops the in-flight read
+        flight.forget("w", flight.peek("w")); // write path drops the pre-write in-flight read
         AtomicInteger secondLead = new AtomicInteger();
         assertEquals("fresh", flight.run("w", () -> {
             secondLead.incrementAndGet();
