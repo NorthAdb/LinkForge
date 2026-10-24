@@ -68,6 +68,46 @@ class WebhookTargetGuardTest {
     }
 
     @Test
+    void extendedV4BlocksAreEnforced() throws Exception {
+        // Bw2-N6: 0.0.0.0/8, 198.18.0.0/15, 240.0.0.0/4 (incl. broadcast)
+        for (String ip : new String[]{"0.1.2.3", "198.18.0.1", "198.19.255.255", "240.0.0.1", "255.255.255.255"}) {
+            WebhookTargetGuard guard = guard(new LinkForgeProperties(), ip);
+            assertTrue(guard.isBlocked("http://target.test/hook"),
+                    "expected blocked: " + ip);
+        }
+    }
+
+    @Test
+    void embeddedIpv4FormsFallBackToV4Rules() throws Exception {
+        // Bw2-N6: NAT64, 6to4 and IPv4-compatible wrapping of private addresses
+        for (String literal : new String[]{"64:ff9b::a9fe:a9fe", "2002:7f00:1::1", "::127.0.0.1"}) {
+            WebhookTargetGuard guard = guard(new LinkForgeProperties(), InetAddress.getByName(literal).getHostAddress());
+            assertTrue(guard.isBlocked("http://target.test/hook"),
+                    "expected blocked: " + literal + " (resolved " + InetAddress.getByName(literal).getHostAddress() + ")");
+        }
+    }
+
+    @Test
+    void publicNat64TargetIsAllowed() throws Exception {
+        // 64:ff9b::808:808 embeds the public 8.8.8.8
+        WebhookTargetGuard guard = guard(new LinkForgeProperties(), "64:ff9b::808:808");
+        assertFalse(guard.isBlocked("http://target.test/hook"),
+                "a NAT64-wrapped PUBLIC address must pass");
+    }
+
+    @Test
+    void blockedReasonDoesNotEchoResolvedAddresses() {
+        WebhookTargetGuard guard = guard(new LinkForgeProperties(), "127.0.0.1");
+        try {
+            guard.check("http://loopback.test/hook");
+            org.junit.jupiter.api.Assertions.fail("expected BizException");
+        } catch (BizException ex) {
+            assertFalse(String.valueOf(ex.getMessage()).contains("127.0.0.1"),
+                    "the 400 body must not echo resolved IPs: " + ex.getMessage());
+        }
+    }
+
+    @Test
     void checkRaisesBizExceptionOnBlockedTarget() {
         WebhookTargetGuard guard = guard(new LinkForgeProperties(), "127.0.0.1");
         assertThrows(BizException.class, () -> guard.check("http://loopback.test/hook"));

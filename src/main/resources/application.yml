@@ -114,6 +114,8 @@ linkforge:
     default-quota-per-minute: ${LINKFORGE_APIKEY_QUOTA_PER_MINUTE:120}
     default-quota-per-day: ${LINKFORGE_APIKEY_QUOTA_PER_DAY:10000}
     max-active-per-user: ${LINKFORGE_APIKEY_MAX_ACTIVE:10}
+    max-quota-per-minute: ${LINKFORGE_APIKEY_MAX_QUOTA_PER_MINUTE:1000}
+    max-quota-per-day: ${LINKFORGE_APIKEY_MAX_QUOTA_PER_DAY:100000}
   webhook:
     # B5: click webhooks built on the A7 outbox chain (consume -> delivery row -> relay).
     enabled: ${LINKFORGE_WEBHOOK_ENABLED:true}

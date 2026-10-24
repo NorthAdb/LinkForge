@@ -376,14 +376,15 @@ public class ShortLinkService {
         if (!LinkValidations.isRenderableUrl(link.getOriginalUrl())) {
             throw new BizException(410, "short link target is invalid");
         }
-        // Bw1-N1: a Redis-only hit backfills the L1 so a hot code stops paying the
-        // Redis round-trip after the 10s L1 TTL; every row check above already passed.
-        if (!servedFromLocal && cached != null && !cached.isBlank()) {
-            urlLocalCache.put(code, cached);
-        }
         String originalUrl = cached != null && !cached.isBlank() ? cached : link.getOriginalUrl();
         if (!LinkValidations.isRenderableUrl(originalUrl)) {
             throw new BizException(410, "short link target is invalid");
+        }
+        // Bw1-N1 (moved after BOTH validations per Bw2-N1): a Redis-only hit backfills
+        // the L1 so a hot code stops paying the Redis round-trip after the 10s L1 TTL —
+        // and only values that passed the row gate AND the renderable check land in L1.
+        if (!servedFromLocal && cached != null && !cached.isBlank()) {
+            urlLocalCache.put(code, cached);
         }
         if (cached == null || cached.isBlank()) {
             cacheUrl(code, originalUrl);

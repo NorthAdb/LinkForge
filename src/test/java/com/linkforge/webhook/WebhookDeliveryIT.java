@@ -7,11 +7,13 @@ import com.linkforge.webhook.support.WebhookSigner;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.SpyBean;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
@@ -27,9 +29,11 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -69,7 +73,24 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
     private JdbcTemplate jdbc;
 
     @Autowired
+    private MeterRegistry meterRegistry;
+
+    @Autowired
     private ClickStatsService clickStatsService;
+
+    @Autowired
+    private com.linkforge.webhook.service.WebhookService webhookService;
+
+    @SpyBean
+    private com.linkforge.webhook.support.WebhookSecretCipher cipher;
+
+    @SpyBean
+    private com.linkforge.webhook.mapper.WebhookDeliveryMapper deliveryMapper;
+
+    @BeforeEach
+    void resetSpies() {
+        org.mockito.Mockito.reset(cipher, deliveryMapper);
+    }
 
     @BeforeAll
     static void startStub() throws Exception {
@@ -182,10 +203,6 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
         assertEquals(1, deliveryCount(eventId));
     }
 
-    /** Decrypts the stored endpoint secret with the test master key via the service cipher. */
-    @Autowired
-    private com.linkforge.webhook.support.WebhookSecretCipher cipher;
-
     private String secretPlainFor(Long tenantId) {
         String stored = jdbc.queryForObject(
                 "SELECT secret FROM lf_webhook_endpoint WHERE tenant_id = ?", String.class, tenantId);
@@ -232,7 +249,8 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
         });
         String eventId = String.valueOf(latestDeliveryFor(token).get("event_id"));
         awaitStubSaw(eventId);
-        assertEquals(1, RECEIVED.size(), "exactly one stub hit for a permanent 4xx, got " + RECEIVED.size());
+        assertEquals(1, RECEIVED.stream().filter(r -> eventId.equals(r[1])).count(),
+                "exactly one stub hit for this event (order-independent), got " + RECEIVED.size());
         assertEquals(1, deliveryCount(eventId));
     }
 
@@ -271,6 +289,86 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
         await().atMost(java.time.Duration.ofSeconds(30)).untilAsserted(() ->
                 assertEquals(1, deliveryCount("evt_" + eventId)));
         assertEquals(1, deliveryCount("evt_" + eventId));
+    }
+
+    @Test
+    void missingMasterKeyStillEnqueuesAndRelaySkipsWithoutConsumingAttempts() throws Exception {
+        // S1-b/S1-c: the delivery intent is recorded regardless of the cipher state;
+        // the relay skips whole batches without touching rows until the key exists.
+        String token = registerForToken();
+        configureEndpoint(token, "/hook-nokey");
+
+        org.mockito.Mockito.doReturn(false).when(cipher).isAvailable();
+        double skipped0 = counter("linkforge.webhook.relay.skipped");
+
+        String code = createLink(token, "https://example.com/hook-nokey");
+        assertEquals(302, get("/r/" + code, null).getStatusCode().value());
+
+        await().atMost(java.time.Duration.ofSeconds(60)).untilAsserted(() -> {
+            Map<String, Object> row = latestDeliveryFor(token);
+            assertNotNull(row, "the intent must be enqueued even without the master key");
+            assertEquals("PENDING", row.get("status"), "row: " + row);
+            assertEquals(0, ((Number) row.get("attempts")).intValue(),
+                    "skipped batches must not consume attempts: " + row);
+        });
+        await().atMost(java.time.Duration.ofSeconds(30)).untilAsserted(() ->
+                assertTrue(counter("linkforge.webhook.relay.skipped") > skipped0, "relay skips must be observable"));
+
+        // restore the real cipher: the pending row flows naturally, no replay needed
+        org.mockito.Mockito.reset(cipher);
+        await().atMost(java.time.Duration.ofSeconds(60)).untilAsserted(() -> {
+            Map<String, Object> row = latestDeliveryFor(token);
+            assertEquals("SENT", row.get("status"), "row: " + row);
+        });
+    }
+
+    @Test
+    void enqueueFailureRollsBackTheConsumeTransaction() throws Exception {
+        // S1-d: statistics and delivery intent commit or die together — a failing
+        // insert rolls back the whole consume and the MQ semantics take over.
+        String token = registerForToken();
+        configureEndpoint(token, "/hook-rollback");
+
+        Long tenantId = tenantIdOf(token);
+        String eventId = "evt-rollback-" + UUID.randomUUID();
+        ClickEvent event = new ClickEvent(eventId, tenantId, 1L, "hookrb", 1L,
+                "203.0.113.77", "Mozilla/5.0", null, LocalDateTime.now());
+        org.mockito.Mockito.doThrow(new IllegalStateException("db exploded"))
+                .when(deliveryMapper).insert(org.mockito.ArgumentMatchers.any(
+                        com.linkforge.webhook.entity.WebhookDelivery.class));
+        double failed0 = counter("linkforge.webhook.enqueue.failed");
+
+        assertThrows(IllegalStateException.class, () -> clickStatsService.consume(event),
+                "the consume must fail so the transaction rolls back");
+
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM lf_consumed_event WHERE event_id = ?", Integer.class, eventId),
+                "the dedup row must be rolled back with the delivery");
+        assertEquals(0, deliveryCount("evt_" + eventId), "no delivery row may survive");
+        assertTrue(counter("linkforge.webhook.enqueue.failed") > failed0, "enqueue failure must be counted");
+    }
+
+    @Test
+    void duplicateEnqueueIsCountedAndHarmless() throws Exception {
+        // S1-d exception: a duplicate (endpoint_id, event_id) means "already enqueued"
+        String token = registerForToken();
+        configureEndpoint(token, "/hook-idem2");
+
+        Long tenantId = tenantIdOf(token);
+        String eventId = "evt-dup-" + UUID.randomUUID();
+        ClickEvent event = new ClickEvent(eventId, tenantId, 1L, "hookdup", 1L,
+                "203.0.113.78", "Mozilla/5.0", null, LocalDateTime.now());
+        assertTrue(clickStatsService.consume(event), "first consume wins");
+
+        double failed0 = counter("linkforge.webhook.enqueue.failed");
+        assertDoesNotThrow(() -> webhookService.recordClickDelivery(event), "duplicate must not throw");
+        assertTrue(counter("linkforge.webhook.enqueue.failed") > failed0, "the duplicate must be counted");
+        assertEquals(1, deliveryCount("evt_" + eventId), "still exactly one delivery row");
+    }
+
+    private double counter(String name) {
+        var c = meterRegistry.find(name).counter();
+        return c == null ? 0.0 : c.count();
     }
 
     @Test

@@ -94,6 +94,9 @@ public class LinkForgeProperties {
         private int defaultQuotaPerMinute = 120;
         private int defaultQuotaPerDay = 10_000;
         private int maxActivePerUser = 10;
+        /** Bw2-N4: a key creator cannot raise a key above these caps. */
+        private int maxQuotaPerMinute = 1_000;
+        private int maxQuotaPerDay = 100_000;
     }
 
     @Data

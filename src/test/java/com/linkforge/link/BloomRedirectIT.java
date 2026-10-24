@@ -9,6 +9,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -37,6 +38,25 @@ class BloomRedirectIT extends AbstractIntegrationTest {
 
     @Autowired
     private com.linkforge.link.support.UrlLocalCache urlLocalCache;
+
+    @Autowired
+    private org.springframework.data.redis.core.StringRedisTemplate stringRedisTemplate;
+
+    @Test
+    void dirtyRedisValueNeverBackfillsTheLocalCache() throws Exception {
+        // Bw2-N1: the L1 backfill sits after BOTH validations — a poisoned Redis value
+        // with a valid row must 410 and leave the L1 empty for that code.
+        String token = registerForToken();
+        String code = createLink(token, "https://example.com/l1-clean");
+        assertEquals(302, get("/r/" + code, null).getStatusCode().value());
+
+        stringRedisTemplate.opsForValue().set("linkforge:code:" + code, "javascript:alert(1)");
+        urlLocalCache.invalidate(code); // force the next read onto the poisoned Redis value
+
+        assertEquals(410, get("/r/" + code, null).getStatusCode().value(),
+                "the dirty target must be rejected no matter where it came from");
+        assertNull(urlLocalCache.getIfPresent(code), "a value rejected by the renderable check must not enter L1");
+    }
 
     @Test
     void redisOnlyHitBackfillsTheLocalCache() throws Exception {
