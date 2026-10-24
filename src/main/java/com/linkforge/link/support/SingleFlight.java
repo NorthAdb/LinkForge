@@ -97,8 +97,22 @@ public class SingleFlight<K, V> {
         }
     }
 
-    /** Drops any in-flight entry for the key so the next caller re-leads (write paths). */
-    public void forget(K key) {
-        inFlight.remove(key);
+    /** Read-only view of the current in-flight entry; write paths snapshot before committing. */
+    public CompletableFuture<V> peek(K key) {
+        return inFlight.get(key);
+    }
+
+    /**
+     * Drops the in-flight entry only if it is still the one snapshotted before the
+     * DB write (two-arg remove), so a flight that started after the commit is never
+     * killed (A10 audit N1). A null snapshot (nothing was in flight) is a no-op.
+     * Residual window: a flight that starts between the snapshot and the commit
+     * still reads the old row and gets removed here — same order as the accepted
+     * per-query-latency window.
+     */
+    public void forget(K key, CompletableFuture<V> priorSnapshot) {
+        if (priorSnapshot != null) {
+            inFlight.remove(key, priorSnapshot);
+        }
     }
 }

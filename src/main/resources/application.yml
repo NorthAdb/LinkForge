@@ -77,8 +77,13 @@ linkforge:
     secret: ${JWT_SECRET}
     expire-hours: ${JWT_EXPIRE_HOURS:24}
   short-link:
-    # Redis key: linkforge:code:{code} -> originalUrl
+    # Redis key: linkforge:code:{code} -> originalUrl; TTL = base + uniform [0, jitter]
     cache-ttl-seconds: 3600
+    cache-ttl-jitter-seconds: ${LINKFORGE_CACHE_TTL_JITTER_SECONDS:300}
+    # B7: negative cache for codes the DB confirms absent (never disables/expiry);
+    # linkforge:absent:{code}, <=0 disables. Keeps Bloom-off/missed codes off the DB.
+    absent-ttl-seconds: ${LINKFORGE_ABSENT_TTL_SECONDS:60}
+    absent-ttl-jitter-seconds: ${LINKFORGE_ABSENT_TTL_JITTER_SECONDS:30}
     code-length: 7
   bloom:
     # A9: process-local Guava Bloom over short codes; a negative answer 404s the
@@ -91,6 +96,12 @@ linkforge:
     # followers past wait-timeout do their own read (fail-open).
     enabled: ${LINKFORGE_SINGLEFLIGHT_ENABLED:true}
     wait-timeout-ms: ${LINKFORGE_SINGLEFLIGHT_WAIT_TIMEOUT_MS:500}
+  l1:
+    # B8: process-local Caffeine cache of URL strings in front of Redis. A hit saves
+    # a Redis round-trip only — the DB row is still read per request for status.
+    enabled: ${LINKFORGE_L1_ENABLED:true}
+    maximum-size: ${LINKFORGE_L1_MAXIMUM_SIZE:10000}
+    ttl-seconds: ${LINKFORGE_L1_TTL_SECONDS:10}
   mq:
     # A7: hot path writes lf_outbox (PENDING) in the click transaction; the relay
     # drains it to RabbitMQ. sync-click keeps the lf_click_log double write.
