@@ -2,6 +2,7 @@ package com.linkforge.security;
 
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -22,18 +23,28 @@ public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
 
+    /** false in prod: docs are denied at the filter chain before reaching springdoc. */
+    @Value("${linkforge.docs-enabled:true}")
+    private boolean docsEnabled;
+
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        String[] docsPaths = {"/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html"};
         http.csrf(AbstractHttpConfigurer::disable)
                 .cors(Customizer.withDefaults())
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/actuator/health", "/api/health").permitAll()
-                        .requestMatchers("/api/auth/**").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/r/**").permitAll()
-                        .requestMatchers("/", "/index.html", "/favicon.ico",
-                                "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
-                        .anyRequest().authenticated())
+                .authorizeHttpRequests(auth -> {
+                    auth.requestMatchers("/actuator/health", "/api/health").permitAll()
+                            .requestMatchers("/api/auth/**").permitAll()
+                            .requestMatchers(HttpMethod.GET, "/r/**").permitAll()
+                            .requestMatchers("/", "/index.html", "/favicon.ico").permitAll();
+                    if (docsEnabled) {
+                        auth.requestMatchers(docsPaths).permitAll();
+                    } else {
+                        auth.requestMatchers(docsPaths).denyAll();
+                    }
+                    auth.anyRequest().authenticated();
+                })
                 .exceptionHandling(eh -> eh.authenticationEntryPoint((request, response, ex) -> {
                     response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                     response.setContentType("application/json;charset=UTF-8");

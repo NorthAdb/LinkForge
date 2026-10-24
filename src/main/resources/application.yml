@@ -110,6 +110,8 @@ springdoc:
     enabled: false
   swagger-ui:
     enabled: false
+linkforge:
+  docs-enabled: false
 management:
   endpoint:
     health:

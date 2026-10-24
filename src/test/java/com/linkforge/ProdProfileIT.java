@@ -27,8 +27,8 @@ class ProdProfileIT extends AbstractIntegrationTest {
         assertEquals(200, health.getStatusCode().value(), health.getBody());
         assertFalse(health.getBody().contains("components"), "prod must hide component details");
 
-        assertEquals(404, get("/v3/api-docs", null).getStatusCode().value(), "prod must disable api-docs");
-        assertEquals(404, get("/swagger-ui/index.html", null).getStatusCode().value(), "prod must disable swagger ui");
+        assertEquals(403, get("/v3/api-docs", null).getStatusCode().value(), "prod must deny api-docs");
+        assertEquals(403, get("/swagger-ui/index.html", null).getStatusCode().value(), "prod must deny swagger ui");
         assertEquals(404, get("/", null).getStatusCode().value(), "prod must not serve the static console");
 
         assertTrue(get("/api/health", null).getStatusCode().is2xxSuccessful());
