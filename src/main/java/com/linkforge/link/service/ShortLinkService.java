@@ -163,8 +163,8 @@ public class ShortLinkService {
             throw new BizException("failed to allocate short code");
         }
 
-        cacheUrl(link.getCode(), url);
         codeBloom.put(link.getCode());
+        cacheUrl(link.getCode(), url);
         meterRegistry.counter("linkforge.links.created").increment();
         if (idemKey != null) {
             stringRedisTemplate.opsForValue().set(idemKey, link.getCode(),

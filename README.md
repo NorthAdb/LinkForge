@@ -210,10 +210,10 @@ MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.c
 
 - **一定不存在 → 直接 404**：`mightContain == false` 是权威否定（该码在启动装载时不在库中、之后也没在本实例创建过），跳过 Redis 与 MySQL，计数指标 `linkforge.bloom.rejected`
 - **存在或误判 → 回源**：false positive（`fpp` 配置，默认 1e-4）只是多一次 DB miss 后照常 404，**正确性不受影响**；启动 `ApplicationReadyEvent` 全量 `SELECT code` 装载，创建成功即 `put`
-- **禁用/过期/删除语义不变**：Bloom 只挡「从未存在」的码，不存 status/expire——禁用行仍在（Bloom 保持正答 → 回源 DB → 404）；物理删除的经典 Bloom 无法回收（删除码仍可能正答 → 一次 DB miss → 404，可接受）；**删除/过期判断永远以 DB 为准**
+- **禁用/过期/删除语义不变**：Bloom 只挡「从未存在」的码，不存 status/expire——禁用行仍在（Bloom 保持正答 → 回源 DB → 404）；删除是**逻辑删除**（行保留、`uk_code` 码位不可复用），已删码仍被装进 Bloom（播种 SQL 故意绕过 `@TableLogic`）→ 回源 DB（`deleted=0` 过滤）→ 404；经典 Bloom 无法回收条目（如需回收走定期全量 rebuild，后置）；**删除/过期判断永远以 DB 为准**
 - **降级**：`LINKFORGE_BLOOM_ENABLED=false` 一键关闭（回落 A8 行为，非法码照旧 404 但查库）；装载失败/未就绪自动 fail-open 走旧路径（warn + `linkforge.bloom.loadfailed`），Bloom 故障不会导致 5xx
 - **容量**：`LINKFORGE_BLOOM_EXPECTED_INSERTIONS`（默认 100000）/ `LINKFORGE_BLOOM_FPP`（默认 0.0001）；实际插入量长期超过预期会劣化误判率（更「宁可误判回源」，不会漏），届时调大容量重启即可
-- **已知限制**：多实例各自装载不共享（跨实例新建的码在本实例为负答 → 需回源场景不存在——误判为负会 404，共享方案 RedisBloom 后置）；经典 Bloom 不支持删除回收（定期全量 rebuild 可选后置）。与「长链去重 Bloom」是**两个不同结构**，不得混用
+- **已知限制**：多实例各自装载、不共享——在实例 B 新建的码，在实例 A **重启前**是负答 → A 上 404（**真正的假阴性**；Demo 只跑单实例所以可接受，生产需换 RedisBloom 或广播 put，后置）。与「长链去重 Bloom」是**两个不同结构**，不得混用
 
 **存量库迁移（Flyway，深化 A6）**：schema 已版本化在 `src/main/resources/db/migration`（`V1__baseline_schema.sql`），由应用启动时自动迁移（`spring.flyway.baseline-on-migrate=true`）：
 

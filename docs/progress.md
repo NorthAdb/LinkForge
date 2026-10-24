@@ -2,9 +2,9 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：深化 A9 终态＝合并 `d6c97e0`（feat/deepen-a9-bloom 四单元 + 共享测试容器连接上限修复）+ docs 收口 `ee86f0114f534729c755f34da55acd6527dc85a5`（其上至多一个纯 docs 钉子提交；审计以 git rev-parse HEAD 为准，`ee86f0114f534729c755f34da55acd6527dc85a5` 必为其祖先）；A8 终态 `9dd60df` 的钉点漂移已在本轮开工提交 `f6b7dbe` 补钉（A8-N1）。
+> **当前 main tip**：`ccff8026fa491d529d2f06e26d91bc6d30d4a939`（2026-10-24，深化 A9 终态＝合并 `d6c97e0` + docs 收口 `ee86f01` + 纯钉子提交 `ccff802`，`git rev-parse HEAD` 可对）。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
-> 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6、A7、A8 均已交付并通过审计（A8 审计 PASS_WITH_NITS @ `9dd60df`）；本轮为**深化 A9 Bloom 防非法短码穿透**（跳转热路径 DB 前短路），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A9-bloom-handoff.md`。
+> 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6、A7、A8、A9 均已交付并通过审计（A9 审计 PASS_WITH_NITS @ `ccff802`，无 must-fix）；本轮为**深化 A10 singleflight 防热点击穿**（+ A9 审计收口 + V4 短码区分大小写），交接单 `记录追踪/05-阶段交接/LinkForge-phase-A10-singleflight-handoff.md`。
 
 ## 状态总览
 
@@ -634,7 +634,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | D-A9-2 | **Guava `BloomFilter<String>`**（`Funnels.stringFunnel(UTF_8)`）进程内；`expectedInsertions=100000` + `fpp=1e-4` 可配；`ApplicationReadyEvent` 全量 `SELECT code` 装载；创建成功 `put`；多实例各自装载（Demo 姿态，跨实例新建码的假阴性限制与 RedisBloom 后置路线登记 README） | 交接单推荐默认；RedisBloom 需 Redis Stack 模块，不为本阶段引入 |
 | D-A9-3 | 插入点＝`resolveTarget` **限流之后、缓存与 DB 之前**；`mightContain==false` → 404 + 指标 `linkforge.bloom.rejected`；true → 维持既有 Redis+DB 路径 | 交接单 D-A9-3；放在缓存读之前连 Redis GET 一并省掉（强于「仅不打 MySQL」） |
 | D-A9-4 | 假阳性 → 一次 DB miss → 404，正确性不变；用 Guava 标准实现（不自造 bitset，杜绝假阴性） | 交接单 D-A9-4 |
-| D-A9-5 | 禁用：行仍在，Bloom 保持正答 → 回源 DB → 404；删除：物理删行、经典 Bloom 不可回收，删除码仍可能正答 → 一次 DB miss → 404（登记已知限制；定期全量 rebuild 可选后置）；**不**为删除引入会假阴性的粗糙结构 | 交接单 D-A9-5 |
+| D-A9-5 | 禁用：行仍在，Bloom 保持正答 → 回源 DB → 404；删除是**逻辑删除**（行保留、码位不可复用），已删码仍装进 Bloom（播种 SQL 绕过 @TableLogic）→ 回源 DB（deleted=0 过滤）→ 404；经典 Bloom 不可回收（rebuild 后置）；**不**为删除引入会假阴性的粗糙结构（A10 起按审计 A9-N4 更正措辞） | 交接单 D-A9-5 |
 | D-A9-6 | `linkforge.bloom.enabled`（`LINKFORGE_BLOOM_ENABLED`）开关；未就绪/装载失败 **fail-open** 走旧路径（warn + 指标 `linkforge.bloom.loadfailed`），Bloom 故障不产生 5xx | 交接单 D-A9-6 |
 | D-A9-7 | `LINKFORGE_BLOOM_EXPECTED_INSERTIONS=100000` / `LINKFORGE_BLOOM_FPP=0.0001`；超预期插入只会**劣化误判率（多回源，不会漏）**写进 README；启动日志打 seeded 数与 approxSize | 交接单 D-A9-7 |
 | D-A9-8 | Bloom 不替代 URL Redis 缓存、不存 status/expire；A10/B7/B8 本阶段不做（仅在「下一步」提名） | 交接单 D-A9-8 |
