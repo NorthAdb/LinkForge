@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
         "linkforge.rate-limit.redirect-max=1000"
 })
 @ActiveProfiles("test")
-class CustomCodeTest extends AbstractIntegrationTest {
+class CustomCodeIT extends AbstractIntegrationTest {
 
     private String createWithCode(String token, String customCode) throws Exception {
         var resp = postJson("/api/links", om.writeValueAsString(Map.of(

@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
         "linkforge.rate-limit.register-window-seconds=10"
 })
 @ActiveProfiles("test")
-class RegisterRateLimitTest extends AbstractIntegrationTest {
+class RegisterRateLimitIT extends AbstractIntegrationTest {
 
     @Autowired
     private StringRedisTemplate redis;

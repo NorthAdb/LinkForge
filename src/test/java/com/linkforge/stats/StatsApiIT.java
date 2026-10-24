@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
         "linkforge.rate-limit.register-max=1000"
 })
 @ActiveProfiles("test")
-class StatsApiTest extends AbstractIntegrationTest {
+class StatsApiIT extends AbstractIntegrationTest {
 
     @Autowired
     private ClickStatsService clickStatsService;

@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "linkforge.rate-limit.redirect-max=2"
 })
 @ActiveProfiles("test")
-class ObservabilityTest extends AbstractIntegrationTest {
+class ObservabilityIT extends AbstractIntegrationTest {
 
     private double metricValue(String metric, String token) throws Exception {
         var resp = get("/actuator/metrics/" + metric, token);

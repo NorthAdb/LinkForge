@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
         "linkforge.rate-limit.redirect-max=3"
 })
 @ActiveProfiles("test")
-class RateLimitTest extends AbstractIntegrationTest {
+class RateLimitIT extends AbstractIntegrationTest {
 
     @Test
     void createBeyondPerUserLimitReturns429() throws Exception {

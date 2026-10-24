@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
         "linkforge.rate-limit.redirect-max=1000"
 })
 @ActiveProfiles("test")
-class CreateIdempotencyAndConcurrencyTest extends AbstractIntegrationTest {
+class CreateIdempotencyAndConcurrencyIT extends AbstractIntegrationTest {
 
     @Autowired
     private StringRedisTemplate redis;
