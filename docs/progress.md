@@ -18,6 +18,7 @@
 | 追加 | R2 生命周期+自定义短码 | feat/rev2-lifecycle | ✅ 完成（见「追加迭代」） |
 | 追加 | R3 点击明细/UV/CSV | feat/rev3-analytics | ✅ 完成（见「追加迭代」） |
 | 追加 | R4 可观测/OpenAPI/控制台 | feat/rev4-polish | ✅ 完成（见「追加迭代」） |
+| 深化 | A2 保留字 / A3 HEAD 探测 / B12 OpenAPI·文档卫生 | feat/deepen-a2-a3-b12 | ✅ 完成（见「深化 A2/A3/B12」） |
 | P4 | 工程化（CI/bench/隔离/收紧） | feat/p4-engineering | ✅ 完成（见「P4 工程化」） |
 
 ## 环境与工具事实（审计人须知）
@@ -366,6 +367,55 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 自审中评估后**不改**的两点（记录供审计人参断）：
 - 跳转路径每次仍读 DB 行做禁用/过期判定（缓存只省 URL 字段）：这是**主动选择**——只信缓存会让禁用/过期在 TTL 内放行 302，正确性优先于该读优化；P4 压测时再量化。（审计 L8 同判，留 P4 bench 量化。）
 - 未鉴权访问管理接口返回 403（Spring Security 默认）而非 401：**R2 已改为统一 401 JSON**（见追加迭代），本条已过时。
+
+---
+
+## 深化 A2/A3/B12（feat/deepen-a2-a3-b12，发车基线 main@0189e2a，2026-10-24）
+
+范围：交接单 `记录追踪/05-阶段交接/LinkForge-phase-A2A3B12-handoff.md`。A2 保留字补齐、A3 HEAD 探测不计点击、B12 OpenAPI/progress 卫生。范围外（A6 Flyway、A7 Outbox、A8–A10、UV 实现改造、上云）一律未动。
+
+### 改动清单（分支内三单元提交）
+
+| 单元 | 提交 | 内容 |
+|------|------|------|
+| A2 | `91bd433` | `LinkValidations.RESERVED_CODES` += admin, console, metrics, assets, error, favicon（api/r 不入集：<4 位被长度规则先拦，避免死条目——沿袭 L7 判例）；`LinkValidationsTest`（admin/ADMIN/favicon 拒、docs2 过）；`CustomCodeIT` bad 列表 + admin/ADMIN；README 保留字句重写 |
+| A3 | `caf292f` | `ShortLinkService` 抽 `resolveTarget`（限流+缓存+行状态/过期+缓存回填，GET/HEAD 共用、一次 DB 读），`resolveAndRecord` 记点击/计数，新增 `resolveForProbe` 只解析；`RedirectController` 加 `@RequestMapping(HEAD)` 返回 302+Location（与 GET 同构）；`SecurityConfig` 放行 `HEAD /r/**`；`AbstractIntegrationTest.head()`；新 `RedirectHeadIT` 4 例 |
+| B12 | `a844908` | pom spring-boot-plugin 加 `build-info` goal；新 `OpenApiConfig`（`info.title=LinkForge`、version 取 `BuildProperties`=pom 1.0.0，无 build-info 时回退 "dev"）；新 `OpenApiInfoIT`（dev/test 断言 title+version）；progress 文首「当前 tip + 历史快照说明」 |
+
+### 决策记录
+
+| # | 决策 | 理由 |
+|---|------|------|
+| D-A3-1 | HEAD 状态码约定选 **302+Location** | 交接单推荐项之一；与 GET 完全同构，`curl -I` 直读目标，全文统一 |
+| D-A3-2 | HEAD 共用按 IP 的 redirect 限流桶 | HEAD 走同一 Redis+DB 读路径，不限流等于开放无节制读旁路 |
+| D-A3-3 | `linkforge.redirects` 计数器仅 GET 递增 | 探测不是一次对外跳转服务；指标语义不变，bench 可比性保持 |
+| D-A3-4 | 更新路径无自定义码入口（`UpdateShortLinkRequest` 无 customCode 字段），A2 的「更新也走同一校验」自然满足 | 代码事实，无需改动 |
+| D-B12-1 | OpenAPI version 走 BuildProperties（build-info）而非硬编码 | 与 pom 版本单一事实源；IDE 裸跑回退 dev 不炸 |
+| 深化-1 | 子代理通道两次被服务端拦截（unusual activity），按 P1 决策 #4 先例转总控内联实现 | 通道不可用不阻塞主线；实现按单元自查自测 |
+
+### 验收勾选（对照交接单验收表）
+
+| # | 标准 | 证据 |
+|---|------|------|
+| A2-1 | admin（任意大小写）创建被拒 | 实机：`customCode=admin` → `{"code":400,"message":"customCode is reserved"}`，`ADMIN` 同；IT `CustomCodeIT.invalidCustomCodesRejected`（bad 列表含 admin/ADMIN） |
+| A2-2 | 原有保留字不回归 | `LinkValidationsTest.reservedWordsRejectedCaseInsensitively` 绿（stats/DOCS/favicon 拒、docs2 过）；`verify -DskipITs` 16/16 |
+| A2-3 | 合法自定义码仍可建 | 实机：`docs67302794` → 200 `code=docs67302794`；`CustomCodeIT.customCodeIsUsedAndRedirects` |
+| A2-4 | 惯用验证命令绿 | 本机 `D:/tools/apache-maven-3.9.9/bin/mvn -B verify -DskipITs` → **Tests run: 16, Failures: 0, Errors: 0, BUILD SUCCESS**；IT 全量看 CI（本机 Desktop 29.9.2 与 Testcontainers 不兼容，P4 已记录） |
+| A3-1 | HEAD 不再 403 | 实机 `curl -I -X HEAD /r/{code}` → `HTTP/1.1 302`（旧版 403 已成历史）；IT `RedirectHeadIT` |
+| A3-2 | 有效码 HEAD 可探测成功（统一 302） | 实机：302 + `Location: https://example.com/head-probe`；IT 断言 302+Location |
+| A3-3 | HEAD 无新增点击，GET 才 +1 | 实机 SQL：该码 `lf_click_log` HEAD 后 **0 行**、GET 后 **1 行**；`lf_click_daily` 消费追平到 1（队列 0 积压）；IT `headProbesValidLinkWithoutCountingClicks`（stats 前后对比 + GET+1）。注：stats `totalClicks` 读异步聚合表，实机首查 0 属消费延迟（实测 6s 内追平），明细表即硬证据 |
+| A3-4 | 无效码 HEAD 与 GET 同档 | 实机：未知码 HEAD → 404；IT 另覆盖禁用 404、过期 410 双方法对齐 |
+| A3-5 | 相关测例 + 全量 verify 绿 | 本机 16 单测绿 + SMOKE OK；全量 `mvn -B verify`（63+8 新例）由 CI ubuntu 实证，链接见下「CI」 |
+| B12-1 | api-docs info 非 springdoc 默认 | 实机：`"info":{"title":"LinkForge","description":"…","version":"1.0.0"}`；IT `OpenApiInfoIT` |
+| B12-2 | prod 文档仍关闭 | `ProdProfileIT.prodHidesHealthDetailsAndDocs` 未动，CI 回归 |
+| B12-3 | progress 文首有当前 tip；历史不伪装 | 见文首两行 blockquote（开工 `0189e2a`，收工见下）；历史段落已标「历史快照」 |
+| B12-4 | progress 有本阶段验收记录 | 本节即是 |
+
+### 验证命令与输出摘要（本机，2026-10-24）
+
+- `D:/tools/apache-maven-3.9.9/bin/mvn -B verify -DskipITs` → `Tests run: 16, Failures: 0, Errors: 0, Skipped: 0` + `BUILD SUCCESS`；`target/classes/META-INF/build-info.properties` 生成（`build.version=1.0.0`）
+- 实机（停旧进程解锁 jar → 新 jar `target/linkforge-1.0.0.jar` 启动，compose 三容器 healthy）：A2/A3/B12 逐项 curl 与 SQL 见上表；`bash scripts/smoke.sh` → **SMOKE OK**（8 PASS）
+- CI（全量 68 例 = 63 旧 + 5 新：`RedirectHeadIT` 4 + `OpenApiInfoIT` 1；`CustomCodeIT`/`LinkValidationsTest` 为既有用例加断言不增例数）：见下方收口记录
 
 ---
 
