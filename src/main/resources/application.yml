@@ -120,6 +120,7 @@ linkforge:
     # Base64 of a 32-byte AES-256 master key; WITHOUT it the webhook feature degrades
     # off (endpoints cannot be saved, no deliveries are enqueued or signed).
     secret-master-key: ${LINKFORGE_WEBHOOK_SECRET_KEY:}
+    relay-enabled: ${LINKFORGE_WEBHOOK_RELAY_ENABLED:true}
     relay-fixed-delay-ms: ${LINKFORGE_WEBHOOK_RELAY_FIXED_DELAY_MS:2000}
     relay-initial-delay-ms: ${LINKFORGE_WEBHOOK_RELAY_INITIAL_DELAY_MS:5000}
     relay-batch-size: ${LINKFORGE_WEBHOOK_RELAY_BATCH_SIZE:50}

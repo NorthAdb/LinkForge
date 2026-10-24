@@ -49,6 +49,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "linkforge.mq.relay-initial-delay-ms=1000",
         "spring.rabbitmq.listener.simple.auto-startup=true",
         "linkforge.webhook.allow-private-targets=true",
+        "linkforge.webhook.relay-enabled=true",
         "spring.datasource.hikari.maximum-pool-size=4"
 })
 @ActiveProfiles("test")

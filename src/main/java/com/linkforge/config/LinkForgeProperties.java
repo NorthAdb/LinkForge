@@ -100,6 +100,8 @@ public class LinkForgeProperties {
     public static class Webhook {
         /** B-wave2 B5: click webhooks off the A7 outbox chain. */
         private boolean enabled = true;
+        /** Relay drain switch; test contexts default it off so only one relay race-drains the shared table. */
+        private boolean relayEnabled = true;
         /** Base64 of a 32-byte AES-256 master key; missing key degrades the feature off. */
         private String secretMasterKey = "";
         private long relayFixedDelayMs = 2000;

@@ -50,6 +50,9 @@ linkforge:
     enabled: true
     # fixed 32-byte test master key (Base64) — ITs rely on AES-GCM round-trip
     secret-master-key: "bGlua2ZvcmdlLWl0LXdlYmhvb2stbWFzdGVyLWtleSE="
+    # only WebhookDeliveryIT enables the relay; sibling contexts must not
+    # race-drain the shared lf_webhook_delivery with a stricter SSRF guard
+    relay-enabled: false
     relay-fixed-delay-ms: 500
     relay-initial-delay-ms: 500
     relay-batch-size: 50

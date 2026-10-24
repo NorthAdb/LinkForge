@@ -65,7 +65,7 @@ public class WebhookDeliveryRelay {
     @Scheduled(fixedDelayString = "${linkforge.webhook.relay-fixed-delay-ms:2000}",
             initialDelayString = "${linkforge.webhook.relay-initial-delay-ms:5000}")
     public void drain() {
-        if (!properties.getWebhook().isEnabled()) {
+        if (!properties.getWebhook().isEnabled() || !properties.getWebhook().isRelayEnabled()) {
             return;
         }
         List<WebhookDelivery> batch = deliveryMapper.selectPendingBatch(properties.getWebhook().getRelayBatchSize());
