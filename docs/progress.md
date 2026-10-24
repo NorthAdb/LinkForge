@@ -2,7 +2,7 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：B 波 2 修复轮终态＝合并 `bd24ab0`（M1/S1/S2 + N1-N11，155 例全绿）+ docs 收口（完整 SHA 见文首钉子提交，其上至多一个纯 docs 钉子提交，审计以 `git rev-parse HEAD` 为准、钉点必为其祖先）。
+> **当前 main tip**：B 波 2 修复轮终态＝合并 `bd24ab0`（M1/S1/S2 + N1-N11，155 例全绿）+ docs 收口 `751a46a2de1f6a2c203ec028e944cd22f27ffa66`（其上至多一个纯 docs 钉子提交；审计以 `git rev-parse HEAD` 为准，`751a46a2de1f6a2c203ec028e944cd22f27ffa66` 必为其祖先）。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
 > 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6–A10、B 档波 1 均已交付并通过审计（B 波 1 审计 PASS_WITH_NITS @ `05f6738`，无 must-fix/should-fix）；本轮为 **B 档波 2：B4 API Key（哈希）+ 配额 + B5 点击 Webhook（建在 A7 Outbox 链上）**，交接单 `记录追踪/05-阶段交接/LinkForge-phase-B-wave2-b4b5-handoff.md`（Q1 AES-GCM+env 主密钥 / Q2 逐次点击 / Q3 Key 绑创建者已拍板）。
 
