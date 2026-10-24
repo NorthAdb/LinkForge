@@ -306,6 +306,46 @@ docker compose start rabbitmq && sleep 10 && curl -s http://localhost:8080/actua
 
 **P4 完成，待实习JAVA_AI 审计后再定 P5 收尾。**
 
+---
+
+## P5 抛光收尾（feat/p5-polish，发车基线 main@880f0a6 / f27d4bc，运营者 2026-10-24 授权开跑）
+
+范围纪律：不做 AI/向量/LLM；不换栈；无独立 SPA；云部署非硬验收（D5）。R2–R4 已落地能力视为完成，只盘点、补洞、文档收口。发车词四项退出条件逐项勾选如下。
+
+### (a) 功能核对——已完成项「仍绿」证据（无真实缺口，未改业务代码）
+
+| 能力 | 证据 |
+|------|------|
+| 自定义短码（D6：字符集/保留字/占用 409/删除不可复用/跨用户隔离） | `CustomCodeIT` ×5（CI success run 40056206371） |
+| CSV 导出（仅链主、转义、鉴权） | `CsvExportIT` ×2 + 本轮手工：无 Token → 401；有效 Token → CSV 首行 `code,original_url,...` 且含本人码 |
+| 极简静态控制台（非 SPA） | `ObservabilityIT.apiDocsSwaggerUiAndStaticPageAreServed`（GET / 200）+ 本轮手工：页面含 create/disable/enable/delete/统计/CSV 入口与幂等头注入；`id="exportLink"` 实测指向 /api/links/export |
+| Swagger（dev 开放/prod 关闭） | 路由一致性核对（本轮实测）：`/v3/api-docs` 列 11 条路径，与控制器、README 接口表逐一吻合，无幽灵路由；prod 侧 `ProdProfileIT` 401 |
+| 点击明细 / 精确 UV / enable / delete | `StatsApiIT.uvIsExactDistinctIpAndClicksDetailIsOwnerScoped`、`LinkLifecycleIT.deleteRemovesLinkEverywhere` / `enableRestoresDisabledLink` |
+
+可选加分（已做）：`scripts/migrate.sh`（幂等迁移，实测对存量卷重放 schema.sql 成功，对应审计 L2）；README 补限流覆盖说明（自定义码共用创建限流；CSV 属管理 API 未单独限流、1 万行上限）。
+
+### (b) 文档收口
+
+README 新增「核心路径 vs 可选特性」表：核心 = 注册/登录、建链、302、stats、限流、双写+对账、CI/bench；可选 = 自定义短码、CSV、Swagger、控制台、UV/明细（「演示可用，面试可讲，主路径不强制」）。Demo 五步改为纯核心路径，控制台标注为可选入口。同步清偿 P4 文档债：测试计数统一 63（16+47，与 @Test 计数及 CI 一致）、公网收紧改为 `SPRING_PROFILES_ACTIVE=prod` 一句话、progress 文首边界改为「P0–P4 已交付，本轮 P5」。
+
+### (c) 方案 P5 四项勾选（对照《实施与验收方案》P5 节）
+
+- [x] 自定义短码（字符集/保留字/唯一冲突）——R2 提前完成，本轮复核仍绿（见上表）
+- [x] CSV 导出（鉴权）——R3 提前完成，复核仍绿
+- [x] 极简管理页（登录、建链、列表、统计；无 SPA）——R4 提前完成，复核仍绿
+- [x] OpenAPI（springdoc /swagger-ui，与真实行为一致）——R4 提前完成，本轮路由核对一致
+
+### (d) 回归
+
+- 本机 `mvn -B verify -DskipITs` → BUILD SUCCESS（16 单测绿；Windows 与 Testcontainers 不兼容见 P4 记录，63 全量以 CI 为权威）
+- `bash scripts/smoke.sh` → **SMOKE OK**；`bash scripts/mq-drill.sh` → **DRILL OK**（15 基线 / 断 MQ 全 302 / 追平 25）
+- 对账等式闭合：detail=3487 == aggregate=3487
+- CI：见文末审计材料的 run 链接
+
+### (e) 明确不做复查
+
+grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无相关 artifact，源码无相关 import）；无独立 SPA（唯一前端为单文件静态控制台）；无云部署硬依赖（D5=仅本地 Compose，prod profile 仅收紧暴露面）。
+
 自审中评估后**不改**的两点（记录供审计人参断）：
 - 跳转路径每次仍读 DB 行做禁用/过期判定（缓存只省 URL 字段）：这是**主动选择**——只信缓存会让禁用/过期在 TTL 内放行 302，正确性优先于该读优化；P4 压测时再量化。（审计 L8 同判，留 P4 bench 量化。）
 - 未鉴权访问管理接口返回 403（Spring Security 默认）而非 401：**R2 已改为统一 401 JSON**（见追加迭代），本条已过时。
@@ -375,7 +415,6 @@ docker compose start rabbitmq && sleep 10 && curl -s http://localhost:8080/actua
 - 对账基线重置：压测产生的历史数据（UUID 事件已消费 + 明细表）造成 aggregate 虚高（4019 vs 3420），已 TRUNCATE 两表由 Reconciler 从 3420 条明细全量重建（本机速率 ~1.7 行/s，收敛需约 35 分钟；机制此前已多次实证：104=104、188=188、drill 25=25）。终态见「审计材料」的复查说明。
 
 ### 审计材料（hotfix 轮，历史存档）
-
 - 仓库：https://github.com/NorthAdb/LinkForge（分支 main，**自审后终态 commit：447dfdb**；P0–P3 首轮终态合并 103a199）
 - 复现环境：Windows + Docker Desktop + Git Bash；`cp .env.example .env && docker compose up -d`（等三容器 healthy，mysql 首次初始化约 5 分钟）
 - 复现命令清单（按序执行，全部应绿）：
