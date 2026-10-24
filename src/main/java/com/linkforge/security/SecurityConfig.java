@@ -30,18 +30,22 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         String[] docsPaths = {"/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html"};
+        String[] consolePaths = {"/", "/index.html", "/favicon.ico"};
         http.csrf(AbstractHttpConfigurer::disable)
                 .cors(Customizer.withDefaults())
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> {
                     auth.requestMatchers("/actuator/health", "/api/health").permitAll()
                             .requestMatchers("/api/auth/**").permitAll()
-                            .requestMatchers(HttpMethod.GET, "/r/**").permitAll()
-                            .requestMatchers("/", "/index.html", "/favicon.ico").permitAll();
+                            .requestMatchers(HttpMethod.GET, "/r/**").permitAll();
                     if (docsEnabled) {
-                        auth.requestMatchers(docsPaths).permitAll();
+                        auth.requestMatchers(docsPaths).permitAll()
+                                .requestMatchers(consolePaths).permitAll();
                     } else {
-                        auth.requestMatchers(docsPaths).denyAll();
+                        // prod: deny docs and the static console at the filter chain;
+                        // add-mappings=false alone leaves "/" erroring with 500.
+                        auth.requestMatchers(docsPaths).denyAll()
+                                .requestMatchers(consolePaths).denyAll();
                     }
                     auth.anyRequest().authenticated();
                 })
