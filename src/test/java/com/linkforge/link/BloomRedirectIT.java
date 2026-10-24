@@ -32,6 +32,9 @@ class BloomRedirectIT extends AbstractIntegrationTest {
     @Autowired
     private MeterRegistry meterRegistry;
 
+    @Autowired
+    private com.linkforge.link.mapper.ShortLinkMapper shortLinkMapper;
+
     private double rejectedCount() {
         var counter = meterRegistry.find("linkforge.bloom.rejected").counter();
         return counter == null ? 0.0 : counter.count();
@@ -127,12 +130,16 @@ class BloomRedirectIT extends AbstractIntegrationTest {
     @Test
     void expiredDoesNotEnterAbsent() throws Exception {
         String token = registerForToken();
-        String json = om.writeValueAsString(java.util.Map.of(
-                "originalUrl", "https://example.com/absent-expired",
-                "expireAt", java.time.LocalDateTime.now().plusSeconds(1)));
-        String code = body(postJson("/api/links", json, token)).path("data").path("code").asText();
+        String code = createLink(token, "https://example.com/absent-expired");
 
-        Thread.sleep(1300);
+        // expire the row directly: DATETIME(0) rounds fractional expireAt up, so a
+        // sleep-past-create-time race can outwait a 1s expiry (CI-proven flaky)
+        com.linkforge.link.entity.ShortLink row = shortLinkMapper.selectOne(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.linkforge.link.entity.ShortLink>()
+                        .eq(com.linkforge.link.entity.ShortLink::getCode, code));
+        row.setExpireAt(java.time.LocalDateTime.now().minusSeconds(1));
+        shortLinkMapper.updateById(row);
+
         double put0 = counter("linkforge.cache.absent.put");
         assertEquals(410, get("/r/" + code, null).getStatusCode().value());
         assertEquals(put0, counter("linkforge.cache.absent.put"),
