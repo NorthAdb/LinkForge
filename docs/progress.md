@@ -2,7 +2,7 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：`f8130cf898a75dddc4f488ae9eb644e821ddebfb`（2026-10-24，深化 A10 终态＝合并 `fc02f5a` + docs 收口 `efbc887` + 纯钉子提交 `f8130cf`，`git rev-parse HEAD` 可对）。
+> **当前 main tip**：B 档波 1 终态＝合并 `8474d7f`（B7 空值缓存+抖动 / B8 L1 / A10-N1 / 行级校验门，119 例全绿）+ main 去抖直修 `5f610ee` + docs 收口 `cdc0a6a141dd5cf544ec89c0a926d1df681532c1`（其上至多一个纯 docs 钉子提交；审计以 `git rev-parse HEAD` 为准，`cdc0a6a…` 必为其祖先）。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
 > 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6–A10 均已交付并通过审计（A10 审计 PASS_WITH_NITS @ `f8130cf`，无 must-fix/should-fix）；本轮为 **B 档波 1：B7 空值缓存+TTL 抖动 + B8 Caffeine L1（+ A10-N1 安全 forget）**，交接单 `记录追踪/05-阶段交接/LinkForge-phase-B-wave1-b7b8-handoff.md`。
 
