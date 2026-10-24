@@ -210,7 +210,7 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 - `LINKFORGE_TRUST_XFF` 是否信任 X-Forwarded-For（默认 false，仅在可信反代后开启）
 - `/actuator/health` 展示组件细节（db / redis / rabbit / diskSpace），依赖 DOWN 时整体 503
 - `/actuator/metrics/**` 暴露业务计数器（`linkforge.links.created`、`linkforge.redirects`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`），需 Bearer Token
-- **公网部署前须收紧**（当前面向本地 Demo 全开放）：`management.endpoint.health.show-details` 改 `when_authorized`、设 `springdoc.api-docs.enabled=false` 关闭 Swagger、下线 `static/index.html` 控制台或加访问控制
+- **公网部署**：本地 Demo 一律默认 profile（全开放）；对外部署设 `SPRING_PROFILES_ACTIVE=prod` 一键收紧——health 细节转 `when_authorized`、springdoc 与静态控制台关闭、文档/控制台路径在过滤器层 denyAll（见 application.yml prod 段与 ProdProfileIT）
 
 ## 架构
 

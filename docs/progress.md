@@ -1,8 +1,8 @@
 # LinkForge 开发进度与验收记录
 
-> 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》P0→P3 顺序推进。
+> 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> 本轮边界：只做 P0–P3；P3 完成后停下等「实习JAVA_AI」审计，不开 P4/P5。
+> 本轮边界：P0–P4 已交付并通过实习JAVA_AI 审计；本轮为 **P5 抛光收尾**（盘点、补洞、文档收口），完成即完整项目交付。
 
 ## 状态总览
 
@@ -294,7 +294,7 @@ docker compose start rabbitmq && sleep 10 && curl -s http://localhost:8080/actua
 ### 审计材料（P4 后更新）
 
 - 仓库：https://github.com/NorthAdb/LinkForge（分支 main，**P4 终态合并：880f0a6**）
-- **CI**：main 最新 run **success** — https://github.com/NorthAdb/LinkForge/actions/runs/40056206371（ubuntu-latest，62+ 测试全绿：16 单测 + 47 集成）
+- **CI**：main 最新 run **success** — https://github.com/NorthAdb/LinkForge/actions/runs/40056206371（ubuntu-latest，63 个测试全绿：16 单测 + 47 集成）
 - 审计分层：103a199（P0–P3）→ 447dfdb（自审）→ c1ecd46（R2–R4）→ 7e8b9fe（hotfix）→ **880f0a6（P4）**
 - 复跑清单（P4 版）：
   1. 本机任何有 Docker 的 Linux：`mvn -B verify`（Testcontainers 全量，参照 README「Linux 复现」或直接看 CI）
@@ -354,7 +354,7 @@ docker compose start rabbitmq && sleep 10 && curl -s http://localhost:8080/actua
 
 - [x] (a) 测试隔离 + 单测分层 + 总数不减
   - 集成测试改 **Testcontainers 2.0.5**（MySQL 8.0 / Redis 7-alpine / RabbitMQ 3.13-management，静态单例 + @DynamicPropertySource），不再依赖本机 Compose；`*IT` 归 **failsafe**（绑 verify），纯单测 16 个归 surefire（LinkValidations/CsvFormat/ShortCodes/RedisRateLimiter——纯函数从 Service 抽到 `link/support` 工具类）
-  - **本机限制（如实记录）**：本开发机 Docker Desktop 29.9.2 与 docker-java（TC 1.19.8/1.21.3/1.21.4/2.0.5 全试过）不兼容——npipe 与挂载 socket 均 400/EOF，CLI 正常；已定位到 Desktop 29 的 API 代理层。本机用 `mvn -B verify -DskipITs`（16 单测绿，15s），**62 个测试的完整绿由 CI 的 ubuntu runner（只有 Docker、无 Compose）实证**，正合验收要求的机器形态
+  - **本机限制（如实记录）**：本开发机 Docker Desktop 29.9.2 与 docker-java（TC 1.19.8/1.21.3/1.21.4/2.0.5 全试过）不兼容——npipe 与挂载 socket 均 400/EOF，CLI 正常；已定位到 Desktop 29 的 API 代理层。本机用 `mvn -B verify -DskipITs`（16 单测绿，15s），**63 个测试的完整绿由 CI 的 ubuntu runner（只有 Docker、无 Compose）实证**，正合验收要求的机器形态
   - CI 实测：ubuntu-latest 上 47 个 IT 全跑（LinkLifecycleIT 15 例 5.6s），Testcontainers 原生工作
 - [x] (b) CI：`.github/workflows/ci.yml`（ubuntu-latest + Temurin 17 + m2 缓存 + `mvn -B verify`），push 到 main 与 feat/** 触发；无真实口令（测试口令仅 test profile 假值）。main 绿 run 链接见下「审计材料」
 - [x] (c) 压测：`scripts/bench.sh`（wrk，镜像 skandyla/wrk=wrk 4.x）+ `docs/bench.md`
@@ -362,7 +362,7 @@ docker compose start rabbitmq && sleep 10 && curl -s http://localhost:8080/actua
   - 限流压测期间临时调高（LINKFORGE_*_RATE_MAX=1000000），bench.md 已写明；机器规格/命令/原始输出齐备
   - 诚实结论：本机每次 MySQL 提交约 600ms（Windows 卷存储路径；CI Linux 上同类写操作毫秒级），同步明细写是跳转吞吐支配项——这正是「双写切纯异步需 outbox」论断的量化证据
 - [x] (d) 架构 README：mermaid 组件图（含 Reconciler 追平边）、跳转 5 步时序说明、「本地 Demo 五步」、Linux 复现小节（--network host / 172.17.0.1，附命令）
-- [x] (e) `docs/resume.md`：5 条中文 bullet，数字全部引用 bench.md（13→276 QPS、P50 678→31ms、命中率 100%、62 测试 CI 绿），限流如实写「Redis 固定窗口」
+- [x] (e) `docs/resume.md`：5 条中文 bullet，数字全部引用 bench.md（13→276 QPS、P50 678→31ms、命中率 100%、63 测试 CI 绿），限流如实写「Redis 固定窗口」
 - [x] (f) prod profile：`show-details: when_authorized`、springdoc 关闭、静态资源关闭；文档/控制台路径在 prod 由 SecurityFilterChain **denyAll（401）**（`linkforge.docs-enabled=false`）——比依赖 springdoc 关闭行为（实测会 500）更干净；dev/test 行为不变（ObservabilityIT 证全开放）
 - [x] (g) 收尾验证：本机 `mvn -B verify -DskipITs` 绿（16 单测）；`bash scripts/smoke.sh` → **SMOKE OK**；`bash scripts/mq-drill.sh` → **DRILL OK**（15/10 基线-断链-追平到 25）；CI 绿；合并推送
 
