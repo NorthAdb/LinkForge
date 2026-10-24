@@ -607,6 +607,10 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 - 实机（A8 jar + 存量库自动 V3）：注册/建链（`dimdemo24388`）→ 6 次带不同 UA/Referer 的跳转 → `totalClicks=6` → breakdown 输出见 A8-3 行（桶与请求逐一吻合）；`dim=os` → 400；无 token → 401
 - 回归：`bash scripts/smoke.sh` → **SMOKE OK**；`bash scripts/outbox-drill.sh`（confirm 开启下）→ **OUTBOX DRILL OK**（PASS outage: attempts=3/deferred 7 行；PASS recovery: aggregate=10, detail=10, SENT=10, UV=1）
 
+### 执行记录
+
+- 收口提交后的 main CI 抓到一次 **跨上下文 relay 竞态抖动**（`OutboxDrillIT` 对 PENDING 恰等值的断言被兄弟上下文的健康 relay 抢先标 SENT；A7 期间已定位的同族竞态，本次是纯时序概率）。修法＝中间态断言改状态无关总行数（同事务证据不受影响），终态 SENT 由 await 收敛段证明。已在 main 直接修复（测试稳定性小改，保持 main 绿纪律）。
+
 ---
 
 ## 审计修复轮（依据《LinkForge-P0-P3-内审报告》，2026-10-24）
