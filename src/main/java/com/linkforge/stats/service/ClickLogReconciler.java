@@ -36,9 +36,13 @@ public class ClickLogReconciler {
         try {
             List<ClickLog> pending = clickLogMapper.selectUnconsumed(500);
             for (ClickLog row : pending) {
-                clickStatsService.consume(new ClickEvent(
-                        "log-" + row.getId(), row.getTenantId(), row.getLinkId(), row.getCode(),
-                        null, row.getIp(), row.getUserAgent(), row.getReferer(), row.getClickedAt()));
+                try {
+                    clickStatsService.consume(new ClickEvent(
+                            "log-" + row.getId(), row.getTenantId(), row.getLinkId(), row.getCode(),
+                            null, row.getIp(), row.getUserAgent(), row.getReferer(), row.getClickedAt()));
+                } catch (Exception ex) {
+                    log.warn("reconcile failed for click log {}: {}", row.getId(), ex.getMessage());
+                }
             }
             if (!pending.isEmpty()) {
                 log.info("reconciled {} click rows into stats", pending.size());

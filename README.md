@@ -264,10 +264,10 @@ curl -X POST -H "X-API-Key: lfk_xxxxxxxx_xxx" -H "Content-Type: application/json
 - **签名与防重放**：头 `X-LinkForge-Event-Id`（= `evt_` + 点击 eventId，跨重试/重放稳定）、`X-LinkForge-Timestamp`（Unix 秒）、`X-LinkForge-Signature: v1=HMAC-SHA256(secret, timestamp + "." + rawBody)`。接收方校验：常量时间比较 + **±300s** 容差 + 按 event id 去重
 - **payload**：`{id, type:"link.clicked", createdAt, data:{linkId, code, clickedAt, device, refererHost}}`——**不推原始 IP / 完整 UA / 完整 Referer**（隐私最小化）
 - **重放**：手工重放：`UPDATE lf_webhook_delivery SET status='PENDING', next_attempt_at=NULL WHERE id=?`。**at-least-once**（多实例无 SKIP LOCKED），接收方按 event id 去重
-- **secret 存储（Q1 拍板）**：at-rest 为 **AES-256-GCM 密文**（`v1:` + Base64(nonce‖ct‖tag)），主密钥来自 env **`LINKFORGE_WEBHOOK_SECRET_KEY`**（Base64 32 字节，`openssl rand -base64 32` 生成；留空则签名不可用）。创建/轮换时明文只返回一次，GET 只给掩码。**运维边界**：主密钥丢失 → 库内密文全部不可解密，须对所有租户 `rotate-secret` 重发；主密钥不进仓库。**降级口径（修复轮 S1）**：主密钥未配置时 endpoint 照常可配、**投递意图照常落 PENDING 行**（不静默丢），relay 整批跳过不耗次数（指标 `relay.skipped`），补上主密钥重启后自然补投；`LINKFORGE_WEBHOOK_ENABLED=false` 关闭期间的点击**不补投**
+- **secret 存储（Q1 拍板）**：at-rest 为 **AES-256-GCM 密文**（`v1:` + Base64(nonce‖ct‖tag)），主密钥来自 env **`LINKFORGE_WEBHOOK_SECRET_KEY`**（Base64 32 字节，`openssl rand -base64 32` 生成；留空则签名不可用）。创建/轮换时明文只返回一次，GET 只给掩码。**运维边界**：主密钥丢失 → 库内密文全部不可解密，须对所有租户 `rotate-secret` 重发；主密钥不进仓库。**降级口径（修复轮 S1）**：主密钥未配置时 endpoint 管理（创建/轮换）返回 **503**，已配置 endpoint 的**投递意图照常落 PENDING 行**（不静默丢），relay 整批跳过不耗次数（指标 `relay.skipped`），补上主密钥重启后自然补投；`LINKFORGE_WEBHOOK_ENABLED=false` 关闭期间的点击**不补投**
 - **投递意图与失败语义（修复轮 S1）**：入队插入失败时**整条点击随 consume 事务回滚**进 DLQ（统计与回调意图同生共死），重复 (endpoint_id, event_id) 视为已入队放行
 - **重试与退避（修复轮 N8 口径）**：2xx = SENT；网络错/超时/408/429/5xx 按 `min(1h, 10s·2^attempts)` 退避（attempts 从 1 起计，**首次重试等 20s**，attempts 计入最终那一次）；其它 4xx 首败即 FAILED；上限 8 次后 FAILED。退避在 **DB 时钟**上调度（`DATE_ADD(NOW(),…)`），JVM 与 MySQL 时区不一致不会拉长或杀掉退避
-- **SSRF 基本防护**：保存时与**每次发送前**双校验——仅 http/https、拒 userinfo、解析出的所有 IP 不得为环回/私网/链路本地（含云元数据 169.254.169.254）/CGNAT/ULA，不跟随重定向（3xx = 不可重试失败）。**诚实限制**：DNS rebinding（校验与连接两次解析的 TOCTOU）本波不做、无端口白名单、无出口代理隔离；`LINKFORGE_WEBHOOK_ALLOW_PRIVATE_TARGETS` 仅测试用，prod 禁开
+- **SSRF 基本防护**：保存时与**每次发送前**双校验——仅 http/https、拒 userinfo、解析出的所有 IP 不得为环回/私网/链路本地（含云元数据 169.254.169.254）/CGNAT/ULA，不跟随重定向（3xx = 不可重试失败）。**诚实限制**：DNS rebinding（校验与连接两次解析的 TOCTOU）本波不做、无端口白名单、无出口代理隔离；198.18.0.0/15 也是 Clash / Surge 等代理 **fake-IP 模式**的默认段，本机开 fake-IP 时保存公网 webhook 目标会 400，联调前关 fake-IP 或改 redir-host；`LINKFORGE_WEBHOOK_ALLOW_PRIVATE_TARGETS` 仅测试用，prod 禁开
 - **调度隔离**：`spring.task.scheduling.pool.size=4`，webhook relay 慢不拖点击 outbox 追平；webhook 依赖 `LINKFORGE_ASYNC_CLICK_ENABLED=true`（纯 sync 模式不产生回调）
 
 **存量库迁移（Flyway，深化 A6）**：schema 已版本化在 `src/main/resources/db/migration`（`V1__baseline_schema.sql`），由应用启动时自动迁移（`spring.flyway.baseline-on-migrate=true`）：
@@ -309,7 +309,7 @@ curl -X POST -H "X-API-Key: lfk_xxxxxxxx_xxx" -H "Content-Type: application/json
 - `LINKFORGE_CACHE_TTL_JITTER_SECONDS`（默认 300）/ `LINKFORGE_ABSENT_TTL_SECONDS`（默认 60）/ `LINKFORGE_ABSENT_TTL_JITTER_SECONDS`（默认 30）空值缓存与抖动（见「多级缓存」；absent ≤0 关闭负缓存）
 - `LINKFORGE_L1_ENABLED` / `LINKFORGE_L1_MAXIMUM_SIZE` / `LINKFORGE_L1_TTL_SECONDS` Caffeine L1（默认 true / 10000 / 10 秒，见「多级缓存」；命中不跳过 DB 行读）
 - `LINKFORGE_APIKEY_QUOTA_PER_MINUTE`（默认 120）/ `LINKFORGE_APIKEY_QUOTA_PER_DAY`（默认 10000）/ `LINKFORGE_APIKEY_MAX_ACTIVE`（默认 10）API Key 配额与上限（见「开放能力」）
-- `LINKFORGE_WEBHOOK_ENABLED`（默认 true）/ `LINKFORGE_WEBHOOK_SECRET_KEY`（Base64 32 字节 AES-256 主密钥，缺失则 webhook 降级关）/ `LINKFORGE_WEBHOOK_RELAY_FIXED_DELAY_MS`（默认 2000）/ `LINKFORGE_WEBHOOK_MAX_ATTEMPTS`（默认 8）/ `LINKFORGE_WEBHOOK_ALLOW_PRIVATE_TARGETS`（默认 false，仅测试）
+- `LINKFORGE_WEBHOOK_ENABLED`（默认 true）/ `LINKFORGE_WEBHOOK_SECRET_KEY`（Base64 32 字节 AES-256 主密钥，缺失时 endpoint 管理返回 503、投递意图照常落 PENDING，补密钥重启后补投）/ `LINKFORGE_WEBHOOK_RELAY_FIXED_DELAY_MS`（默认 2000）/ `LINKFORGE_WEBHOOK_MAX_ATTEMPTS`（默认 8）/ `LINKFORGE_WEBHOOK_ALLOW_PRIVATE_TARGETS`（默认 false，仅测试）
 - `LINKFORGE_IDEMPOTENCY_TTL_SECONDS` 创建幂等键保留时长（默认 86400 秒）
 - `LINKFORGE_TRUST_XFF` 是否信任 X-Forwarded-For（默认 false，仅在可信反代后开启）
 - 限流覆盖说明：注册按 IP、创建按用户（**含自定义短码创建，共用 POST /api/links 的限额**）；CSV 导出与统计查询属管理 API（JWT 必需、租户隔离），未单独限流，导出有 1 万行上限保护
@@ -369,7 +369,7 @@ docker run --rm --network host -v "$PWD":/app -v m2:/root/.m2 -w /app \
   maven:3.9-eclipse-temurin-17 mvn -B verify
 ```
 
-**压测数字**：见 `docs/bench.md`（wrk 实测：health 基线 888 QPS；跳转写路径分解：关同步明细后 13→276 QPS、P50 678→31ms；缓存命中率 100%）。
+**压测数字**：见 `docs/bench.md`（wrk 实测：health 基线 888 QPS；跳转写路径分解：关同步明细后 13→276 QPS、P50 678→31ms；缓存命中率 100%。**测于 `df904f8` 固定窗口限流时期，早于 A7–B8 与 B6 滑窗；新数字留待 B10**）。
 
 ## 许可证
 

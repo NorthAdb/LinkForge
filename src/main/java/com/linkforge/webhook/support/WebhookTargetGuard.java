@@ -130,10 +130,9 @@ public class WebhookTargetGuard {
             }
         }
         if (allZeroPrefix) {
-            if (bytes[10] == (byte) 0xFF && bytes[11] == (byte) 0xFF) {
-                return Arrays.copyOfRange(bytes, 12, 16); // ::ffff:a.b.c.d
-            }
-            return Arrays.copyOfRange(bytes, 12, 16); // ::a.b.c.d (::/96 compatible)
+            // JDK already folds ::ffff:a.b.c.d into an Inet4Address, so this path only
+            // sees the ::/96-compatible form; either way the trailing 4 bytes are the IPv4.
+            return Arrays.copyOfRange(bytes, 12, 16);
         }
         if (bytes[0] == 0x00 && bytes[1] == 0x64 && bytes[2] == (byte) 0xFF && bytes[3] == (byte) 0x9B
                 && bytes[4] == 0 && bytes[5] == 0 && bytes[6] == 0 && bytes[7] == 0

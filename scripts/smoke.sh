@@ -40,7 +40,7 @@ CODE=$(echo "$CREATE" | json_str code)
 [ -n "$CODE" ] || fail "create returned no code: $CREATE"
 echo "PASS create code=$CODE"
 
-# 4. public redirect 302 + Location (GET, not -I/HEAD: security only permits GET on /r/**)
+# 4. public redirect 302 + Location (GET, not -I/HEAD: HEAD shares GET semantics but records no click, and the click assertion below needs one)
 HEADERS=$(curl -s -D - -o /dev/null "$BASE_URL/r/$CODE")
 echo "$HEADERS" | head -1 | grep -q " 302 " || fail "redirect not 302: $(echo "$HEADERS" | head -1)"
 LOCATION=$(echo "$HEADERS" | tr -d '\r' | grep -i '^location:' | sed 's/^[Ll]ocation: *//')

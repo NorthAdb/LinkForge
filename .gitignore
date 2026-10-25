@@ -43,3 +43,6 @@ application-local.yaml
 # Local tracking archive (assistant docs; not product docs/)
 记录追踪/
 
+
+# Local decision trail (assistant working artifact)
+.audit/

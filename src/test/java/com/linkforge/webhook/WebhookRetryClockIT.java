@@ -140,7 +140,8 @@ class WebhookRetryClockIT extends AbstractIntegrationTest {
                     "first attempt must have failed and scheduled a retry: " + row);
             assertEquals("PENDING", row.get("status"), "still waiting for the retry: " + row);
             // the decisive M1 assertion: DB-clock distance to the next attempt is at
-            // most the first backoff (10s * 2^1 = 20s), never the ~8h JVM/DB skew
+            // most the first backoff (test profile: base 1 / max 2 → first retry 2s;
+            // the [0, 20] bound stays loose to absorb relay poll timing), never the ~8h JVM/DB skew
             Long diffSeconds = jdbc.queryForObject(
                     "SELECT TIMESTAMPDIFF(SECOND, NOW(), next_attempt_at) FROM lf_webhook_delivery "
                             + "WHERE tenant_id = ? ORDER BY id DESC LIMIT 1", Long.class, tenantIdOf(token));
