@@ -24,6 +24,13 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     private final JwtService jwtService;
 
     @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        // the scrape token is not a JWT — parsing it would 401 before the metrics
+        // filter can grant ROLE_METRICS (D-Bw345-42)
+        return request.getRequestURI().equals("/actuator/prometheus");
+    }
+
+    @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
         try {

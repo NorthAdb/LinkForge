@@ -4,6 +4,8 @@ import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
+
 @Data
 @Component
 @ConfigurationProperties(prefix = "linkforge")
@@ -19,6 +21,45 @@ public class LinkForgeProperties {
     private L1 l1 = new L1();
     private ApiKey apiKey = new ApiKey();
     private Webhook webhook = new Webhook();
+    private ClickFilter clickFilter = new ClickFilter();
+    private Phishing phishing = new Phishing();
+    private LinkAccess linkAccess = new LinkAccess();
+    private Metrics metrics = new Metrics();
+
+    @Data
+    public static class Metrics {
+        /** B1: bearer token for /actuator/prometheus; empty = the endpoint rejects everyone. */
+        private String scrapeToken = "";
+        /** BacklogGauges sampling period (DB COUNT queries run off the scrape path). */
+        private long backlogSampleIntervalMs = 15000;
+    }
+
+    @Data
+    public static class LinkAccess {
+        /** B3: unlock cookie TTL and the two-tier brute-force windows. */
+        private long ttlSeconds = 3600;
+        private int unlockIpMax = 5;
+        private int unlockCodeMax = 50;
+        private int unlockWindowSeconds = 300;
+    }
+
+    @Data
+    public static class Phishing {
+        /** B9: a locally maintained domain blocklist/warnlist + userinfo rule. Honest
+         * scope: no reputation service, no content scan, the service is still an open redirect. */
+        private boolean enabled = true;
+        /** Env values replace the whole list (comma separated); defaults must stay empty so
+         * existing IT target domains are untouched. */
+        private java.util.List<String> blockDomains = new java.util.ArrayList<>();
+        private java.util.List<String> warnDomains = new java.util.ArrayList<>();
+        /** Optional file: one domain per line, # comments, "!warn " prefix = warn level;
+         * hot-reloaded by mtime. Empty = not loaded. */
+        private String blocklistFile = "";
+        /** @Scheduled reads millis (its placeholder parsing knows no Boot duration style). */
+        private long reloadIntervalMs = 30000;
+        /** Create/update rejects userinfo targets (https://user@host); existing rows only warn. */
+        private boolean rejectUserinfo = true;
+    }
 
     @Data
     public static class Jwt {
@@ -120,14 +161,31 @@ public class LinkForgeProperties {
     }
 
     @Data
+    public static class ClickFilter {
+        /** B2: prefetch headers and named preview bots get the normal 302 but record no click. */
+        private boolean enabled = true;
+        private boolean prefetchHeadersEnabled = true;
+        /**
+         * Lowercase substrings matched against User-Agent; the env value replaces the whole
+         * list. Keep out curl/wget/java//okhttp and the generic "bot" — they would swallow
+         * ITs, drill scripts and real tooling (D-Bw345-3).
+         */
+        private List<String> botUaTokens = List.of(
+                "slackbot", "slack-imgproxy", "facebookexternalhit", "facebookcatalog", "twitterbot",
+                "telegrambot", "whatsapp", "discordbot", "linkedinbot", "skypeuripreview",
+                "pinterestbot", "redditbot", "embedly", "iframely", "googlebot", "bingbot",
+                "bingpreview", "applebot", "yandexbot", "duckduckbot", "baiduspider");
+    }
+
+    @Data
     public static class RateLimit {
-        /** Fixed-window per-IP limit for open registration. */
+        /** Sliding-window-log per-IP limit for open registration (Redis ZSET + Lua, Redis TIME clock). */
         private int registerMax = 5;
         private int registerWindowSeconds = 600;
-        /** Fixed-window per-user limit for link creation. */
+        /** Sliding-window-log per-user limit for link creation. */
         private int createMax = 30;
         private int createWindowSeconds = 60;
-        /** Fixed-window per-IP limit for public redirects. */
+        /** Sliding-window-log per-IP limit for public redirects. */
         private int redirectMax = 300;
         private int redirectWindowSeconds = 60;
         /** TTL of the Idempotency-Key -> code mapping. */

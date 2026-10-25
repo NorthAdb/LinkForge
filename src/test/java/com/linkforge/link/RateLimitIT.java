@@ -3,9 +3,12 @@ package com.linkforge.link;
 import com.linkforge.AbstractIntegrationTest;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.ActiveProfiles;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "linkforge.rate-limit.key-prefix=linkforge:rl:it-rl3:",
@@ -28,6 +31,7 @@ class RateLimitIT extends AbstractIntegrationTest {
                 om.writeValueAsString(java.util.Map.of("originalUrl", "https://example.com/rl-x")), token);
         assertEquals(429, limited.getStatusCode().value(), limited.getBody());
         assertEquals(429, body(limited).path("code").asInt());
+        assertRetryAfter(limited, 60);
     }
 
     @Test
@@ -44,5 +48,14 @@ class RateLimitIT extends AbstractIntegrationTest {
         var limited = get("/r/" + code, null);
         assertEquals(429, limited.getStatusCode().value(), limited.getBody());
         assertEquals(429, body(limited).path("code").asInt());
+        assertRetryAfter(limited, 60);
+    }
+
+    private static void assertRetryAfter(ResponseEntity<String> resp, int windowSeconds) {
+        String raw = resp.getHeaders().getFirst("Retry-After");
+        assertNotNull(raw, "429 must carry Retry-After");
+        int seconds = Integer.parseInt(raw.trim());
+        assertTrue(seconds >= 1 && seconds <= windowSeconds,
+                "Retry-After " + seconds + " outside [1, " + windowSeconds + "]");
     }
 }

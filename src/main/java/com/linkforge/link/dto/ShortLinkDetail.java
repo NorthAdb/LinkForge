@@ -16,4 +16,6 @@ public class ShortLinkDetail {
     private LocalDateTime expireAt;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+    /** B3: true when an access password is set; the hash itself never leaves the API. */
+    private boolean passwordProtected;
 }

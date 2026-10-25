@@ -28,7 +28,7 @@
    - `LINKFORGE_BOOTSTRAP_TENANT`（默认 `demo`）
    - `LINKFORGE_BOOTSTRAP_USERNAME`（默认 `admin`）
    - `LINKFORGE_BOOTSTRAP_PASSWORD`（必填，无默认值）
-2. **开放注册** `POST /api/auth/register`：自助创建一个全新租户及其首个用户，成功即返回 JWT。邀请码**未启用**（无邀请码逻辑）。注册按 IP 固定窗口限流，默认 5 次 / 10 分钟，超限 429；阈值可用 `LINKFORGE_REGISTER_MAX` / `LINKFORGE_REGISTER_WINDOW_SECONDS` 调整。
+2. **开放注册** `POST /api/auth/register`：自助创建一个全新租户及其首个用户，成功即返回 JWT。邀请码**未启用**（无邀请码逻辑）。注册按 IP 滑动窗口限流，默认 5 次 / 10 分钟，超限 429；阈值可用 `LINKFORGE_REGISTER_MAX` / `LINKFORGE_REGISTER_WINDOW_SECONDS` 调整。
 
 本地示例值只在 `.env.example`。
 
@@ -164,13 +164,28 @@ bash scripts/outbox-drill.sh  # sync 关 + 断 MQ → 恢复追平（A7 硬验�
 
 **自定义短码**：`customCode` 需 4-16 位字母/数字/下划线/连字符，保留字（admin、login、stats、actuator、console、metrics 等，大小写不敏感）不可用，短于 4 位的词（api、r）天然被长度规则挡住；已被占用（含已删除链占用的码）返回 409。随机码与自定义码共用 `uk_code` 唯一索引，并发安全。**短码区分大小写**（A10 V4，列排序规则 `utf8mb4_0900_bin`）：`AbC123` 与 `abc123` 是两个独立的码，跳转与管理 API 都按原样精确匹配（尾随空格也不等价，NO PAD）；保留字检查仍不区分大小写，防 `ADMIN` 绕过。
 
-**限流（P3）**：注册按 IP 5 次/10 分钟；创建按用户 30 次/分钟；公开跳转按 IP 300 次/分钟。全部为 Redis 固定窗口，超限 429，阈值见下方环境变量。限流器在 Redis 故障时放行（degrade open）。客户端 IP 默认取 socket 地址、**不信任** `X-Forwarded-For`（该头可伪造、会被用来绕限流）；仅在可信反向代理后部署时设 `LINKFORGE_TRUST_XFF=true`。同一客户端经 IPv4/IPv6 两个协议访问会各占一个计数桶（本机 `127.0.0.1` 与 `::1` 并存属预期现象）。
+**限流（P3，B6 滑动窗口）**：注册按 IP 5 次/10 分钟；创建按用户 30 次/分钟；公开跳转按 IP 300 次/分钟。分钟级入口全部为 **Redis ZSET + Lua 滑动窗口日志**（精确计数非近似；只有放行的请求占名额，被拒不占；窗口时钟取 Redis `TIME`，多实例 JVM 时钟漂移不影响窗口；实现是滑动窗口日志，**不是令牌桶/漏桶**），超限 429 且所有 429 都带 `Retry-After`（按窗口内最老一条请求计算，≤窗口秒数）；API Key 日配额保持 **Asia/Shanghai 自然日固定计数**（零点重置，见「开放能力」）。每 key 内存上界＝窗口内最大放行数（如跳转 300 条/IP）。限流器在 Redis 故障时放行（degrade open），并计 `linkforge.ratelimit.failopen{reason=error|null}`（故障期「限流已失效」可见）。客户端 IP 默认取 socket 地址、**不信任** `X-Forwarded-For`（该头可伪造、会被用来绕限流）；仅在可信反向代理后部署时设 `LINKFORGE_TRUST_XFF=true`。同一客户端经 IPv4/IPv6 两个协议访问会各占一个计数桶（本机 `127.0.0.1` 与 `::1` 并存属预期现象）。限流 ZSET 键在 `linkforge:rl:sw:` 命名空间（与旧固定窗口 STRING 键不同名，升级残留自然过期互不干扰）。
 
 **缓存一致性（P3）**：更新短链时**写穿**（立即写入新值）并安排 1 秒后的延迟双删，清除并发读旧库行回填的脏值；禁用同理（先删 + 延迟双删）。最终一致窗口约 1 秒，上限为 TTL（默认 3600 秒）。过期链路不依赖缓存（每次跳转都校验 DB 行状态）。
 
 **创建幂等与并发（P3）**：携带 `Idempotency-Key` 头的重复提交返回同一短码（Redis `pending→code` 两段式，并发同键只建一条，映射保留 24h）；短码生成靠 `uk_code` 唯一索引兜底，撞码自动重试新码，并发创建不会产生重复短码。
 
 跳转路径缓存键：`linkforge:code:{code}`。更新/禁用会主动删除该键，下一次跳转回源后重建。  
+
+## 非人点击（B2：预取与预览 bot 照常 302 但不计）
+
+浏览器/IM 的**预取请求**（`Sec-Purpose: prefetch` 及 `prefetch;prerender`、旧式 `Purpose`/`X-Purpose`/`X-Moz`）与**具名预览 bot**（Slackbot、facebookexternalhit、Twitterbot、TelegramBot、WhatsApp、Discordbot、Googlebot 等 21 个默认 token，可配置）照常得到 302 与相同 `Location`，但**全链路不计**：无明细、无 UV、无聚合、无 Webhook、不加 `linkforge.redirects`，只计 `linkforge.click.skipped{reason=prefetch|preview_bot}`（tag 仅这两个有界值，命中的 token 只进 DEBUG 日志）。判定点在跳转限流**之后**——预览 bot 照样消耗按 IP 的跳转限流；跳过名单是**窄名单**：`curl`/`wget`/`java`/`okhttp`、泛词 `bot` 与 App 内置浏览器（FBAN/Instagram/MicroMessenger 等，真人）**都不在名单、照常计数**（名单外自动化 UA 仍进 `device=bot` 维度桶，可在 breakdown 剔除）。配置：`LINKFORGE_CLICK_FILTER_ENABLED` / `LINKFORGE_CLICK_FILTER_PREFETCH_ENABLED` / `LINKFORGE_CLICK_FILTER_BOT_UA_TOKENS`（逗号分隔**整表覆盖**）。**诚实边界**：UA 可伪造，本过滤只挡「自报家门」的预览 bot；浏览器若把预取到的 302 直接用于真实导航，这次真实点击会**少计**；名单外爬虫仍计数；`enabled=false` 恢复旧口径。
+
+## 目标域名名单门禁（B9，诚实边界）
+
+**先说边界**：本服务**就是开放重定向**——任何登录用户可缩短任意 http(s) 目标。B9 只是一层**手工维护的本地域名名单** + userinfo 规则：**没有接** Google Safe Browsing / PhishTank 或任何信誉服务，不做内容扫描、不做 DNS 解析；名单外的新钓鱼域照样能建能跳；WARN 中间页可被任何人用 `?lf_continue=1` 绕过；目标站自己的二次跳转管不到。统一叫「本地域名名单门禁」，不叫「防钓鱼系统」。
+
+- **判定（纯函数）**：`TargetPolicy.evaluate(url)` → ALLOW / WARN / BLOCK。host 规范化（去尾点、小写、IDN punycode 化）后按 **label 边界后缀匹配**（`evil.com` 命中 `a.evil.com`，不命中 `notevil.com`、`evil.com.cn`）；BLOCK 优先于 WARN。**userinfo 规则**（`https://paypal.com@evil.com` 经典伪装）：建链/改链 → 400；存量行跳转 → WARN 中间页。path 里的 `@` 不算 userinfo
+- **检查时机**：①建链/改链（`POST/PATCH /api/links`）：BLOCK → **400**（消息只说「target domain is not allowed by policy」，不回显名单项），WARN → 允许；②**跳转时复查**：行每次都读，名单变更对存量链**立即生效**，零额外 I/O
+- **页面（无 JS、无外链资源、全部动态值转义、CSP `default-src 'none'`）**：BLOCK → **403 拦截页**（无 `Location`、不出现目标、`Cache-Control: no-store`）；WARN → **200 警示中间页**（显示转义后的目标 URL 与 punycode host，`noindex` + `Referrer-Policy: no-referrer`），「仍要继续」= `/r/{code}?lf_continue=1`，该参数**只跳过 WARN 门**（BLOCK、密码门照常），继续后的 302 照常计点击。门禁在 B2 分类**之前**（预览 bot 访问 blocked 链也是 403）；404/410/429 语义不变
+- **名单来源**：`LINKFORGE_PHISHING_BLOCK_DOMAINS` / `LINKFORGE_PHISHING_WARN_DOMAINS`（逗号分隔整表覆盖，默认空）+ 可选 `LINKFORGE_PHISHING_BLOCKLIST_FILE`（每行一域，`#` 注释，`!warn ` 前缀=警示级）；文件按 mtime **热加载**（默认 30s），坏文件/文件消失 → **保留旧快照** + `linkforge.phishing.reload{result=failed}`。**无管理 API**（无管理员角色，租户用户不能改全局名单）
+- **与 `WebhookTargetGuard` 的分工**：Guard 防的是**服务端出站请求**（SSRF：DNS 解析后拒私网/元数据 IP）；B9 管的是**浏览器去访问的目标域**——不做 DNS 解析，私网/内网 IP 目标照常允许（企业内网短链是合法用法）。两者互不复用
+- **指标**：`linkforge.phishing.gate{action=block|warn,stage=create|redirect}`、`linkforge.phishing.continue`、`linkforge.phishing.reload{result=ok|failed|unchanged}`、gauge `linkforge.phishing.rules{level=block|warn}`（域名与 code 一律不进 tag，只进 DEBUG 日志）
 
 ## 点击统计管道（A7 Transactional Outbox）
 
@@ -236,6 +251,18 @@ MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.c
 - **行级 URL 校验门（B8 引入的护栏）**：每次跳转都会读行，行的 `original_url` 不可渲染时**一律 410，与缓存命中与否无关**——带 B8 后「脏行 + 旧缓存未清」会被旧缓存遮蔽成 302，此门保证脏行永远不被旧缓存掩盖（`LinkLifecycleIT` legacy-dirty 契约钉住）
 - **多实例诚实口径**：L1 进程内、实例间**不同步**（无 pub/sub 广播）——实例 A 改了 URL，实例 B 在 L1 TTL（≤10s）内可能仍跳旧 URL，与 Redis 双删窗口叠加时取更长者；空值缓存在 Redis、多实例共享。Bloom 的多实例限制见「防穿透」
 
+## 密码短链（B3：BCrypt + 签名 cookie + 先限流后校验）
+
+建链/改链可携带 `accessPassword`（**4–64 字符**）把短链设为受保护；库里只存 **BCrypt 哈希**（`access_password_hash`，V7），哈希与明文**永不出 API/CSV/日志**，Detail 只多一个 `passwordProtected` 布尔。改链设/换密码用 `accessPassword`、清除用 `clearAccessPassword:true`（两者同时出现 400；清除走显式 `SET NULL`——MP 默认 NOT_NULL 更新策略会跳过 null 字段，IT 钉住 DB 列确为 NULL）。
+
+- **受保护 GET**：无有效凭证 → **200 解锁页**（`POST /r/{code}/unlock` 表单；页面**不出现目标 URL 与 title**，`noindex` + `no-store`）；**不计点击**。**HEAD → 401**（探测方知道要凭证）。预览 bot 照 B2 规则看到解锁页、同样不计
+- **解锁**：成功 → `303` 回 `/r/{code}` + `Set-Cookie lf_ac_{code}`（`Path=/r/{code}`、`HttpOnly`、`SameSite=Lax`、1 小时 TTL）；失败 → 401 + 解锁页（不提示剩余次数）；未受保护的链接解锁 → 无害 303。带 cookie 的 GET 走正常跳转链（B9/B2 门照过、302 才计点击）
+- **cookie 语义**：值 = `{exp}.{HMAC-SHA256 签名}`，签名绑定 linkId+code+exp+**pwdVer**（当前哈希的 SHA-256 前 8 字节）——**改/清密码后旧 cookie 即刻失效**；校验用常量时间比较；跨链不通用。**密钥由 `JWT_SECRET` 域分离派生**（无新增 env、仓库无密钥）；**轮换 JWT_SECRET 会使全部解锁 cookie 失效**
+- **爆破防护**：`POST /r/{code}/unlock` **先两级限流、后 BCrypt**（同 IP 同码 5 次/300s + 同码总量 50 次/300s，键在 `sw:` 命名空间）——否则 BCrypt 的几十 ms CPU 会被打成 DoS；超限 429 + `Retry-After`。IT 用「第 6 次提交**正确**密码仍 429」钉住该顺序
+- **判定顺序（D-Bw345-51）**：B9 BLOCK 403 → **B3 密码门** → B9 WARN 中间页 → B2 分类 → 302。受保护的恶意链不给解锁页
+- **诚实边界**：保护的是「短链入口」**不是目标资源**——拿到原 URL 的人可直接访问目标；无 ACL/访问名单/一次性密码/审计日志；解锁表单无 CSRF token（CSRF 已全局关闭，SameSite=Lax + 表单只能解锁，风险低）
+- **指标**：`linkforge.link.unlock{result=ok|bad_password|rate_limited}`、`linkforge.link.locked`；env：`LINKFORGE_LINK_ACCESS_TTL_SECONDS` / `_UNLOCK_IP_MAX` / `_UNLOCK_CODE_MAX` / `_UNLOCK_WINDOW_SECONDS`
+
 ## 开放能力（B4 API Key / B5 Webhook）
 
 ### B4 API Key（哈希存储 + 配额）
@@ -247,7 +274,7 @@ MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.c
 - **身份**：Key 以**创建者用户**的身份调用（`ROLE_API_KEY`），归属/限流/幂等语义与 JWT 完全一致；多租户隔离不变
 - **权限白名单**：Key 可调 `/api/links/**`（含 stats / breakdown / clicks / export）；**不可**调 `/api/keys/**`、`/api/webhooks/**`、`/actuator/**`（health 除外）→ 403。Key 不能再签 Key、改回调地址、看全局指标（防泄露后横向扩权）
 - **吊销即时**：每请求按 hash 点查一次库，`DELETE /api/keys/{id}` 后**下一请求即 401**（不做认证缓存，代价是每请求一次点查）
-- **配额**：Key 级分钟/日两道固定窗口（复用限流实现，键 `linkforge:rl:apikey:min|day:{keyId}`），超限 429 + `Retry-After`；额度默认 120/分钟、10000/日，可在创建时按 Key 覆盖。**诚实边界**：Redis 故障期间配额 fail-open 不生效（配额是商业限额不是安全边界）；固定窗口边界可瞬时 2×；分钟被拒时日计数已 +1（小幅高估）
+- **配额**：Key 级分钟/日两道闸（复用限流实现），超限 429 + `Retry-After`；分钟窗为**滑动窗口日志**（键 `linkforge:rl:sw:apikey:min:{keyId}`，Retry-After 按最老一条计算），日窗保持 **Asia/Shanghai 自然日固定计数**（键 `linkforge:rl:apikey:day:{keyId}:{yyyyMMdd}`，零点重置、Retry-After=到零点秒数）；额度默认 120/分钟、10000/日，可在创建时按 Key 覆盖。**诚实边界**：Redis 故障期间配额 fail-open 不生效（配额是商业限额不是安全边界）；日固定计数在自然日边界可瞬时 2×（分钟滑窗无此形态）；分钟被拒时日计数已 +1（小幅高估）
 - **管理 API（仅 JWT）**：`POST /api/keys`（明文仅此一次）/ `GET /api/keys` / `DELETE /api/keys/{id}`（幂等吊销）；每用户活跃 Key 上限 10
 
 ```bash
@@ -264,10 +291,10 @@ curl -X POST -H "X-API-Key: lfk_xxxxxxxx_xxx" -H "Content-Type: application/json
 - **签名与防重放**：头 `X-LinkForge-Event-Id`（= `evt_` + 点击 eventId，跨重试/重放稳定）、`X-LinkForge-Timestamp`（Unix 秒）、`X-LinkForge-Signature: v1=HMAC-SHA256(secret, timestamp + "." + rawBody)`。接收方校验：常量时间比较 + **±300s** 容差 + 按 event id 去重
 - **payload**：`{id, type:"link.clicked", createdAt, data:{linkId, code, clickedAt, device, refererHost}}`——**不推原始 IP / 完整 UA / 完整 Referer**（隐私最小化）
 - **重放**：手工重放：`UPDATE lf_webhook_delivery SET status='PENDING', next_attempt_at=NULL WHERE id=?`。**at-least-once**（多实例无 SKIP LOCKED），接收方按 event id 去重
-- **secret 存储（Q1 拍板）**：at-rest 为 **AES-256-GCM 密文**（`v1:` + Base64(nonce‖ct‖tag)），主密钥来自 env **`LINKFORGE_WEBHOOK_SECRET_KEY`**（Base64 32 字节，`openssl rand -base64 32` 生成；留空则签名不可用）。创建/轮换时明文只返回一次，GET 只给掩码。**运维边界**：主密钥丢失 → 库内密文全部不可解密，须对所有租户 `rotate-secret` 重发；主密钥不进仓库。**降级口径（修复轮 S1）**：主密钥未配置时 endpoint 照常可配、**投递意图照常落 PENDING 行**（不静默丢），relay 整批跳过不耗次数（指标 `relay.skipped`），补上主密钥重启后自然补投；`LINKFORGE_WEBHOOK_ENABLED=false` 关闭期间的点击**不补投**
+- **secret 存储（Q1 拍板）**：at-rest 为 **AES-256-GCM 密文**（`v1:` + Base64(nonce‖ct‖tag)），主密钥来自 env **`LINKFORGE_WEBHOOK_SECRET_KEY`**（Base64 32 字节，`openssl rand -base64 32` 生成；留空则签名不可用）。创建/轮换时明文只返回一次，GET 只给掩码。**运维边界**：主密钥丢失 → 库内密文全部不可解密，须对所有租户 `rotate-secret` 重发；主密钥不进仓库。**降级口径（修复轮 S1）**：主密钥未配置时 endpoint 管理（创建/轮换）返回 **503**，已配置 endpoint 的**投递意图照常落 PENDING 行**（不静默丢），relay 整批跳过不耗次数（指标 `relay.skipped`），补上主密钥重启后自然补投；`LINKFORGE_WEBHOOK_ENABLED=false` 关闭期间的点击**不补投**
 - **投递意图与失败语义（修复轮 S1）**：入队插入失败时**整条点击随 consume 事务回滚**进 DLQ（统计与回调意图同生共死），重复 (endpoint_id, event_id) 视为已入队放行
 - **重试与退避（修复轮 N8 口径）**：2xx = SENT；网络错/超时/408/429/5xx 按 `min(1h, 10s·2^attempts)` 退避（attempts 从 1 起计，**首次重试等 20s**，attempts 计入最终那一次）；其它 4xx 首败即 FAILED；上限 8 次后 FAILED。退避在 **DB 时钟**上调度（`DATE_ADD(NOW(),…)`），JVM 与 MySQL 时区不一致不会拉长或杀掉退避
-- **SSRF 基本防护**：保存时与**每次发送前**双校验——仅 http/https、拒 userinfo、解析出的所有 IP 不得为环回/私网/链路本地（含云元数据 169.254.169.254）/CGNAT/ULA，不跟随重定向（3xx = 不可重试失败）。**诚实限制**：DNS rebinding（校验与连接两次解析的 TOCTOU）本波不做、无端口白名单、无出口代理隔离；`LINKFORGE_WEBHOOK_ALLOW_PRIVATE_TARGETS` 仅测试用，prod 禁开
+- **SSRF 基本防护**：保存时与**每次发送前**双校验——仅 http/https、拒 userinfo、解析出的所有 IP 不得为环回/私网/链路本地（含云元数据 169.254.169.254）/CGNAT/ULA，不跟随重定向（3xx = 不可重试失败）。**诚实限制**：DNS rebinding（校验与连接两次解析的 TOCTOU）本波不做、无端口白名单、无出口代理隔离；198.18.0.0/15 也是 Clash / Surge 等代理 **fake-IP 模式**的默认段，本机开 fake-IP 时保存公网 webhook 目标会 400，联调前关 fake-IP 或改 redir-host；`LINKFORGE_WEBHOOK_ALLOW_PRIVATE_TARGETS` 仅测试用，prod 禁开
 - **调度隔离**：`spring.task.scheduling.pool.size=4`，webhook relay 慢不拖点击 outbox 追平；webhook 依赖 `LINKFORGE_ASYNC_CLICK_ENABLED=true`（纯 sync 模式不产生回调）
 
 **存量库迁移（Flyway，深化 A6）**：schema 已版本化在 `src/main/resources/db/migration`（`V1__baseline_schema.sql`），由应用启动时自动迁移（`spring.flyway.baseline-on-migrate=true`）：
@@ -293,6 +320,14 @@ curl -X POST -H "X-API-Key: lfk_xxxxxxxx_xxx" -H "Content-Type: application/json
 | **核心**（主路径 Demo 只依赖这些） | 注册/登录（JWT）、创建短链、`/r/{code}` 302 跳转（Bloom 防穿透）、stats 统计、限流、同事务 Outbox + Relay 投递 + 幂等消费 + 断链追平、CI / bench | 冒烟（smoke.sh）与断链演练（mq-drill.sh / outbox-drill.sh）覆盖的即主路径 |
 | 可选（演示可用，面试可讲，主路径不强制） | 自定义短码、CSV 导出、Swagger UI、静态控制台、精确 UV / 点击明细、**维度分布（设备/来源）** | R2–R4 与深化 A8 落地，均有集成测试与隔离验证；prod profile 下文档与控制台默认关闭 |
 
+## 可观测（B1 Prometheus + Grafana）
+
+- **抓取端点**：`/actuator/prometheus`，由专用抓取令牌守卫——请求带 `Authorization: Bearer {LINKFORGE_METRICS_SCRAPE_TOKEN}`，常量时间比较；**令牌未配置 = 端点对所有请求 401（fail-closed）**；API Key 打它仍 403、JWT 用户与 `/actuator/metrics` 的关系不变（其余 actuator 规则零改动）。令牌不进仓库（`.env` 与 Prometheus 的 `ops/observability/scrape-token` 文件各放一份，后者已 gitignore；Prometheus 原生 `authorization.credentials_file`）
+- **指标面**：全部既有计数器 + 新增 `linkforge.cache.l2{result=hit|miss}`、`linkforge.outbox.sent`、积压 gauge `linkforge.outbox.pending` / `linkforge.webhook.pending` / `linkforge.webhook.failed`（`BacklogGauges` 每 15s 定时采样 `COUNT(*)`，**不在 scrape 线程查库**，采样失败保留上次值）、B2/B6/B9/B3 各自的新计数（见各节与指标总表）；`http.server.requests` 开了 **percentile 直方图 + SLO 桶**（5ms…1s，仅该 meter）；公共 tag `application="linkforge"`。**tag 有界**：任何 tag 不含 code/URL/域名/IP/用户/Key id，`uri` 只出现模板值（`/r/{code}`）——IT 钉住 scrape 里搜不到测试 code
+- **一键起观测栈**：`docker compose --profile observability up -d`（默认 `up -d` 不含 Prometheus/Grafana）。镜像 tag 写死（`prom/prometheus:v2.55.1`、`grafana/grafana-oss:11.3.0`），端口只绑 `127.0.0.1`（9090/3000）；Prometheus 抓**宿主机上的应用**（`host.docker.internal:host-gateway`，Linux 必需）。Grafana 管理员密码走 `GRAFANA_ADMIN_PASSWORD`（默认值仅限本机，README 外的部署必须改）。看板「LinkForge SLO」自动 provision（datasource uid 固定 `linkforge-prom`）
+- **看板内容**：跳转 QPS/状态、P50/P95/P99（直方图）、SLO 达标率（≤100ms 占比）与 5xx 率、跳过与限流拒绝、L1/L2 命中率、Bloom/absent、singleflight、fail-open、Outbox/Webhook 积压与投递、API Key 认证与配额、门禁与解锁、JVM/Hikari。**SLO 阈值是 Demo 目标、不是生产承诺**；看板不等于压测——压测数字见 `docs/bench.md`（测于固定窗口时期，新数字留待 B10）
+- **一致性测试**：`DashboardMetricsIT` 解析看板 JSON 里所有 `linkforge_*` 名字，断言都能在真实 scrape 里找到（防「面板引用不存在的指标」）；导出但未被看板使用的指标只打印不失败
+
 ## 配置要点
 
 见 `src/main/resources/application.yml`。口令与 `JWT_SECRET` 只有环境变量，没有写在 yml 或 Java 默认值里。本地示例见 `.env.example`。
@@ -309,12 +344,15 @@ curl -X POST -H "X-API-Key: lfk_xxxxxxxx_xxx" -H "Content-Type: application/json
 - `LINKFORGE_CACHE_TTL_JITTER_SECONDS`（默认 300）/ `LINKFORGE_ABSENT_TTL_SECONDS`（默认 60）/ `LINKFORGE_ABSENT_TTL_JITTER_SECONDS`（默认 30）空值缓存与抖动（见「多级缓存」；absent ≤0 关闭负缓存）
 - `LINKFORGE_L1_ENABLED` / `LINKFORGE_L1_MAXIMUM_SIZE` / `LINKFORGE_L1_TTL_SECONDS` Caffeine L1（默认 true / 10000 / 10 秒，见「多级缓存」；命中不跳过 DB 行读）
 - `LINKFORGE_APIKEY_QUOTA_PER_MINUTE`（默认 120）/ `LINKFORGE_APIKEY_QUOTA_PER_DAY`（默认 10000）/ `LINKFORGE_APIKEY_MAX_ACTIVE`（默认 10）API Key 配额与上限（见「开放能力」）
-- `LINKFORGE_WEBHOOK_ENABLED`（默认 true）/ `LINKFORGE_WEBHOOK_SECRET_KEY`（Base64 32 字节 AES-256 主密钥，缺失则 webhook 降级关）/ `LINKFORGE_WEBHOOK_RELAY_FIXED_DELAY_MS`（默认 2000）/ `LINKFORGE_WEBHOOK_MAX_ATTEMPTS`（默认 8）/ `LINKFORGE_WEBHOOK_ALLOW_PRIVATE_TARGETS`（默认 false，仅测试）
+- `LINKFORGE_WEBHOOK_ENABLED`（默认 true）/ `LINKFORGE_WEBHOOK_SECRET_KEY`（Base64 32 字节 AES-256 主密钥，缺失时 endpoint 管理返回 503、投递意图照常落 PENDING，补密钥重启后补投）/ `LINKFORGE_WEBHOOK_RELAY_FIXED_DELAY_MS`（默认 2000）/ `LINKFORGE_WEBHOOK_MAX_ATTEMPTS`（默认 8）/ `LINKFORGE_WEBHOOK_ALLOW_PRIVATE_TARGETS`（默认 false，仅测试）
 - `LINKFORGE_IDEMPOTENCY_TTL_SECONDS` 创建幂等键保留时长（默认 86400 秒）
+- `LINKFORGE_CLICK_FILTER_ENABLED`（默认 true）/ `LINKFORGE_CLICK_FILTER_PREFETCH_ENABLED`（默认 true）/ `LINKFORGE_CLICK_FILTER_BOT_UA_TOKENS`（逗号分隔整表覆盖，默认 21 个具名预览 bot，见「非人点击」）
+- `LINKFORGE_PHISHING_ENABLED`（默认 true）/ `LINKFORGE_PHISHING_BLOCK_DOMAINS` / `LINKFORGE_PHISHING_WARN_DOMAINS`（逗号分隔整表覆盖，默认空）/ `LINKFORGE_PHISHING_BLOCKLIST_FILE`（每行一域、`#` 注释、`!warn ` 前缀=警示级，按 mtime 热加载）/ `LINKFORGE_PHISHING_RELOAD_INTERVAL`（毫秒，默认 30000）/ `LINKFORGE_PHISHING_REJECT_USERINFO`（默认 true），见「目标域名名单门禁」
+- `LINKFORGE_LINK_ACCESS_TTL_SECONDS`（默认 3600）/ `LINKFORGE_LINK_ACCESS_UNLOCK_IP_MAX`（默认 5）/ `LINKFORGE_LINK_ACCESS_UNLOCK_CODE_MAX`（默认 50）/ `LINKFORGE_LINK_ACCESS_UNLOCK_WINDOW_SECONDS`（默认 300），见「密码短链」
 - `LINKFORGE_TRUST_XFF` 是否信任 X-Forwarded-For（默认 false，仅在可信反代后开启）
 - 限流覆盖说明：注册按 IP、创建按用户（**含自定义短码创建，共用 POST /api/links 的限额**）；CSV 导出与统计查询属管理 API（JWT 必需、租户隔离），未单独限流，导出有 1 万行上限保护
 - `/actuator/health` 展示组件细节（db / redis / rabbit / diskSpace），依赖 DOWN 时整体 503
-- `/actuator/metrics/**` 暴露业务计数器（`linkforge.links.created`、`linkforge.redirects`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`、`linkforge.bloom.rejected` / `linkforge.bloom.loaded` / `linkforge.bloom.loadfailed`、`linkforge.singleflight.loads` / `linkforge.singleflight.shared` / `linkforge.singleflight.timeout`、`linkforge.cache.absent.hit` / `linkforge.cache.absent.put`、`linkforge.l1.hit` / `linkforge.l1.miss`、`linkforge.apikey.auth{result=ok|invalid|revoked|ambiguous}` / `linkforge.apikey.quota.rejected{window}`、`linkforge.webhook.delivery{result}` / `linkforge.webhook.enqueued` / `linkforge.webhook.blocked` / `linkforge.webhook.enqueue.failed{reason}` / `linkforge.webhook.relay.skipped{reason}`、`linkforge.outbox.failed`），需 Bearer Token
+- `/actuator/metrics/**` 暴露业务计数器（`linkforge.links.created`、`linkforge.redirects`、`linkforge.click.skipped{reason=prefetch|preview_bot}`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`、`linkforge.ratelimit.failopen{reason=error|null}`、`linkforge.bloom.rejected` / `linkforge.bloom.loaded` / `linkforge.bloom.loadfailed`、`linkforge.singleflight.loads` / `linkforge.singleflight.shared` / `linkforge.singleflight.timeout`、`linkforge.cache.absent.hit` / `linkforge.cache.absent.put`、`linkforge.l1.hit` / `linkforge.l1.miss`、`linkforge.phishing.gate{action,stage}` / `linkforge.phishing.continue` / `linkforge.phishing.reload{result}` / `linkforge.phishing.rules{level}`、`linkforge.link.unlock{result=ok|bad_password|rate_limited}` / `linkforge.link.locked`、`linkforge.apikey.auth{result=ok|invalid|revoked|ambiguous}` / `linkforge.apikey.quota.rejected{window}`、`linkforge.webhook.delivery{result}` / `linkforge.webhook.enqueued` / `linkforge.webhook.blocked` / `linkforge.webhook.enqueue.failed{reason}` / `linkforge.webhook.relay.skipped{reason}`、`linkforge.outbox.failed`、`linkforge.outbox.sent`（B1）、gauge `linkforge.outbox.pending` / `linkforge.webhook.pending` / `linkforge.webhook.failed`（B1 定时采样）、`linkforge.cache.l2{result=hit|miss}`（B1）；另有 `http.server.requests`（直方图+SLO 桶）与公共 tag `application="linkforge"`，需 Bearer Token（`/actuator/prometheus` 用抓取令牌，见「可观测」）
 - **公网部署**：本地 Demo 一律默认 profile（全开放）；对外部署设 `SPRING_PROFILES_ACTIVE=prod` 一键收紧——health 细节转 `when_authorized`、springdoc 与静态控制台关闭、文档/控制台路径在过滤器层 denyAll（见 application.yml prod 段与 ProdProfileIT）
 
 ## 架构
@@ -327,7 +365,7 @@ flowchart LR
         R[跳转 /r/code]
         ST[stats API / clicks / CSV]
     end
-    RD[(Redis\n缓存 linkforge:code\n限流计数 幂等键)]
+    RD[(Redis\n缓存 linkforge:code\n限流滑窗 幂等键)]
     MY[(MySQL\nlf_tenant/lf_user\nlf_short_link\nlf_click_log)]
     MQ{{RabbitMQ\nclick.exchange}}
     CONS[Consumer\neventId 幂等]
@@ -337,7 +375,7 @@ flowchart LR
     C --> API --> MY
     API --> RD
     C --> R
-    R -->|1 限流 INCR| RD
+    R -->|1 限流 EVALSHA 滑窗| RD
     R -->|2 读缓存| RD
     R -->|3 校验行状态| MY
     R -->|4 同步明细| MY
@@ -348,7 +386,7 @@ flowchart LR
     ST -->|UV| MY
 ```
 
-**跳转时序（GET /r/{code}，HEAD 共用）**：① 限流器按 IP 固定窗口 INCR（Redis，超限 429）→ ② **Bloom 门（A9）**：从未存在的码直接 404，不碰缓存与 MySQL → ③ **空值缓存探查（B7）**：`linkforge:absent:{code}` 命中 → 404（DB 近期已确认不存在）→ ④ **Caffeine L1（B8）** 读 URL → ⑤ **Redis L2** 读 URL（④⑤命中则省回源 URL 字段）→ ⑥ 无论命中与否都读 `lf_short_link` 行（**同码并发读行经 singleflight 合并为一次在途读（A10）**；DB 返回 null → 写空值缓存并 404）→ ⑦ 状态/过期判定（本请求时钟，404/410；**这两种 404/410 不进空值缓存**）→ ⑧ 选 URL（缓存命中优先，否则行上 URL）→ ⑨ 回填 L1+L2（正缓存，TTL 带抖动）→ 目标 URL 严格校验（不过 410）→ 写 `lf_click_log`（D7 同步明细）→ 发布 `ClickEvent`（eventId=log-{id}）到 RabbitMQ → 返回 302。消费端以 eventId 唯一索引幂等累加 `lf_click_daily`；发布失败由 Reconciler 定时从明细补投（断 MQ 演练见 `scripts/mq-drill.sh`）。更新/禁用走写穿 + 1s 延迟双删防旧值回填。
+**跳转时序（GET /r/{code}，HEAD 共用）**：① 限流器按 IP 滑动窗口日志判额（Redis ZSET + Lua EVALSHA，Redis TIME 时钟，超限 429 + Retry-After）→ ② **Bloom 门（A9）**：从未存在的码直接 404，不碰缓存与 MySQL → ③ **空值缓存探查（B7）**：`linkforge:absent:{code}` 命中 → 404（DB 近期已确认不存在）→ ④ **Caffeine L1（B8）** 读 URL → ⑤ **Redis L2** 读 URL（④⑤命中则省回源 URL 字段）→ ⑥ 无论命中与否都读 `lf_short_link` 行（**同码并发读行经 singleflight 合并为一次在途读（A10）**；DB 返回 null → 写空值缓存并 404）→ ⑦ 状态/过期判定（本请求时钟，404/410；**这两种 404/410 不进空值缓存**）→ ⑧ 选 URL（缓存命中优先，否则行上 URL）→ ⑨ 回填 L1+L2（正缓存，TTL 带抖动）→ 目标 URL 严格校验（不过 410）→ 写 `lf_click_log`（D7 同步明细）→ 发布 `ClickEvent`（eventId=log-{id}）到 RabbitMQ → 返回 302。消费端以 eventId 唯一索引幂等累加 `lf_click_daily`；发布失败由 Reconciler 定时从明细补投（断 MQ 演练见 `scripts/mq-drill.sh`）。更新/禁用走写穿 + 1s 延迟双删防旧值回填。
 
 **本地 Demo 五步**（只走核心路径）：
 
@@ -369,7 +407,7 @@ docker run --rm --network host -v "$PWD":/app -v m2:/root/.m2 -w /app \
   maven:3.9-eclipse-temurin-17 mvn -B verify
 ```
 
-**压测数字**：见 `docs/bench.md`（wrk 实测：health 基线 888 QPS；跳转写路径分解：关同步明细后 13→276 QPS、P50 678→31ms；缓存命中率 100%）。
+**压测数字**：见 `docs/bench.md`（wrk 实测：health 基线 888 QPS；跳转写路径分解：关同步明细后 13→276 QPS、P50 678→31ms；缓存命中率 100%。**测于 `df904f8` 固定窗口限流时期，早于 A7–B8 与 B6 滑窗；新数字留待 B10**）。
 
 ## 许可证
 

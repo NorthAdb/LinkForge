@@ -2,6 +2,9 @@ package com.linkforge.user.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.linkforge.common.exception.BizException;
+import com.linkforge.common.exception.RateLimitedException;
+import com.linkforge.common.ratelimit.RateLimitDecision;
+import com.linkforge.common.ratelimit.RateLimitKeys;
 import com.linkforge.common.ratelimit.RedisRateLimiter;
 import com.linkforge.common.util.ClientIps;
 import com.linkforge.config.LinkForgeProperties;
@@ -60,10 +63,12 @@ public class AuthService {
     @Transactional
     public LoginResponse register(RegisterRequest request, HttpServletRequest httpRequest) {
         LinkForgeProperties.RateLimit limit = properties.getRateLimit();
-        String key = limit.getKeyPrefix() + "register:" + ClientIps.resolve(httpRequest, limit.isTrustXff());
-        if (!rateLimiter.tryAcquire(key, limit.getRegisterMax(), limit.getRegisterWindowSeconds())) {
+        RateLimitDecision decision = rateLimiter.acquire(
+                RateLimitKeys.sw(limit.getKeyPrefix(), "register:" + ClientIps.resolve(httpRequest, limit.isTrustXff())),
+                limit.getRegisterMax(), limit.getRegisterWindowSeconds());
+        if (!decision.allowed()) {
             meterRegistry.counter("linkforge.ratelimit.rejected", "entry", "register").increment();
-            throw new BizException(429, "too many requests, retry later");
+            throw new RateLimitedException(decision.retryAfterSeconds());
         }
 
         Tenant tenant = new Tenant();

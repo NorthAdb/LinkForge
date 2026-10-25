@@ -57,6 +57,7 @@ public class ClickOutboxRelay {
                     clickEventPublisher.publish(event);
                     outboxMapper.markSent(row.getId());
                     sent++;
+                    meterRegistry.counter("linkforge.outbox.sent").increment();
                 } catch (Exception ex) {
                     outboxMapper.markRetry(row.getId(), backoffSeconds(row.getAttempts()));
                     log.warn("outbox relay deferred event={} attempt={}: {}",

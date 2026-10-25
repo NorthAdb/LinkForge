@@ -5,10 +5,11 @@ spring:
     active: ${SPRING_PROFILES_ACTIVE:dev}
   task:
     scheduling:
-      # B5: the ClickOutboxRelay, reconciler and WebhookDeliveryRelay must not share
-      # one thread — a slow webhook endpoint must never delay click outbox catch-up.
+      # B5: relays must not share one thread — a slow webhook endpoint must never
+      # delay click outbox catch-up. B9 adds the blocklist reload and B1 the backlog
+      # sampler (D-Bw345-54: 4 → 6).
       pool:
-        size: ${LINKFORGE_SCHEDULING_POOL_SIZE:4}
+        size: ${LINKFORGE_SCHEDULING_POOL_SIZE:6}
   flyway:
     # Versioned migrations for every profile; empty DBs get V1, legacy volumes
     # (tables already present, no history) are baselined at 1 and skip V1.
@@ -21,11 +22,25 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info,metrics,prometheus   # B1: scrape endpoint, token-gated (D-Bw345-42)
   endpoint:
     health:
       show-details: always
       show-components: always
+  metrics:
+    tags:
+      application: linkforge                      # B1: common tag on every meter
+    enable:
+      # the only instrumented client in this app is the test harness's RestTemplate
+      # (the webhook relay uses a raw java.net.http.HttpClient); client-side meters
+      # would record raw request paths of tests into the export — off for good
+      http.client.requests: false
+    distribution:
+      percentiles-histogram:
+        # only this meter gets buckets — the redirect SLO panel needs the latency distribution
+        http.server.requests: true
+      slo:
+        http.server.requests: 5ms,10ms,25ms,50ms,100ms,250ms,500ms,1s
 
 ---
 spring:
@@ -161,6 +176,31 @@ linkforge:
     # Honor X-Forwarded-For only when a trusted reverse proxy fronts the app.
     trust-xff: ${LINKFORGE_TRUST_XFF:false}
     key-prefix: ${LINKFORGE_RATELIMIT_KEY_PREFIX:linkforge:rl:}
+  click-filter:
+    # B2: prefetch headers and named preview bots get the normal 302 but record no click.
+    enabled: ${LINKFORGE_CLICK_FILTER_ENABLED:true}
+    prefetch-headers-enabled: ${LINKFORGE_CLICK_FILTER_PREFETCH_ENABLED:true}
+    # comma-separated, whole-list override; keep out curl/wget/java/ generic bot tokens
+    # (they would swallow drill scripts and integration tests, D-Bw345-3)
+    bot-ua-tokens: ${LINKFORGE_CLICK_FILTER_BOT_UA_TOKENS:slackbot,slack-imgproxy,facebookexternalhit,facebookcatalog,twitterbot,telegrambot,whatsapp,discordbot,linkedinbot,skypeuripreview,pinterestbot,redditbot,embedly,iframely,googlebot,bingbot,bingpreview,applebot,yandexbot,duckduckbot,baiduspider}
+  phishing:
+    # B9: local domain blocklist/warnlist + userinfo rule; defaults stay empty on purpose.
+    enabled: ${LINKFORGE_PHISHING_ENABLED:true}
+    block-domains: ${LINKFORGE_PHISHING_BLOCK_DOMAINS:}
+    warn-domains: ${LINKFORGE_PHISHING_WARN_DOMAINS:}
+    blocklist-file: ${LINKFORGE_PHISHING_BLOCKLIST_FILE:}
+    reload-interval-ms: ${LINKFORGE_PHISHING_RELOAD_INTERVAL:30000}
+    reject-userinfo: ${LINKFORGE_PHISHING_REJECT_USERINFO:true}
+  link-access:
+    # B3: unlock cookie TTL and brute-force windows (rate limit runs before BCrypt)
+    ttl-seconds: ${LINKFORGE_LINK_ACCESS_TTL_SECONDS:3600}
+    unlock-ip-max: ${LINKFORGE_LINK_ACCESS_UNLOCK_IP_MAX:5}
+    unlock-code-max: ${LINKFORGE_LINK_ACCESS_UNLOCK_CODE_MAX:50}
+    unlock-window-seconds: ${LINKFORGE_LINK_ACCESS_UNLOCK_WINDOW_SECONDS:300}
+  metrics:
+    # B1: /actuator/prometheus accepts only this bearer token; empty = fail-closed 401
+    scrape-token: ${LINKFORGE_METRICS_SCRAPE_TOKEN:}
+    backlog-sample-interval-ms: ${LINKFORGE_METRICS_BACKLOG_INTERVAL:15000}
 
 logging:
   level:

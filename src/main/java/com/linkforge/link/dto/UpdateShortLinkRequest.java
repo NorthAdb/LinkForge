@@ -16,4 +16,11 @@ public class UpdateShortLinkRequest {
 
     /** Optional; must be in the future when present. Cannot be cleared. */
     private LocalDateTime expireAt;
+
+    /** B3: set/replace the access password (4-64 chars when present). */
+    @Size(max = 64, message = "accessPassword too long")
+    private String accessPassword;
+
+    /** B3: clear the access password entirely; must not be combined with accessPassword. */
+    private Boolean clearAccessPassword;
 }

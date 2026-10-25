@@ -4,7 +4,7 @@
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
 > **当前 main tip**：B 波 2 修复轮终态＝合并 `bd24ab0`（M1/S1/S2 + N1-N11，155 例全绿）+ docs 收口 `751a46a2de1f6a2c203ec028e944cd22f27ffa66`（其上至多一个纯 docs 钉子提交；审计以 `git rev-parse HEAD` 为准，`751a46a2de1f6a2c203ec028e944cd22f27ffa66` 必为其祖先）。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
-> 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6–A10、B 档波 1 均已交付并通过审计（B 波 1 审计 PASS_WITH_NITS @ `05f6738`，无 must-fix/should-fix）；本轮为 **B 档波 2：B4 API Key（哈希）+ 配额 + B5 点击 Webhook（建在 A7 Outbox 链上）**，交接单 `记录追踪/05-阶段交接/LinkForge-phase-B-wave2-b4b5-handoff.md`（Q1 AES-GCM+env 主密钥 / Q2 逐次点击 / Q3 Key 绑创建者已拍板）。
+> 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6–A10、B 档波 1–2（含修复轮，终态 `3fe1fb1`，155 例全绿、PASS_WITH_NITS）均已交付；本轮为 **B 档波 3+4+5 合并轮：B6 滑窗限流、B2 非人点击不计、B9 钓鱼门禁、B3 密码短链、B1 Prometheus+Grafana**（B10 压测待做、放到最后，Bw345-F2；Bw2fix-N9 改口），交接单 `记录追踪/05-阶段交接/LinkForge-phase-B-wave345-handoff.md`（Q1–Q14 全部拍板）。
 
 ## 状态总览
 
@@ -906,13 +906,13 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | Bw2-11 | 调度隔离 + 不可达不拖跳转 | yml pool.size=4；`redirectDoesNotDependOnEndpointReachability` |
 | Bw2-12 | 指标齐 + README 同步 | README 指标清单（apikey/webhook 计数器）；手验 actuator |
 | Bw2-13 | V5/V6 新增、V1–V4 零改、Baseline 覆盖 V6、存量卷 Migrating to "5"/"6" | FlywayBaselineIT + 实机启动日志 |
-| Bw2-14 | README/progress 完整 + 连接预算 | 本节 + README；预算：新增 2 上下文（ApiKeyIT、WebhookDeliveryIT）各 hikari 4 → 24×10+2×4 ≈ 248 < 500 |
-| Bw2-15 | verify 全绿 + CI 绿 + 钉子口径 | 本机 `mvn -B test` → **59 单测绿**（46+13：SignerTest 2 + WebhookSecretCipherTest 5 + WebhookTargetGuardTest 6）；CI 全量 **145 例（59 单测 + 86 IT）0 失败**（+26 vs B 波 1 的 119）：分支终态 run [40108332225](https://github.com/NorthAdb/LinkForge/actions/runs/40108332225) ✅（五红史见执行记录）、main 合并 run [40108536357](https://github.com/NorthAdb/LinkForge/actions/runs/40108536357) ✅（head `d73aa80`） |
+| Bw2-14 | README/progress 完整 + 连接预算 | 本节 + README；预算：21 个常规上下文（hikari 默认 10）+ 4 个收紧上下文（ApiKeyIT / WebhookDeliveryIT / BloomDisabledAtStartupIT / SingleFlightRedirectIT 各 4）→ 峰值 ≈ 21×10 + 4×4 = **226** < 500（Bw2fix-N2 改口，原 24×10+2×4≈248 误算） |
+| Bw2-15 | verify 全绿 + CI 绿 + 钉子口径 | 本机 `mvn -B test` → **59 单测绿**（46+13：SignerTest 2 + WebhookSecretCipherTest 5 + WebhookTargetGuardTest 6）；CI 全量 **145 例（59 单测 + 86 IT）0 失败**（+26 vs B 波 1 的 119）：分支终态 run [40108332225](https://github.com/NorthAdb/LinkForge/actions/runs/40108332225) ✅（分支 CI 红史六条，见执行记录）、main 合并 run [40108536357](https://github.com/NorthAdb/LinkForge/actions/runs/40108536357) ✅（head `d73aa80`） |
 | Bw2-16 | 范围干净 | diff 复查：无 Resilience4j/OAuth/UI/波 3+；`resolveTarget` 除 N1 外零改；零新依赖（桩走 JDK 模块）；V1–V4 零改 |
 
 ### 验证命令与输出摘要（本机，2026-10-24）
 
-- `D:/tools/apache-maven-3.9.9/bin/mvn -B test` → `Tests run: 56, Failures: 0` + BUILD SUCCESS
+- `D:/tools/apache-maven-3.9.9/bin/mvn -B test` → `Tests run: 56, Failures: 0` + BUILD SUCCESS（当时 56；后补 TargetGuard 用例 → 59，见 Bw2fix-N11 改口）
 - 实机（kill 旧进程 → 新 jar 重启，.env 补 `LINKFORGE_WEBHOOK_SECRET_KEY`）：启动日志见 `Migrating schema to version "5 - api key"`、`"6 - webhook"`；手验与回归见执行记录
 - 连接预算：21 个常规上下文（hikari 默认 10）+ 4 个收紧上下文（ApiKeyIT / WebhookDeliveryIT / BloomDisabledAtStartupIT / SingleFlightRedirectIT，各 4）→ 峰值 ≈ 21×10 + 4×4 = 226 < 500，未动 `--max-connections`
 
@@ -939,7 +939,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 
 | # | 决策 | 理由 |
 |---|------|------|
-| D-Bw2fix-1 | **时钟规则**：调度列（只被 SQL 拿来与 NOW() 比较、不对外展示）＝**DB 时钟**（`lf_webhook_delivery.next_attempt_at`、A7 `lf_outbox.next_attempt_at` 已是）；业务列（对外 API 返回或给人看）＝**JVM 时钟**（`lf_api_key.created_at/revoked_at/last_used_at`、`lf_webhook_delivery.created_at/sent_at`、`lf_webhook_endpoint.*_at`）。落地：`markRetry` 只收 `backoffSeconds`，SQL `DATE_ADD(NOW(), INTERVAL #{backoffSeconds} SECOND)`（与 OutboxMapper 同式）；`markSent`/`touchLastUsed` 改收 `#{now}` 由 Java 传入 | 审计 M1/S2；混用两种时钟时（box：MySQL UTC、JVM +8）重试被推迟 ~8h、API 出现「先使用后创建」 |
+| D-Bw2fix-1 | **时钟规则**：调度列（只被 SQL 拿来与 NOW() 比较、不对外展示）＝**DB 时钟**（`lf_webhook_delivery.next_attempt_at`、A7 `lf_outbox.next_attempt_at` 已是）；业务列（对外 API 返回或给人看）＝**JVM 时钟**（`lf_api_key.created_at/revoked_at/last_used_at`、`lf_webhook_delivery.created_at/sent_at`、`lf_webhook_endpoint.*_at`）。落地：`markRetry` 只收 `backoffSeconds`，SQL `DATE_ADD(NOW(), INTERVAL #{backoffSeconds} SECOND)`（与 OutboxMapper 同式）；`markSent`/`touchLastUsed` 改收 `#{now}` 由 Java 传入。内部审计列沿用 **DB 时钟**：SQL 直接写 `NOW()` 的列（如 `OutboxMapper.markSent` 的 `sent_at`）不属业务列，保持 SQL 写法（Bw2fix-N11 归类） | 审计 M1/S2；混用两种时钟时（box：MySQL UTC、JVM +8）重试被推迟 ~8h、API 出现「先使用后创建」 |
 
 ### 必修/应修处置
 
@@ -976,16 +976,64 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 
 ### 验证与手验
 
-- 本机 `mvn -B test` → **63 单测绿**（59+4：TargetGuard 扩面）；failsafe 双 execution：默认 86+3（S1 三例进 WebhookDeliveryIT）+ N1 一例（BloomRedirectIT 91）＋ `webhook-tz-it` fork 2 例 = **共 93 IT**；全量合计 **156 例**（CI 为准）
+- 本机 `mvn -B test` → **63 单测绿**（59+4：TargetGuard 扩面）；failsafe 双 execution：默认 86+3（S1 三例进 WebhookDeliveryIT）+ N1 一例（BloomRedirectIT 91）＋ `webhook-tz-it` fork 2 例 = **共 92 IT**；全量合计 **155 例**（CI 为准；Bw2fix-N1 改口：以「修复后例数」行 90+2 为准）
 - 连接预算：`WebhookRetryClockIT` 复用 WebhookDeliveryIT 的属性集（每 fork 各自起容器、不并存）→ 峰值仍 ≈ **226 < 500**
-- **时区说明（交接单 §5）**：Windows 实机 JVM 默认时区＝**Asia/Shanghai（+8，China Standard Time）**；本机 Compose MySQL＝**UTC**（`@@global.time_zone=SYSTEM` 且 `NOW() == UTC_TIMESTAMP`，docker-compose 未设 TZ）。B 波 2 手验「首投 IOException → 重试 SENT(attempts=2, 200)」之所以秒级成功，是因为当时的手验用 `UPDATE lf_webhook_delivery SET next_attempt_at=NULL` 做了重放——**NULL 视为立即可投，恰好把被 +8 时钟写歪的调度值清掉了**；bug 一直存在， Genuine 的退避重试在本机会推迟 ~28820s（SQL 实证，与 box 审计的 28761s 同阶）
+- **时区说明（交接单 §5）**：Windows 实机 JVM 默认时区＝**Asia/Shanghai（+8，China Standard Time）**；本机 Compose MySQL＝**UTC**（`@@global.time_zone=SYSTEM` 且 `NOW() == UTC_TIMESTAMP`，docker-compose 未设 TZ）。B 波 2 手验「首投 IOException → 重试 SENT(attempts=2, 200)」之所以秒级成功，是因为当时的手验用 `UPDATE lf_webhook_delivery SET next_attempt_at=NULL` 做了重放——**NULL 视为立即可投，恰好把被 +8 时钟写歪的调度值清掉了**；bug 一直存在，真实触发的退避重试在本机会推迟 ~28820s（SQL 实证，与 box 审计的 28761s 同阶）
 - **Bw2fix-8 手验（Compose 默认栈：MySQL UTC + JVM +8）**：新建租户配 endpoint → 桩首个请求 500 → 跳转 302 → 3s 后查库 `status=PENDING, attempts=1, TIMESTAMPDIFF(SECOND, NOW(), next_attempt_at)=18`（∈[0,20]，旧实现同位置实测口径 ≈28820）→ **重定向后 22s SENT（attempts=2）**——退避与重试全程 DB 时钟，无 8h 拉长
 - **Bw2fix-9 手验**：带主密钥配 endpoint → `unset LINKFORGE_WEBHOOK_SECRET_KEY` 重启（WARN 文案＝「master key unavailable」，N2 口径）→ 点击 302 → 投递行 **PENDING / attempts=0**，relay 跳过 9 轮（`relay.skipped`=9.0）→ 恢复主密钥重启 → 该行 **SENT / attempts=1**，无需重放。附带取证：无主密钥时 PUT 新 endpoint 返回 503（secret 落库必须加密，属 B 波 2 既定降级，S1-b 针对的是已配置 endpoint 的投递意图）
 - 期间踩坑一次：重启验证时 8080 上残留了无密钥的旧进程，PUT 打到旧进程得 503——杀干净后即 200；不影响结论
 - 三回归：`scripts/smoke.sh` **SMOKE OK**；`scripts/outbox-drill.sh` **OUTBOX DRILL OK**；`scripts/mq-drill.sh` **DRILL OK**（本机注册限流窗口按惯例先清本机 Redis 计数键）
-- **分支 CI 三红一绿（修复轮自己的教训）**：①run [40114155914](https://github.com/NorthAdb/LinkForge/actions/runs/40114155914) 红（@e5bb964）＝四件事：pom execution id 起名 default-it 没顶掉隐式 default 执行 → **整套 IT 跑了两遍**、时钟 IT 混进 UTC fork；queryForMap 的 DATETIME 返回 LocalDateTime、强转 Timestamp 抛 ClassCastException；脏值 `javascript:alert(1)` 其实过得了渲染校验（isRenderableUrl 只拦控制字符/解析失败，CRLF 注入串才是已知不可渲染形态）；duplicate 计数断言没按 tag 取（find 命中同名的另一个计数器）。修＝execution id 改 `default` + asLocalDateTime 兼容两种返回类型 + 脏值改 CRLF 串 + taggedCounter（08e3797）。②run [40114667946](https://github.com/NorthAdb/LinkForge/actions/runs/40114667946) 红＝转义笔误把 
- 写成真实换行，字符串字面量断裂（42d7ef9 修）。③run [40114741958](https://github.com/NorthAdb/LinkForge/actions/runs/40114741958) 红＝asLocalDateTime 助手的 python 替换静默未命中、调用点已改导致缺方法（2248085 修）。终态 run [40114874266](https://github.com/NorthAdb/LinkForge/actions/runs/40114874266) 绿。教训：python 批量改代码必须 assert 替换发生；`&&` 链守提交（本轮起恢复，禁止 `;\)。
+- **分支 CI 三红一绿（修复轮自己的教训）**：①run [40114155914](https://github.com/NorthAdb/LinkForge/actions/runs/40114155914) 红（@4e0ec6b；e5bb964/5a92cd2/4e0ec6b 同推，仅末个触发 run）＝四件事：pom execution id 起名 default-it 没顶掉隐式 default 执行 → **整套 IT 跑了两遍**、时钟 IT 混进 UTC fork；queryForMap 的 DATETIME 返回 LocalDateTime、强转 Timestamp 抛 ClassCastException；脏值 `javascript:alert(1)` 其实过得了渲染校验（isRenderableUrl 只拦控制字符/解析失败，CRLF 注入串才是已知不可渲染形态）；duplicate 计数断言没按 tag 取（find 命中同名的另一个计数器）。修＝execution id 改 `default` + asLocalDateTime 兼容两种返回类型 + 脏值改 CRLF 串 + taggedCounter（08e3797）。②run [40114667946](https://github.com/NorthAdb/LinkForge/actions/runs/40114667946) 红＝转义笔误把 `\n` 写成真实换行，字符串字面量断裂（42d7ef9 修）。③run [40114741958](https://github.com/NorthAdb/LinkForge/actions/runs/40114741958) 红＝asLocalDateTime 助手的 python 替换静默未命中、调用点已改导致缺方法（2248085 修）。终态 run [40114874266](https://github.com/NorthAdb/LinkForge/actions/runs/40114874266) 绿。教训：python 批量改代码必须 assert 替换发生；`&&` 链守提交（本轮起恢复，禁止 `;\)。
 - **修复后例数**：surefire **63**（59+4）＋ failsafe 默认 execution **90**（86+3 S1 例 +1 N1 例）＋ `webhook-tz-it` fork **2**（M1/S2 回归）＝ **合计 155 例全绿**；连接预算不变（时钟 IT 复用 WebhookDeliveryIT 属性集，fork 内容器不并存）≈ 226 < 500
+
+---
+
+## B 档波 3+4+5 合并轮：B6 滑窗限流 / B2 非人点击不计 / B9 钓鱼门禁 / B3 密码短链 / B1 Prometheus+Grafana（feat/deepen-b-wave345，发车基线 main@3fe1fb1，2026-10-25）
+
+范围：交接单 `记录追踪/05-阶段交接/LinkForge-phase-B-wave345-handoff.md`（Q1–Q14 全部拍板：t93u Q1–Q6、t94u B3=密码短链+B10 移出、t95u Q7–Q14 全 A）。开工提交收 Bw2fix-N1…N12（+可选 N7/N8/Bw345-pre-1）；B10 压测不在本轮（Bw345-F2，放到最后、将来审计侧 box 跑）。分支提交序：kickoff `059af1a` → B6 红 `09c9107`/绿 `3a80d2c`+测试侧修复 `6381ed0`/`82919d2` → B2 红 `473f334`/绿 `d1edf5b` → B9 红 `98cbf15`/`479a88b`/`af98c9c`/绿（amend）`4f7e24a`+`a8d4c4a`+`42c422c` → B3 红 `29ca919`/绿 `240ecf9`+`0d3f97c` → B1 红 `53fa8cf`/绿 `63d7cfd`+`9908824`+`bfa0498`+`8da89e0`+（编译修）`76d24a3`/`f3fbf9d`+`0c3420b`。红先提交只含测试、其 CI run 即红证据；绿提交含实现+文档改口。
+
+### 拍板与关键决策落地（D-Bw345 摘要；全文见交接单 §1.0/§1.1）
+
+| 决策 | 落地 |
+|----|------|
+| D-Bw345-9…19（B6） | ZSET+Lua 滑窗日志（`redis/sliding_window.lua`，Redis `TIME` µs 时钟，只放行才 ZADD，成员 `now_us-nonce`）；新命名空间 `{prefix}sw:`（`RateLimitKeys`）；`acquire()`→`RateLimitDecision{allowed,retryAfterSeconds,count}`，`tryAcquire` 委托；429 全带 `Retry-After`（`RateLimitedException`+handler，Q3=A）；fail-open 保留 + `linkforge.ratelimit.failopen{reason=error\|null}`；**API Key 日配额保持上海自然日固定计数（Q2=A）→ 保留 `tryAcquireFixedWindow`（INCR/EXPIRE）仅供日窗**，分钟窗改滑窗（修 Bw2-N12 恒 60）；Q5a=A 无开关、Q5b 本轮不重跑 bench（三处时期注） |
+| D-Bw345-1…8（B2） | `link/support/ClickFilter`：`Sec-Purpose`(token 精确)/`Purpose`/`X-Purpose`/`X-Moz` + 21 个具名预览 bot 小写子串；判定点在 `resolveTarget` 后 `recordClick` 前；跳过=同 302 同 Location、全链路不计、`linkforge.click.skipped{reason=prefetch\|preview_bot}`；HEAD 不经过（Q6=A）；`enabled=false`/prefetch 开关/env 整表覆盖（D-Bw345-5） |
+| D-Bw345-20…29（B9） | `TargetPolicy` 纯函数：IDN 规范化 + label 边界后缀匹配 + BLOCK>WARN + userinfo 规则（建链 BLOCK/存量 WARN，Q10=A）；建链/改链 400（不回显名单项）+ 跳转复查（**行权威**——评的是 `link.getOriginalUrl()`，缓存旧值不遮蔽）；`PhishingPolicy` volatile 快照 + 文件 mtime 热加载（坏文件保旧 + `reload{result=failed}`）；`GatePages` 转义+CSP/nosniff/no-store/no-referrer；BLOCK=403 拦截页无目标无 Location、WARN=200 中间页 + `?lf_continue=1` 只跳 WARN 且 302 才计（Q9=A）；不做 DNS/SSRF、不复用 WebhookTargetGuard（对照表在 README）；指标 `phishing.gate{action,stage}`/`continue`/`reload{result}`/`rules{level}` |
+| D-Bw345-30…40（B3） | V7 `access_password_hash`（BCrypt 复用 bean）；Detail 只加 `passwordProtected`、哈希/明文不出 API/CSV/日志；4–64 校验、`accessPassword`+`clearAccessPassword` 互斥 400；**清除走显式 `LambdaUpdateWrapper.set(null)`**（MP NOT_NULL 坑，IT 钉住 DB 列 NULL）；判定顺序 D-Bw345-51：BLOCK → 密码门（`Locked` outcome，GET 200 解锁页/HEAD 401）→ WARN → B2 → 302；`POST /r/{code}/unlock` 先两级限流（同 IP 5/300s + 同码 50/300s，`sw:` 键）**后 BCrypt**（IT 用「第 6 次提交正确密码仍 429」钉顺序）；cookie `lf_ac_{code}` = `{exp}.{HMAC}`，签名绑 linkId+code+exp+**pwdVer**（当前哈希 SHA-256 前 8 字节）——改/清密码旧 cookie 即废；HMAC key 从 JWT_SECRET 域分离派生（无新 env） |
+| D-Bw345-41…50（B1） | `micrometer-registry-prometheus`（Boot BOM）；exposure 加 `prometheus` + 公共 tag `application=linkforge` + `http.server.requests` 直方图+SLO 桶；`/actuator/prometheus` 由 `MetricsScrapeTokenFilter` 守（常量时间比较、**空令牌 fail-closed**、JwtAuthFilter 对该路径 shouldNotFilter、SecurityConfig `hasRole(METRICS)` 先于 `/actuator/**`、API Key 仍 403）；新指标 `cache.l2{result}`/`outbox.sent`/`BacklogGauges`（15s 定时采样 OUTBOX PENDING + WEBHOOK PENDING/FAILED，不在 scrape 线程查库）；**uri 标签 MeterFilter 白名单**（非模板一律压 UNKNOWN——见执行记录第 5 条）；compose `profiles:["observability"]`（prometheus v2.55.1 + grafana-oss 11.3.0 写死、端口 127.0.0.1、host-gateway、令牌文件 gitignore）；看板 JSON 入库（datasource uid `linkforge-prom` 固定）+ `DashboardMetricsIT`（看板名 ⊆ 真实 scrape ∪ 有因 CONTEXT_LIMITED 集）+ 截图 3 张（Q13=A）；调度池 4→6（D-Bw345-54） |
+| 交接偏离登记 | ①`LINKFORGE_PHISHING_RELOAD_INTERVAL` 用**毫秒**（交接建议 `30s`——`@Scheduled` 占位符只认毫秒/ISO-8601，run 40157637874 红）；②warn 页转义用例用 `'`/`&`（交接的 `<script>` 在 `isRenderableUrl` 的 URI 解析下不可达 410，run 40156726448 红证实）；③B3 互斥校验在 PATCH（D-Bw345-32 原文即 update 语义，红 IT 误放 create 已修）；④交接 §4 手验脚本「201」应为 200（create 实际契约，RateLimitIT 既证） |
+
+### 红先证据（Bw345-33；每项：红 run @ 提交 = 预期断言红，绿 run @ 提交）
+
+| 项 | 红证据 | 绿证据 |
+|----|--------|--------|
+| B6 | run [40153960882](https://github.com/NorthAdb/LinkForge/actions/runs/40153960882) @ `09c9107`＝91 IT 中 5 断言红：`SlidingWindowRateLimiterIT.boundaryBurstDoesNotDoubleTheWindow`（**expected 1 but was 3**，固定窗口 2× 突发实证）+ RateLimitIT/RegisterRateLimitIT 429 无 Retry-After ×3 + ApiKeyIT Retry-After=60 | run [40154955119](https://github.com/NorthAdb/LinkForge/actions/runs/40154955119) @ `82919d2` |
+| B2 | run [40155274015](https://github.com/NorthAdb/LinkForge/actions/runs/40155274015) @ `473f334`＝`BotPrefetchClickIT`：prefetch+Slackbot 计点击 **expected 0 but was 2** | run [40155643671](https://github.com/NorthAdb/LinkForge/actions/runs/40155643671) @ `d1edf5b` |
+| B9 | run [40156726448](https://github.com/NorthAdb/LinkForge/actions/runs/40156726448) @ `af98c9c`＝6 断言红：blocked 建链 400 expected got 200、userinfo 400 got 200、blocked 跳转 403 got 302 ×2（GET/HEAD）、warn 页 200 got 302、bot 访问 blocked 403 got 302 | run [40158461826](https://github.com/NorthAdb/LinkForge/actions/runs/40158461826) @ `42c422c` |
+| B3 | run [40158722790](https://github.com/NorthAdb/LinkForge/actions/runs/40158722790) @ `29ca919`＝7 断言红：`passwordProtected` 缺失、解锁端点 401×2、无长度校验 200 got 400、受保护 GET 302 got 解锁页、爆破第 6 次 401 got（应 429） | run [40159419082](https://github.com/NorthAdb/LinkForge/actions/runs/40159419082) @ `0d3f97c` |
+| B1 | run [40159657579](https://github.com/NorthAdb/LinkForge/actions/runs/40159657579) @ `53fa8cf`＝4 红：令牌 scrape **401 got（应 200）**、`linkforge_redirects_total` 缺、积压 gauge 缺、看板 JSON 缺 | run [40164727414](https://github.com/NorthAdb/LinkForge/actions/runs/40164727414) @ `0c3420b` |
+
+审计可对任一项临时还原实现复现红（还原对应绿提交的实现文件、保留红测试提交的测试文件即可）。
+
+### 分支 CI 红史（修复轮教训的延续；全部如实记录）
+
+- **B6 两红**：[40154398901](https://github.com/NorthAdb/LinkForge/actions/runs/40154398901)＝新 IT 两处测试 bug（`redis.type()` 返回 DataType 枚举大小写；Retry-After 睡眠锚点错 1s）；[40154799476](https://github.com/NorthAdb/LinkForge/actions/runs/40154799476)（`6381ed0`）＝**mvn 退出码被管道吞掉导致带编译错推送**（redis.type 返回 DataType 非 String）——教训已在仓内记忆/progress 双重固化：`mvn -B test -q > log; MVN=$?; [ $MVN -eq 0 ] && git…`
+- **B9 五红**：40156008312（红 IT 两处测试 bug：create 契约 200 非 201、DB 直插行 Bloom 不可见 404）→ 40156332051（warn 用例 `<script>` 撞 isRenderableUrl 410）→ 40157134151（**B9 提交混入未提交的 B3 引用**——ShortLinkService/RedirectController 为 B9/B3 共享文件，amend `4f7e24a` 剥离并 stash 验证快照可编译；LinkAccess 配置键无害随 B9 提交先行）→ 40157637874（`@Scheduled` 不认 `30s`）→ 40157980534（**门禁评估了缓存生效 URL 而非行 URL**——缓存旧值遮蔽改写后的行，改 `link.getOriginalUrl()` 行权威）
+- **B3 一红**：40159000648＝set+clear 互斥误放 create（D-Bw345-32 是 update 语义，IT 改 PATCH）
+- **B1 五红**：40159945710（`addFilterBefore(metrics, JwtAuthFilter.class)` 在 JWT 注册位置前调用→无注册序）→ 40160274568（**根因级发现：`@SpringBootTest` 默认经 `DisableObservabilityContextCustomizer` 关闭 metrics 导出，Prometheus registry/scrape 端点 bean 在所有测试上下文不存在**——修=`@AutoConfigureObservability`）→ 40162469539（API Key 403 被抓取过滤器 401 抢答 + 计数器未触发不导出）→ 40163153381（L1 命中遮蔽 l2 计数器；看板一致性需触发后比对；**gauge 样本解析**）→ 40164056098（`Meter.Id` 无 replaceTag、getTag 返回 String——同管道吞退出码教训第二次触发，改为显式 `$?` 判定）
+
+### 例数、连接预算与 CI
+
+- **修复后例数**：surefire **86**（63+23：ClickFilterTest 6、TargetPolicyTest 7、LinkAccessTokenTest 6、RedisRateLimiterTest 重写 +4）＋ failsafe 默认 execution **119**（90+29：SlidingWindowRateLimiterIT 5、BotPrefetchClickIT 1、PhishingGateIT 10、PasswordLinkIT 7、PrometheusScrapeIT 5、DashboardMetricsIT 1）＋ `webhook-tz-it` fork **2** ＝ **合计 207 例全绿**（+52 vs 基线 155）；分支终态 run [40164727414](https://github.com/NorthAdb/LinkForge/actions/runs/40164727414) ✅
+- **连接预算**：新增 3 个上下文（默认组合×1＝SlidingWindowRateLimiterIT+PasswordLinkIT 共用；PhishingGateIT×1；PrometheusScrapeIT+DashboardMetricsIT 共用×1）→ 24 个常规（hikari 默认 10）+ 4 个收紧（各 4）→ 峰值 ≈ 24×10+4×4 = **256 < 500**，全绿即 `Too many connections`=0
+- **CI**：分支终态 run [40164727414](https://github.com/NorthAdb/LinkForge/actions/runs/40164727414) ✅（head `0c3420b`）；合 main 与 tip run 见下方钉子（合并后补记）
+- **观测栈手验（本机 Compose，2026-10-25）**：`docker compose --profile observability up -d` → Prometheus `/api/v1/targets`＝`host.docker.internal:8080 **up**`；Grafana 看板自动 provision（uid `linkforge-slo`）、datasource `linkforge-prom` health OK；手工流量后三区截图入库：`docs/img/grafana-redirect-slo.png`（187KB）/`grafana-singleflight-outbox.png`（114KB）/`grafana-keys-gates-jvm.png`（137KB），全部 ≤300KB（Q13=A）。本机 3000 端口被无关进程占用，截图容器临时用 13000（compose 配置未动）；Grafana 挂载再次踩 MSYS 路径转换坑（`MSYS_NO_PATHCONV=1` 解）。截图为手工流量、非压测数字，图注=看板标题内嵌「Demo targets, not a production promise」
+- **快速手验对照**（交接 §4 命令）：prefetch/Slackbot 302 不计、curl 计 ✓（IT 同断言）；滑窗 Retry-After 递减 ✓（ApiKeyIT <60）；blocked 403/warn 中间页/continue 计数 ✓；密码解锁+清除立即生效+爆破 429 ✓；Prometheus 令牌三态+API Key 403+tag 有界 ✓——IT 全覆盖，交接 §4 为人工复验路径
+
+### Backlog（不混入本轮）
+
+- **Bw345-F1**：B3 备选 QR+UTM（萧北 t94u 不做；将来另开一轮，差异表见交接单 §1.9）
+- **Bw345-F2**：B10 Linux 复跑 bench 并刷新数字（放到最后、审计侧 box；`docs/bench.md` 页头已注明现有数字测于 `df904f8` 固定窗口时期）
 
 ---
 

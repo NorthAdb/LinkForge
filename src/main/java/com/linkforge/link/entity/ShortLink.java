@@ -25,4 +25,6 @@ public class ShortLink {
     private LocalDateTime updatedAt;
     @TableLogic
     private Integer deleted;
+    /** B3: BCrypt hash of the access password; null = the link is public. */
+    private String accessPasswordHash;
 }

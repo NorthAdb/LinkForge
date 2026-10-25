@@ -1,6 +1,7 @@
 # LinkForge 压测报告（P4，bench.md）
 
 > 数字纪律：本文所有数字来自 2026-10-24 本机实际运行（`scripts/bench.sh`），命令与原始输出摘要齐备，无任何推算或虚构。复现：`bash scripts/bench.sh`。
+> **时期注（Bw345-F2）**：以下数字测于 `df904f8`（2026-10-24，Windows 10 + Docker Desktop/WSL2，**固定窗口限流时期**，早于 A7 Outbox / A9 Bloom / A10 singleflight / B7/B8 缓存 / B6 滑窗）；本轮改动后的新数字留待 B10（backlog Bw345-F2），未实测前引用处一律注明此时期。
 
 ## 环境
 

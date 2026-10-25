@@ -99,8 +99,8 @@ public class ClickStatsService {
             }
             // B-wave2 B5: a click that won the dedup insert leaves one PENDING webhook
             // delivery in the SAME transaction — replayed events early-return above,
-            // so one eventId can never enqueue twice (D-Bw2-9). Failures are swallowed
-            // inside; statistics semantics untouched.
+            // so one eventId can never enqueue twice (D-Bw2-9). A non-duplicate failure
+            // propagates up and rolls the whole consume transaction into the DLQ (S1).
             webhookService.recordClickDelivery(event);
             return true;
         }));

@@ -141,10 +141,17 @@ class ApiKeyIT extends AbstractIntegrationTest {
                     om.writeValueAsString(Map.of("originalUrl", "https://example.com/q-" + i)), tiny);
             assertEquals(200, ok.getStatusCode().value(), ok.getBody());
         }
+        // let the oldest minute-window entry age ≥2s so the sliding window's Retry-After
+        // (oldest + 60s − now) drops below 60; the old hardcoded 60 never does
+        Thread.sleep(2000);
         var rejected = postJsonWithKey("/api/links",
                 om.writeValueAsString(Map.of("originalUrl", "https://example.com/q-4")), tiny);
         assertEquals(429, rejected.getStatusCode().value(), rejected.getBody());
-        assertNotNull(rejected.getHeaders().getFirst("Retry-After"), "429 must carry Retry-After");
+        String retryAfter = rejected.getHeaders().getFirst("Retry-After");
+        assertNotNull(retryAfter, "429 must carry Retry-After");
+        int seconds = Integer.parseInt(retryAfter.trim());
+        assertTrue(seconds >= 1 && seconds <= 58,
+                "minute-quota Retry-After must reflect the oldest entry, not a hardcoded 60: " + seconds);
 
         // JWT and other keys are untouched
         var viaJwt = postJson("/api/links",
