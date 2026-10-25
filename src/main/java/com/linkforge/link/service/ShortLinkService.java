@@ -3,6 +3,9 @@ package com.linkforge.link.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.linkforge.common.exception.BizException;
+import com.linkforge.common.exception.RateLimitedException;
+import com.linkforge.common.ratelimit.RateLimitDecision;
+import com.linkforge.common.ratelimit.RateLimitKeys;
 import com.linkforge.common.ratelimit.RedisRateLimiter;
 import com.linkforge.common.result.PageResponse;
 import com.linkforge.common.util.ClientIps;
@@ -78,10 +81,12 @@ public class ShortLinkService {
     public CreateShortLinkResponse create(CreateShortLinkRequest request, String idempotencyKey) {
         AuthUser user = requireUser();
         LinkForgeProperties.RateLimit rl = properties.getRateLimit();
-        String rlKey = rl.getKeyPrefix() + "create:user:" + user.getUserId();
-        if (!rateLimiter.tryAcquire(rlKey, rl.getCreateMax(), rl.getCreateWindowSeconds())) {
+        RateLimitDecision decision = rateLimiter.acquire(
+                RateLimitKeys.sw(rl.getKeyPrefix(), "create:user:" + user.getUserId()),
+                rl.getCreateMax(), rl.getCreateWindowSeconds());
+        if (!decision.allowed()) {
             meterRegistry.counter("linkforge.ratelimit.rejected", "entry", "create").increment();
-            throw new BizException(429, "too many requests, retry later");
+            throw new RateLimitedException(decision.retryAfterSeconds());
         }
 
         if (idempotencyKey != null && !idempotencyKey.isBlank()) {
@@ -323,10 +328,12 @@ public class ShortLinkService {
      */
     private ResolvedRedirect resolveTarget(String code, HttpServletRequest request) {
         LinkForgeProperties.RateLimit rl = properties.getRateLimit();
-        String rlKey = rl.getKeyPrefix() + "redirect:ip:" + ClientIps.resolve(request, rl.isTrustXff());
-        if (!rateLimiter.tryAcquire(rlKey, rl.getRedirectMax(), rl.getRedirectWindowSeconds())) {
+        RateLimitDecision decision = rateLimiter.acquire(
+                RateLimitKeys.sw(rl.getKeyPrefix(), "redirect:ip:" + ClientIps.resolve(request, rl.isTrustXff())),
+                rl.getRedirectMax(), rl.getRedirectWindowSeconds());
+        if (!decision.allowed()) {
             meterRegistry.counter("linkforge.ratelimit.rejected", "entry", "redirect").increment();
-            throw new BizException(429, "too many requests, retry later");
+            throw new RateLimitedException(decision.retryAfterSeconds());
         }
 
         // A9: a negative Bloom answer is authoritative (code never created) — 404

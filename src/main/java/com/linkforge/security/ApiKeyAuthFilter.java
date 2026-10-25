@@ -2,6 +2,8 @@ package com.linkforge.security;
 
 import com.linkforge.apikey.entity.ApiKey;
 import com.linkforge.apikey.service.ApiKeyService;
+import com.linkforge.common.ratelimit.RateLimitDecision;
+import com.linkforge.common.ratelimit.RateLimitKeys;
 import com.linkforge.common.ratelimit.RedisRateLimiter;
 import com.linkforge.config.LinkForgeProperties;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -104,22 +106,25 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         }
     }
 
-    /** Minute window first, then the Asia/Shanghai calendar day; fail-open inside RedisRateLimiter. */
+    /** Sliding minute window first, then the Asia/Shanghai calendar day (a fixed counter);
+     * fail-open inside RedisRateLimiter. */
     private boolean withinQuota(ApiKey key, HttpServletResponse response) throws IOException {
         LinkForgeProperties.ApiKey cfg = properties.getApiKey();
         String rlPrefix = properties.getRateLimit().getKeyPrefix() + "apikey:";
         int perMinute = key.getQuotaPerMinute() != null ? key.getQuotaPerMinute() : cfg.getDefaultQuotaPerMinute();
         int perDay = key.getQuotaPerDay() != null ? key.getQuotaPerDay() : cfg.getDefaultQuotaPerDay();
 
-        if (!rateLimiter.tryAcquire(rlPrefix + "min:" + key.getId(), perMinute, 60)) {
+        RateLimitDecision minute = rateLimiter.acquire(
+                RateLimitKeys.sw(rlPrefix, "min:" + key.getId()), perMinute, 60);
+        if (!minute.allowed()) {
             meterRegistry.counter("linkforge.apikey.quota.rejected", "window", "minute").increment();
-            writeQuotaExceeded(response, 60);
+            writeQuotaExceeded(response, minute.retryAfterSeconds());
             return false;
         }
         ZoneId zone = ZoneId.of("Asia/Shanghai");
         LocalDate today = LocalDate.now(zone);
         String day = today.format(DateTimeFormatter.BASIC_ISO_DATE);
-        if (!rateLimiter.tryAcquire(rlPrefix + "day:" + key.getId() + ":" + day, perDay, 86_400)) {
+        if (!rateLimiter.tryAcquireFixedWindow(rlPrefix + "day:" + key.getId() + ":" + day, perDay, 86_400)) {
             meterRegistry.counter("linkforge.apikey.quota.rejected", "window", "day").increment();
             long secondsToMidnight = java.time.Duration.between(
                     LocalDateTime.now(zone),

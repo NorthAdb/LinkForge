@@ -121,13 +121,13 @@ public class LinkForgeProperties {
 
     @Data
     public static class RateLimit {
-        /** Fixed-window per-IP limit for open registration. */
+        /** Sliding-window-log per-IP limit for open registration (Redis ZSET + Lua, Redis TIME clock). */
         private int registerMax = 5;
         private int registerWindowSeconds = 600;
-        /** Fixed-window per-user limit for link creation. */
+        /** Sliding-window-log per-user limit for link creation. */
         private int createMax = 30;
         private int createWindowSeconds = 60;
-        /** Fixed-window per-IP limit for public redirects. */
+        /** Sliding-window-log per-IP limit for public redirects. */
         private int redirectMax = 300;
         private int redirectWindowSeconds = 60;
         /** TTL of the Idempotency-Key -> code mapping. */

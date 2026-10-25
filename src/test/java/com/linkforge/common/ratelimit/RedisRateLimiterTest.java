@@ -1,16 +1,22 @@
 package com.linkforge.common.ratelimit;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.data.redis.core.script.RedisScript;
 
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -21,58 +27,117 @@ import static org.mockito.Mockito.when;
 
 class RedisRateLimiterTest {
 
+    private static final String KEY = "k";
+
     private final StringRedisTemplate redis = mock(StringRedisTemplate.class);
     @SuppressWarnings("unchecked")
     private final ValueOperations<String, String> ops = mock(ValueOperations.class);
-    private final RedisRateLimiter limiter = new RedisRateLimiter(redis);
+    private final MeterRegistry meters = new SimpleMeterRegistry();
+    private final RedisRateLimiter limiter = new RedisRateLimiter(redis, meters);
 
     @BeforeEach
+    @SuppressWarnings("unchecked")
     void wireOps() {
         when(redis.opsForValue()).thenReturn(ops);
     }
 
-    @Test
-    void firstIncrementArmsTheWindow() {
-        when(ops.increment("k")).thenReturn(1L);
-        when(redis.expire(eq("k"), anyLong(), any())).thenReturn(true);
+    @SuppressWarnings("unchecked")
+    private void scriptReturns(List<Long> result) {
+        when(redis.execute(any(RedisScript.class), anyList(), anyString(), anyString(), anyString()))
+                .thenReturn((List) result);
+    }
 
-        assertTrue(limiter.tryAcquire("k", 2, 60));
-        verify(redis).expire("k", 60, TimeUnit.SECONDS);
+    private long failOpenCount(String reason) {
+        var c = meters.find("linkforge.ratelimit.failopen").tags("reason", reason).counter();
+        return c == null ? 0 : (long) c.count();
     }
 
     @Test
-    void countsBeyondMaxAreRejected() {
-        when(ops.increment("k")).thenReturn(1L, 2L, 3L);
-        when(redis.expire(eq("k"), anyLong(), any())).thenReturn(true);
+    void allowedVerdictCarriesTheCount() {
+        scriptReturns(List.of(1L, 3L, 0L));
 
-        assertTrue(limiter.tryAcquire("k", 2, 60));
-        assertTrue(limiter.tryAcquire("k", 2, 60));
-        assertFalse(limiter.tryAcquire("k", 2, 60));
+        RateLimitDecision d = limiter.acquire(KEY, 5, 60);
+
+        assertTrue(d.allowed());
+        assertEquals(3, d.count());
+        verify(redis).execute(any(RedisScript.class), eq(List.of(KEY)),
+                eq("5"), eq("60000"), anyString());
     }
 
     @Test
-    void redisFailureDegradesOpen() {
-        when(ops.increment("k")).thenThrow(new RedisConnectionFailureException("down"));
+    void rejectionMapsRetryMsToSecondsCeiledIntoTheWindow() {
+        scriptReturns(List.of(0L, 5L, 1500L));
+        assertEquals(2, limiter.acquire(KEY, 5, 60).retryAfterSeconds());
 
-        assertTrue(limiter.tryAcquire("k", 2, 60));
-        verify(redis, never()).expire(anyString(), anyLong(), any());
+        scriptReturns(List.of(0L, 5L, 1L));
+        assertEquals(1, limiter.acquire(KEY, 5, 60).retryAfterSeconds());
+
+        // a garbage-huge retry_ms is capped at the window
+        scriptReturns(List.of(0L, 5L, 10_000_000L));
+        assertEquals(60, limiter.acquire(KEY, 5, 60).retryAfterSeconds());
+
+        scriptReturns(List.of(0L, 5L, 0L));
+        assertEquals(1, limiter.acquire(KEY, 5, 60).retryAfterSeconds());
     }
 
     @Test
-    void failedWindowArmResetsKeyInsteadOfLockingForever() {
-        when(ops.increment("k")).thenReturn(1L);
-        when(redis.expire(eq("k"), anyLong(), any())).thenThrow(new RedisConnectionFailureException("down"));
+    void maxAtOrBelowZeroRejectsWithoutTouchingRedis() {
+        RateLimitDecision d = limiter.acquire(KEY, 0, 60);
 
-        assertTrue(limiter.tryAcquire("k", 2, 60));
-        verify(redis).delete("k");
+        assertFalse(d.allowed());
+        assertEquals(60, d.retryAfterSeconds());
+        verify(redis, never()).execute(any(RedisScript.class), anyList(), anyString(), anyString(), anyString());
     }
 
     @Test
-    void unarmedWindowReturnsFalseAndResets() {
-        when(ops.increment("k")).thenReturn(1L);
-        when(redis.expire(eq("k"), anyLong(), any())).thenReturn(false);
+    void redisFailureDegradesOpenAndCountsError() {
+        when(redis.execute(any(RedisScript.class), anyList(), anyString(), anyString(), anyString()))
+                .thenThrow(new RedisConnectionFailureException("down"));
 
-        assertTrue(limiter.tryAcquire("k", 2, 60));
-        verify(redis).delete("k");
+        assertTrue(limiter.tryAcquire(KEY, 2, 60));
+        assertEquals(1, failOpenCount("error"));
+        assertEquals(0, failOpenCount("null"));
+    }
+
+    @Test
+    void nullScriptResultDegradesOpenAndCountsNull() {
+        scriptReturns(null);
+
+        assertTrue(limiter.tryAcquire(KEY, 2, 60));
+        assertEquals(1, failOpenCount("null"));
+    }
+
+    @Test
+    void tryAcquireDelegatesToAcquire() {
+        scriptReturns(List.of(0L, 5L, 2000L));
+
+        assertFalse(limiter.tryAcquire(KEY, 2, 60));
+    }
+
+    @Test
+    void fixedWindowCountsAndArmsOnce() {
+        when(ops.increment(KEY)).thenReturn(1L, 2L, 3L);
+        when(redis.expire(eq(KEY), anyLong(), any())).thenReturn(true);
+
+        assertTrue(limiter.tryAcquireFixedWindow(KEY, 2, 86_400));
+        assertTrue(limiter.tryAcquireFixedWindow(KEY, 2, 86_400));
+        assertFalse(limiter.tryAcquireFixedWindow(KEY, 2, 86_400));
+        verify(redis).expire(KEY, 86_400, TimeUnit.SECONDS);
+    }
+
+    @Test
+    void fixedWindowDegradesOpenOnRedisFailure() {
+        when(ops.increment(KEY)).thenThrow(new RedisConnectionFailureException("down"));
+
+        assertTrue(limiter.tryAcquireFixedWindow(KEY, 2, 86_400));
+    }
+
+    @Test
+    void failedFixedWindowArmResetsKeyInsteadOfLockingForever() {
+        when(ops.increment(KEY)).thenReturn(1L);
+        when(redis.expire(eq(KEY), anyLong(), any())).thenThrow(new RedisConnectionFailureException("down"));
+
+        assertTrue(limiter.tryAcquireFixedWindow(KEY, 2, 86_400));
+        verify(redis).delete(KEY);
     }
 }

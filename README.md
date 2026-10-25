@@ -28,7 +28,7 @@
    - `LINKFORGE_BOOTSTRAP_TENANT`（默认 `demo`）
    - `LINKFORGE_BOOTSTRAP_USERNAME`（默认 `admin`）
    - `LINKFORGE_BOOTSTRAP_PASSWORD`（必填，无默认值）
-2. **开放注册** `POST /api/auth/register`：自助创建一个全新租户及其首个用户，成功即返回 JWT。邀请码**未启用**（无邀请码逻辑）。注册按 IP 固定窗口限流，默认 5 次 / 10 分钟，超限 429；阈值可用 `LINKFORGE_REGISTER_MAX` / `LINKFORGE_REGISTER_WINDOW_SECONDS` 调整。
+2. **开放注册** `POST /api/auth/register`：自助创建一个全新租户及其首个用户，成功即返回 JWT。邀请码**未启用**（无邀请码逻辑）。注册按 IP 滑动窗口限流，默认 5 次 / 10 分钟，超限 429；阈值可用 `LINKFORGE_REGISTER_MAX` / `LINKFORGE_REGISTER_WINDOW_SECONDS` 调整。
 
 本地示例值只在 `.env.example`。
 
@@ -164,7 +164,7 @@ bash scripts/outbox-drill.sh  # sync 关 + 断 MQ → 恢复追平（A7 硬验�
 
 **自定义短码**：`customCode` 需 4-16 位字母/数字/下划线/连字符，保留字（admin、login、stats、actuator、console、metrics 等，大小写不敏感）不可用，短于 4 位的词（api、r）天然被长度规则挡住；已被占用（含已删除链占用的码）返回 409。随机码与自定义码共用 `uk_code` 唯一索引，并发安全。**短码区分大小写**（A10 V4，列排序规则 `utf8mb4_0900_bin`）：`AbC123` 与 `abc123` 是两个独立的码，跳转与管理 API 都按原样精确匹配（尾随空格也不等价，NO PAD）；保留字检查仍不区分大小写，防 `ADMIN` 绕过。
 
-**限流（P3）**：注册按 IP 5 次/10 分钟；创建按用户 30 次/分钟；公开跳转按 IP 300 次/分钟。全部为 Redis 固定窗口，超限 429，阈值见下方环境变量。限流器在 Redis 故障时放行（degrade open）。客户端 IP 默认取 socket 地址、**不信任** `X-Forwarded-For`（该头可伪造、会被用来绕限流）；仅在可信反向代理后部署时设 `LINKFORGE_TRUST_XFF=true`。同一客户端经 IPv4/IPv6 两个协议访问会各占一个计数桶（本机 `127.0.0.1` 与 `::1` 并存属预期现象）。
+**限流（P3，B6 滑动窗口）**：注册按 IP 5 次/10 分钟；创建按用户 30 次/分钟；公开跳转按 IP 300 次/分钟。分钟级入口全部为 **Redis ZSET + Lua 滑动窗口日志**（精确计数非近似；只有放行的请求占名额，被拒不占；窗口时钟取 Redis `TIME`，多实例 JVM 时钟漂移不影响窗口；实现是滑动窗口日志，**不是令牌桶/漏桶**），超限 429 且所有 429 都带 `Retry-After`（按窗口内最老一条请求计算，≤窗口秒数）；API Key 日配额保持 **Asia/Shanghai 自然日固定计数**（零点重置，见「开放能力」）。每 key 内存上界＝窗口内最大放行数（如跳转 300 条/IP）。限流器在 Redis 故障时放行（degrade open），并计 `linkforge.ratelimit.failopen{reason=error|null}`（故障期「限流已失效」可见）。客户端 IP 默认取 socket 地址、**不信任** `X-Forwarded-For`（该头可伪造、会被用来绕限流）；仅在可信反向代理后部署时设 `LINKFORGE_TRUST_XFF=true`。同一客户端经 IPv4/IPv6 两个协议访问会各占一个计数桶（本机 `127.0.0.1` 与 `::1` 并存属预期现象）。限流 ZSET 键在 `linkforge:rl:sw:` 命名空间（与旧固定窗口 STRING 键不同名，升级残留自然过期互不干扰）。
 
 **缓存一致性（P3）**：更新短链时**写穿**（立即写入新值）并安排 1 秒后的延迟双删，清除并发读旧库行回填的脏值；禁用同理（先删 + 延迟双删）。最终一致窗口约 1 秒，上限为 TTL（默认 3600 秒）。过期链路不依赖缓存（每次跳转都校验 DB 行状态）。
 
@@ -247,7 +247,7 @@ MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.c
 - **身份**：Key 以**创建者用户**的身份调用（`ROLE_API_KEY`），归属/限流/幂等语义与 JWT 完全一致；多租户隔离不变
 - **权限白名单**：Key 可调 `/api/links/**`（含 stats / breakdown / clicks / export）；**不可**调 `/api/keys/**`、`/api/webhooks/**`、`/actuator/**`（health 除外）→ 403。Key 不能再签 Key、改回调地址、看全局指标（防泄露后横向扩权）
 - **吊销即时**：每请求按 hash 点查一次库，`DELETE /api/keys/{id}` 后**下一请求即 401**（不做认证缓存，代价是每请求一次点查）
-- **配额**：Key 级分钟/日两道固定窗口（复用限流实现，键 `linkforge:rl:apikey:min|day:{keyId}`），超限 429 + `Retry-After`；额度默认 120/分钟、10000/日，可在创建时按 Key 覆盖。**诚实边界**：Redis 故障期间配额 fail-open 不生效（配额是商业限额不是安全边界）；固定窗口边界可瞬时 2×；分钟被拒时日计数已 +1（小幅高估）
+- **配额**：Key 级分钟/日两道闸（复用限流实现），超限 429 + `Retry-After`；分钟窗为**滑动窗口日志**（键 `linkforge:rl:sw:apikey:min:{keyId}`，Retry-After 按最老一条计算），日窗保持 **Asia/Shanghai 自然日固定计数**（键 `linkforge:rl:apikey:day:{keyId}:{yyyyMMdd}`，零点重置、Retry-After=到零点秒数）；额度默认 120/分钟、10000/日，可在创建时按 Key 覆盖。**诚实边界**：Redis 故障期间配额 fail-open 不生效（配额是商业限额不是安全边界）；日固定计数在自然日边界可瞬时 2×（分钟滑窗无此形态）；分钟被拒时日计数已 +1（小幅高估）
 - **管理 API（仅 JWT）**：`POST /api/keys`（明文仅此一次）/ `GET /api/keys` / `DELETE /api/keys/{id}`（幂等吊销）；每用户活跃 Key 上限 10
 
 ```bash
@@ -314,7 +314,7 @@ curl -X POST -H "X-API-Key: lfk_xxxxxxxx_xxx" -H "Content-Type: application/json
 - `LINKFORGE_TRUST_XFF` 是否信任 X-Forwarded-For（默认 false，仅在可信反代后开启）
 - 限流覆盖说明：注册按 IP、创建按用户（**含自定义短码创建，共用 POST /api/links 的限额**）；CSV 导出与统计查询属管理 API（JWT 必需、租户隔离），未单独限流，导出有 1 万行上限保护
 - `/actuator/health` 展示组件细节（db / redis / rabbit / diskSpace），依赖 DOWN 时整体 503
-- `/actuator/metrics/**` 暴露业务计数器（`linkforge.links.created`、`linkforge.redirects`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`、`linkforge.bloom.rejected` / `linkforge.bloom.loaded` / `linkforge.bloom.loadfailed`、`linkforge.singleflight.loads` / `linkforge.singleflight.shared` / `linkforge.singleflight.timeout`、`linkforge.cache.absent.hit` / `linkforge.cache.absent.put`、`linkforge.l1.hit` / `linkforge.l1.miss`、`linkforge.apikey.auth{result=ok|invalid|revoked|ambiguous}` / `linkforge.apikey.quota.rejected{window}`、`linkforge.webhook.delivery{result}` / `linkforge.webhook.enqueued` / `linkforge.webhook.blocked` / `linkforge.webhook.enqueue.failed{reason}` / `linkforge.webhook.relay.skipped{reason}`、`linkforge.outbox.failed`），需 Bearer Token
+- `/actuator/metrics/**` 暴露业务计数器（`linkforge.links.created`、`linkforge.redirects`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`、`linkforge.ratelimit.failopen{reason=error|null}`、`linkforge.bloom.rejected` / `linkforge.bloom.loaded` / `linkforge.bloom.loadfailed`、`linkforge.singleflight.loads` / `linkforge.singleflight.shared` / `linkforge.singleflight.timeout`、`linkforge.cache.absent.hit` / `linkforge.cache.absent.put`、`linkforge.l1.hit` / `linkforge.l1.miss`、`linkforge.apikey.auth{result=ok|invalid|revoked|ambiguous}` / `linkforge.apikey.quota.rejected{window}`、`linkforge.webhook.delivery{result}` / `linkforge.webhook.enqueued` / `linkforge.webhook.blocked` / `linkforge.webhook.enqueue.failed{reason}` / `linkforge.webhook.relay.skipped{reason}`、`linkforge.outbox.failed`），需 Bearer Token
 - **公网部署**：本地 Demo 一律默认 profile（全开放）；对外部署设 `SPRING_PROFILES_ACTIVE=prod` 一键收紧——health 细节转 `when_authorized`、springdoc 与静态控制台关闭、文档/控制台路径在过滤器层 denyAll（见 application.yml prod 段与 ProdProfileIT）
 
 ## 架构
@@ -327,7 +327,7 @@ flowchart LR
         R[跳转 /r/code]
         ST[stats API / clicks / CSV]
     end
-    RD[(Redis\n缓存 linkforge:code\n限流计数 幂等键)]
+    RD[(Redis\n缓存 linkforge:code\n限流滑窗 幂等键)]
     MY[(MySQL\nlf_tenant/lf_user\nlf_short_link\nlf_click_log)]
     MQ{{RabbitMQ\nclick.exchange}}
     CONS[Consumer\neventId 幂等]
@@ -337,7 +337,7 @@ flowchart LR
     C --> API --> MY
     API --> RD
     C --> R
-    R -->|1 限流 INCR| RD
+    R -->|1 限流 EVALSHA 滑窗| RD
     R -->|2 读缓存| RD
     R -->|3 校验行状态| MY
     R -->|4 同步明细| MY
@@ -348,7 +348,7 @@ flowchart LR
     ST -->|UV| MY
 ```
 
-**跳转时序（GET /r/{code}，HEAD 共用）**：① 限流器按 IP 固定窗口 INCR（Redis，超限 429）→ ② **Bloom 门（A9）**：从未存在的码直接 404，不碰缓存与 MySQL → ③ **空值缓存探查（B7）**：`linkforge:absent:{code}` 命中 → 404（DB 近期已确认不存在）→ ④ **Caffeine L1（B8）** 读 URL → ⑤ **Redis L2** 读 URL（④⑤命中则省回源 URL 字段）→ ⑥ 无论命中与否都读 `lf_short_link` 行（**同码并发读行经 singleflight 合并为一次在途读（A10）**；DB 返回 null → 写空值缓存并 404）→ ⑦ 状态/过期判定（本请求时钟，404/410；**这两种 404/410 不进空值缓存**）→ ⑧ 选 URL（缓存命中优先，否则行上 URL）→ ⑨ 回填 L1+L2（正缓存，TTL 带抖动）→ 目标 URL 严格校验（不过 410）→ 写 `lf_click_log`（D7 同步明细）→ 发布 `ClickEvent`（eventId=log-{id}）到 RabbitMQ → 返回 302。消费端以 eventId 唯一索引幂等累加 `lf_click_daily`；发布失败由 Reconciler 定时从明细补投（断 MQ 演练见 `scripts/mq-drill.sh`）。更新/禁用走写穿 + 1s 延迟双删防旧值回填。
+**跳转时序（GET /r/{code}，HEAD 共用）**：① 限流器按 IP 滑动窗口日志判额（Redis ZSET + Lua EVALSHA，Redis TIME 时钟，超限 429 + Retry-After）→ ② **Bloom 门（A9）**：从未存在的码直接 404，不碰缓存与 MySQL → ③ **空值缓存探查（B7）**：`linkforge:absent:{code}` 命中 → 404（DB 近期已确认不存在）→ ④ **Caffeine L1（B8）** 读 URL → ⑤ **Redis L2** 读 URL（④⑤命中则省回源 URL 字段）→ ⑥ 无论命中与否都读 `lf_short_link` 行（**同码并发读行经 singleflight 合并为一次在途读（A10）**；DB 返回 null → 写空值缓存并 404）→ ⑦ 状态/过期判定（本请求时钟，404/410；**这两种 404/410 不进空值缓存**）→ ⑧ 选 URL（缓存命中优先，否则行上 URL）→ ⑨ 回填 L1+L2（正缓存，TTL 带抖动）→ 目标 URL 严格校验（不过 410）→ 写 `lf_click_log`（D7 同步明细）→ 发布 `ClickEvent`（eventId=log-{id}）到 RabbitMQ → 返回 302。消费端以 eventId 唯一索引幂等累加 `lf_click_daily`；发布失败由 Reconciler 定时从明细补投（断 MQ 演练见 `scripts/mq-drill.sh`）。更新/禁用走写穿 + 1s 延迟双删防旧值回填。
 
 **本地 Demo 五步**（只走核心路径）：
 
