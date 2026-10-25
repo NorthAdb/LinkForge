@@ -176,6 +176,17 @@ bash scripts/outbox-drill.sh  # sync 关 + 断 MQ → 恢复追平（A7 硬验�
 
 浏览器/IM 的**预取请求**（`Sec-Purpose: prefetch` 及 `prefetch;prerender`、旧式 `Purpose`/`X-Purpose`/`X-Moz`）与**具名预览 bot**（Slackbot、facebookexternalhit、Twitterbot、TelegramBot、WhatsApp、Discordbot、Googlebot 等 21 个默认 token，可配置）照常得到 302 与相同 `Location`，但**全链路不计**：无明细、无 UV、无聚合、无 Webhook、不加 `linkforge.redirects`，只计 `linkforge.click.skipped{reason=prefetch|preview_bot}`（tag 仅这两个有界值，命中的 token 只进 DEBUG 日志）。判定点在跳转限流**之后**——预览 bot 照样消耗按 IP 的跳转限流；跳过名单是**窄名单**：`curl`/`wget`/`java`/`okhttp`、泛词 `bot` 与 App 内置浏览器（FBAN/Instagram/MicroMessenger 等，真人）**都不在名单、照常计数**（名单外自动化 UA 仍进 `device=bot` 维度桶，可在 breakdown 剔除）。配置：`LINKFORGE_CLICK_FILTER_ENABLED` / `LINKFORGE_CLICK_FILTER_PREFETCH_ENABLED` / `LINKFORGE_CLICK_FILTER_BOT_UA_TOKENS`（逗号分隔**整表覆盖**）。**诚实边界**：UA 可伪造，本过滤只挡「自报家门」的预览 bot；浏览器若把预取到的 302 直接用于真实导航，这次真实点击会**少计**；名单外爬虫仍计数；`enabled=false` 恢复旧口径。
 
+## 目标域名名单门禁（B9，诚实边界）
+
+**先说边界**：本服务**就是开放重定向**——任何登录用户可缩短任意 http(s) 目标。B9 只是一层**手工维护的本地域名名单** + userinfo 规则：**没有接** Google Safe Browsing / PhishTank 或任何信誉服务，不做内容扫描、不做 DNS 解析；名单外的新钓鱼域照样能建能跳；WARN 中间页可被任何人用 `?lf_continue=1` 绕过；目标站自己的二次跳转管不到。统一叫「本地域名名单门禁」，不叫「防钓鱼系统」。
+
+- **判定（纯函数）**：`TargetPolicy.evaluate(url)` → ALLOW / WARN / BLOCK。host 规范化（去尾点、小写、IDN punycode 化）后按 **label 边界后缀匹配**（`evil.com` 命中 `a.evil.com`，不命中 `notevil.com`、`evil.com.cn`）；BLOCK 优先于 WARN。**userinfo 规则**（`https://paypal.com@evil.com` 经典伪装）：建链/改链 → 400；存量行跳转 → WARN 中间页。path 里的 `@` 不算 userinfo
+- **检查时机**：①建链/改链（`POST/PATCH /api/links`）：BLOCK → **400**（消息只说「target domain is not allowed by policy」，不回显名单项），WARN → 允许；②**跳转时复查**：行每次都读，名单变更对存量链**立即生效**，零额外 I/O
+- **页面（无 JS、无外链资源、全部动态值转义、CSP `default-src 'none'`）**：BLOCK → **403 拦截页**（无 `Location`、不出现目标、`Cache-Control: no-store`）；WARN → **200 警示中间页**（显示转义后的目标 URL 与 punycode host，`noindex` + `Referrer-Policy: no-referrer`），「仍要继续」= `/r/{code}?lf_continue=1`，该参数**只跳过 WARN 门**（BLOCK、密码门照常），继续后的 302 照常计点击。门禁在 B2 分类**之前**（预览 bot 访问 blocked 链也是 403）；404/410/429 语义不变
+- **名单来源**：`LINKFORGE_PHISHING_BLOCK_DOMAINS` / `LINKFORGE_PHISHING_WARN_DOMAINS`（逗号分隔整表覆盖，默认空）+ 可选 `LINKFORGE_PHISHING_BLOCKLIST_FILE`（每行一域，`#` 注释，`!warn ` 前缀=警示级）；文件按 mtime **热加载**（默认 30s），坏文件/文件消失 → **保留旧快照** + `linkforge.phishing.reload{result=failed}`。**无管理 API**（无管理员角色，租户用户不能改全局名单）
+- **与 `WebhookTargetGuard` 的分工**：Guard 防的是**服务端出站请求**（SSRF：DNS 解析后拒私网/元数据 IP）；B9 管的是**浏览器去访问的目标域**——不做 DNS 解析，私网/内网 IP 目标照常允许（企业内网短链是合法用法）。两者互不复用
+- **指标**：`linkforge.phishing.gate{action=block|warn,stage=create|redirect}`、`linkforge.phishing.continue`、`linkforge.phishing.reload{result=ok|failed|unchanged}`、gauge `linkforge.phishing.rules{level=block|warn}`（域名与 code 一律不进 tag，只进 DEBUG 日志）
+
 ## 点击统计管道（A7 Transactional Outbox）
 
 跳转产生一次点击后，在**同一 DB 事务**内写入：
@@ -318,7 +329,7 @@ curl -X POST -H "X-API-Key: lfk_xxxxxxxx_xxx" -H "Content-Type: application/json
 - `LINKFORGE_TRUST_XFF` 是否信任 X-Forwarded-For（默认 false，仅在可信反代后开启）
 - 限流覆盖说明：注册按 IP、创建按用户（**含自定义短码创建，共用 POST /api/links 的限额**）；CSV 导出与统计查询属管理 API（JWT 必需、租户隔离），未单独限流，导出有 1 万行上限保护
 - `/actuator/health` 展示组件细节（db / redis / rabbit / diskSpace），依赖 DOWN 时整体 503
-- `/actuator/metrics/**` 暴露业务计数器（`linkforge.links.created`、`linkforge.redirects`、`linkforge.click.skipped{reason=prefetch|preview_bot}`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`、`linkforge.ratelimit.failopen{reason=error|null}`、`linkforge.bloom.rejected` / `linkforge.bloom.loaded` / `linkforge.bloom.loadfailed`、`linkforge.singleflight.loads` / `linkforge.singleflight.shared` / `linkforge.singleflight.timeout`、`linkforge.cache.absent.hit` / `linkforge.cache.absent.put`、`linkforge.l1.hit` / `linkforge.l1.miss`、`linkforge.apikey.auth{result=ok|invalid|revoked|ambiguous}` / `linkforge.apikey.quota.rejected{window}`、`linkforge.webhook.delivery{result}` / `linkforge.webhook.enqueued` / `linkforge.webhook.blocked` / `linkforge.webhook.enqueue.failed{reason}` / `linkforge.webhook.relay.skipped{reason}`、`linkforge.outbox.failed`），需 Bearer Token
+- `/actuator/metrics/**` 暴露业务计数器（`linkforge.links.created`、`linkforge.redirects`、`linkforge.click.skipped{reason=prefetch|preview_bot}`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`、`linkforge.ratelimit.failopen{reason=error|null}`、`linkforge.bloom.rejected` / `linkforge.bloom.loaded` / `linkforge.bloom.loadfailed`、`linkforge.singleflight.loads` / `linkforge.singleflight.shared` / `linkforge.singleflight.timeout`、`linkforge.cache.absent.hit` / `linkforge.cache.absent.put`、`linkforge.l1.hit` / `linkforge.l1.miss`、`linkforge.phishing.gate{action,stage}` / `linkforge.phishing.continue` / `linkforge.phishing.reload{result}` / `linkforge.phishing.rules{level}`、`linkforge.apikey.auth{result=ok|invalid|revoked|ambiguous}` / `linkforge.apikey.quota.rejected{window}`、`linkforge.webhook.delivery{result}` / `linkforge.webhook.enqueued` / `linkforge.webhook.blocked` / `linkforge.webhook.enqueue.failed{reason}` / `linkforge.webhook.relay.skipped{reason}`、`linkforge.outbox.failed`），需 Bearer Token
 - **公网部署**：本地 Demo 一律默认 profile（全开放）；对外部署设 `SPRING_PROFILES_ACTIVE=prod` 一键收紧——health 细节转 `when_authorized`、springdoc 与静态控制台关闭、文档/控制台路径在过滤器层 denyAll（见 application.yml prod 段与 ProdProfileIT）
 
 ## 架构

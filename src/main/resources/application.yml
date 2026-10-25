@@ -168,6 +168,20 @@ linkforge:
     # comma-separated, whole-list override; keep out curl/wget/java/ generic bot tokens
     # (they would swallow drill scripts and integration tests, D-Bw345-3)
     bot-ua-tokens: ${LINKFORGE_CLICK_FILTER_BOT_UA_TOKENS:slackbot,slack-imgproxy,facebookexternalhit,facebookcatalog,twitterbot,telegrambot,whatsapp,discordbot,linkedinbot,skypeuripreview,pinterestbot,redditbot,embedly,iframely,googlebot,bingbot,bingpreview,applebot,yandexbot,duckduckbot,baiduspider}
+  phishing:
+    # B9: local domain blocklist/warnlist + userinfo rule; defaults stay empty on purpose.
+    enabled: ${LINKFORGE_PHISHING_ENABLED:true}
+    block-domains: ${LINKFORGE_PHISHING_BLOCK_DOMAINS:}
+    warn-domains: ${LINKFORGE_PHISHING_WARN_DOMAINS:}
+    blocklist-file: ${LINKFORGE_PHISHING_BLOCKLIST_FILE:}
+    reload-interval: ${LINKFORGE_PHISHING_RELOAD_INTERVAL:30s}
+    reject-userinfo: ${LINKFORGE_PHISHING_REJECT_USERINFO:true}
+  link-access:
+    # B3: unlock cookie TTL and brute-force windows (rate limit runs before BCrypt)
+    ttl-seconds: ${LINKFORGE_LINK_ACCESS_TTL_SECONDS:3600}
+    unlock-ip-max: ${LINKFORGE_LINK_ACCESS_UNLOCK_IP_MAX:5}
+    unlock-code-max: ${LINKFORGE_LINK_ACCESS_UNLOCK_CODE_MAX:50}
+    unlock-window-seconds: ${LINKFORGE_LINK_ACCESS_UNLOCK_WINDOW_SECONDS:300}
 
 logging:
   level:

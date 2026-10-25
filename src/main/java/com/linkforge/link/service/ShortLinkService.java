@@ -20,9 +20,11 @@ import com.linkforge.link.support.CodeBloomFilter;
 import com.linkforge.link.support.ClickFilter;
 import com.linkforge.link.support.CsvFormat;
 import com.linkforge.link.support.LinkValidations;
+import com.linkforge.link.support.PhishingPolicy;
 import com.linkforge.link.support.ShortCodes;
 import com.linkforge.link.support.ShortLinkRowLoader;
 import com.linkforge.link.support.SingleFlight;
+import com.linkforge.link.support.TargetPolicy;
 import com.linkforge.link.support.UrlLocalCache;
 import com.linkforge.security.AuthUser;
 import com.linkforge.security.UserContext;
@@ -69,6 +71,7 @@ public class ShortLinkService {
     private final ShortLinkRowLoader rowLoader;
     private final UrlLocalCache urlLocalCache;
     private final ClickFilter clickFilter;
+    private final PhishingPolicy phishingPolicy;
 
     private final ScheduledExecutorService evictor = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "cache-evictor");
@@ -137,6 +140,7 @@ public class ShortLinkService {
     private CreateShortLinkResponse doCreate(CreateShortLinkRequest request, AuthUser user, String idemKey) {
         String url = request.getOriginalUrl().trim();
         LinkValidations.requireHttpUrl(url);
+        rejectBlockedTarget(url);
         if (request.getExpireAt() != null && !request.getExpireAt().isAfter(LocalDateTime.now())) {
             throw new BizException("expireAt must be in the future");
         }
@@ -252,6 +256,7 @@ public class ShortLinkService {
         if (hasUrl) {
             String url = request.getOriginalUrl().trim();
             LinkValidations.requireHttpUrl(url);
+            rejectBlockedTarget(url);
             effectiveUrl = url;
             link.setOriginalUrl(url);
         }
@@ -305,39 +310,40 @@ public class ShortLinkService {
     }
 
     /**
-     * Resolve redirect URL for a real navigation: Redis first, then MySQL. The DB row is
-     * always read so a disabled or expired link is rejected even while a stale cache
-     * entry exists. Prefetch/preview-bot jumps (B2) return the same 302 but record
-     * nothing; everything else records the click synchronously and optionally publishes
-     * to MQ when enabled.
+     * GET navigation: shared gate chain, then B2 classification — prefetch/preview-bot
+     * jumps get the same 302 with nothing recorded (HEAD contract), everything else
+     * records the click synchronously and optionally publishes to MQ when enabled.
      */
-    public String resolveAndRecord(String code, HttpServletRequest request) {
-        ResolvedRedirect resolved = resolveTarget(code, request);
-        Optional<ClickFilter.SkipReason> skip = clickFilter.classify(request);
-        if (skip.isPresent()) {
-            // Same 302, same Location; nothing is recorded downstream (HEAD contract).
-            meterRegistry.counter("linkforge.click.skipped", "reason", skip.get().tag()).increment();
-            return resolved.url();
+    public RedirectOutcome resolveForGet(String code, HttpServletRequest request) {
+        RedirectOutcome outcome = resolveTarget(code, request, true);
+        if (outcome instanceof RedirectOutcome.Redirect redirect) {
+            Optional<ClickFilter.SkipReason> skip = clickFilter.classify(request);
+            if (skip.isPresent()) {
+                meterRegistry.counter("linkforge.click.skipped", "reason", skip.get().tag()).increment();
+                return redirect;
+            }
+            clickRecordService.recordClick(redirect.link(), request);
+            meterRegistry.counter("linkforge.redirects").increment();
         }
-        clickRecordService.recordClick(resolved.link(), request);
-        meterRegistry.counter("linkforge.redirects").increment();
-        return resolved.url();
+        return outcome;
     }
 
     /**
-     * HEAD probe variant: same jumpability semantics (rate limit, 404/410) but records
-     * no click, publishes nothing and does not bump the redirects counter.
+     * HEAD probe: same gate chain and verdicts, but never classifies, never records,
+     * and never collapses the warn gate (?lf_continue is a GET affordance).
      */
-    public String resolveForProbe(String code, HttpServletRequest request) {
-        return resolveTarget(code, request).url();
+    public RedirectOutcome resolveForProbe(String code, HttpServletRequest request) {
+        return resolveTarget(code, request, false);
     }
 
     /**
-     * Shared resolution for GET and HEAD: redirect rate-limit bucket, Bloom gate
-     * (never-created codes 404 pre-DB), cache read, row state/expiry check and
-     * cache warm-up, one DB read for both callers.
+     * Shared gate chain for GET and HEAD: redirect rate-limit bucket, Bloom gate
+     * (never-created codes 404 pre-DB), cache read, row state/expiry check, cache
+     * warm-up, one DB read for both callers — then the B9 target gate (D-Bw345-51:
+     * BLOCK before everything, WARN after it). 404/410/429 stay exceptions.
      */
-    private ResolvedRedirect resolveTarget(String code, HttpServletRequest request) {
+    private RedirectOutcome resolveTarget(String code, HttpServletRequest request,
+                                          boolean warnContinueAllowed) {
         LinkForgeProperties.RateLimit rl = properties.getRateLimit();
         RateLimitDecision decision = rateLimiter.acquire(
                 RateLimitKeys.sw(rl.getKeyPrefix(), "redirect:ip:" + ClientIps.resolve(request, rl.isTrustXff())),
@@ -407,10 +413,38 @@ public class ShortLinkService {
         if (cached == null || cached.isBlank()) {
             cacheUrl(code, originalUrl);
         }
-        return new ResolvedRedirect(link, originalUrl);
+
+        // B9 gate on the URL this request would actually jump to. The row was read
+        // above, so a list change applies to pre-existing rows immediately.
+        TargetPolicy.Verdict verdict = phishingPolicy.evaluate(originalUrl, false);
+        if (verdict.action() == TargetPolicy.Action.BLOCK) {
+            meterRegistry.counter("linkforge.phishing.gate", "action", "block", "stage", "redirect").increment();
+            return new RedirectOutcome.Blocked();
+        }
+        if (verdict.action() == TargetPolicy.Action.WARN) {
+            if (warnContinueAllowed && "1".equals(request.getParameter("lf_continue"))) {
+                meterRegistry.counter("linkforge.phishing.continue").increment();
+            } else {
+                meterRegistry.counter("linkforge.phishing.gate", "action", "warn", "stage", "redirect").increment();
+                return new RedirectOutcome.Warn(code, originalUrl, TargetPolicy.asciiHost(originalUrl));
+            }
+        }
+        return new RedirectOutcome.Redirect(link, originalUrl);
     }
 
-    private record ResolvedRedirect(ShortLink link, String url) {
+    /**
+     * B9 create/update gate: a BLOCK verdict rejects with a 400 whose message never
+     * echoes the listed domain (D-Bw345-21); a WARN verdict only counts.
+     */
+    private void rejectBlockedTarget(String url) {
+        TargetPolicy.Verdict verdict = phishingPolicy.evaluate(url, true);
+        if (verdict.action() == TargetPolicy.Action.BLOCK) {
+            meterRegistry.counter("linkforge.phishing.gate", "action", "block", "stage", "create").increment();
+            throw new BizException("target domain is not allowed by policy");
+        }
+        if (verdict.action() == TargetPolicy.Action.WARN) {
+            meterRegistry.counter("linkforge.phishing.gate", "action", "warn", "stage", "create").increment();
+        }
     }
 
     private ShortLink getOwnedLink(String code) {

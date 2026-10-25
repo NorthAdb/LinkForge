@@ -22,6 +22,34 @@ public class LinkForgeProperties {
     private ApiKey apiKey = new ApiKey();
     private Webhook webhook = new Webhook();
     private ClickFilter clickFilter = new ClickFilter();
+    private Phishing phishing = new Phishing();
+    private LinkAccess linkAccess = new LinkAccess();
+
+    @Data
+    public static class LinkAccess {
+        /** B3: unlock cookie TTL and the two-tier brute-force windows. */
+        private long ttlSeconds = 3600;
+        private int unlockIpMax = 5;
+        private int unlockCodeMax = 50;
+        private int unlockWindowSeconds = 300;
+    }
+
+    @Data
+    public static class Phishing {
+        /** B9: a locally maintained domain blocklist/warnlist + userinfo rule. Honest
+         * scope: no reputation service, no content scan, the service is still an open redirect. */
+        private boolean enabled = true;
+        /** Env values replace the whole list (comma separated); defaults must stay empty so
+         * existing IT target domains are untouched. */
+        private java.util.List<String> blockDomains = new java.util.ArrayList<>();
+        private java.util.List<String> warnDomains = new java.util.ArrayList<>();
+        /** Optional file: one domain per line, # comments, "!warn " prefix = warn level;
+         * hot-reloaded by mtime. Empty = not loaded. */
+        private String blocklistFile = "";
+        private java.time.Duration reloadInterval = java.time.Duration.ofSeconds(30);
+        /** Create/update rejects userinfo targets (https://user@host); existing rows only warn. */
+        private boolean rejectUserinfo = true;
+    }
 
     @Data
     public static class Jwt {
