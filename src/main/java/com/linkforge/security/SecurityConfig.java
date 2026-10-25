@@ -39,7 +39,9 @@ public class SecurityConfig {
                     auth.requestMatchers("/actuator/health", "/api/health").permitAll()
                             .requestMatchers("/api/auth/**").permitAll()
                             .requestMatchers(HttpMethod.GET, "/r/**").permitAll()
-                            .requestMatchers(HttpMethod.HEAD, "/r/**").permitAll();
+                            .requestMatchers(HttpMethod.HEAD, "/r/**").permitAll()
+                            // B3 unlock form: anonymous by design, brute-force limited in the service
+                            .requestMatchers(HttpMethod.POST, "/r/*/unlock").permitAll();
                     if (docsEnabled) {
                         auth.requestMatchers(docsPaths).permitAll()
                                 .requestMatchers(consolePaths).permitAll();

@@ -1,6 +1,7 @@
 package com.linkforge.link.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.linkforge.common.exception.BizException;
 import com.linkforge.common.exception.RateLimitedException;
@@ -19,6 +20,7 @@ import com.linkforge.link.mapper.ShortLinkMapper;
 import com.linkforge.link.support.CodeBloomFilter;
 import com.linkforge.link.support.ClickFilter;
 import com.linkforge.link.support.CsvFormat;
+import com.linkforge.link.support.LinkAccessTokens;
 import com.linkforge.link.support.LinkValidations;
 import com.linkforge.link.support.PhishingPolicy;
 import com.linkforge.link.support.ShortCodes;
@@ -72,6 +74,8 @@ public class ShortLinkService {
     private final UrlLocalCache urlLocalCache;
     private final ClickFilter clickFilter;
     private final PhishingPolicy phishingPolicy;
+    private final LinkAccessTokens linkAccessTokens;
+    private final org.springframework.security.crypto.password.PasswordEncoder passwordEncoder;
 
     private final ScheduledExecutorService evictor = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "cache-evictor");
@@ -148,6 +152,7 @@ public class ShortLinkService {
         if (customCode != null && !customCode.isEmpty()) {
             LinkValidations.requireValidCustomCode(customCode);
         }
+        String passwordHash = encodeAccessPassword(request.getAccessPassword());
 
         ShortLink link = new ShortLink();
         link.setTenantId(user.getTenantId());
@@ -158,6 +163,7 @@ public class ShortLinkService {
         link.setCreatedBy(user.getUserId());
         link.setCreatedAt(LocalDateTime.now());
         link.setUpdatedAt(LocalDateTime.now());
+        link.setAccessPasswordHash(passwordHash);
 
         // uk_code is the concurrency backstop. A taken custom code is a 409; random
         // codes regenerate on collision instead of failing the request.
@@ -245,8 +251,14 @@ public class ShortLinkService {
 
     public ShortLinkDetail update(String code, UpdateShortLinkRequest request) {
         boolean hasUrl = request.getOriginalUrl() != null && !request.getOriginalUrl().isBlank();
-        if (!hasUrl && request.getTitle() == null && request.getExpireAt() == null) {
+        boolean clearPassword = Boolean.TRUE.equals(request.getClearAccessPassword());
+        boolean setPassword = request.getAccessPassword() != null && !request.getAccessPassword().isBlank();
+        if (!hasUrl && request.getTitle() == null && request.getExpireAt() == null
+                && !clearPassword && !setPassword) {
             throw new BizException("nothing to update");
+        }
+        if (clearPassword && setPassword) {
+            throw new BizException("accessPassword and clearAccessPassword are mutually exclusive");
         }
         if (request.getExpireAt() != null && !request.getExpireAt().isAfter(LocalDateTime.now())) {
             throw new BizException("expireAt must be in the future");
@@ -266,11 +278,22 @@ public class ShortLinkService {
         if (request.getExpireAt() != null) {
             link.setExpireAt(request.getExpireAt());
         }
+        if (setPassword) {
+            link.setAccessPasswordHash(encodeAccessPassword(request.getAccessPassword()));
+        }
         link.setUpdatedAt(LocalDateTime.now());
         // Snapshot the in-flight row read BEFORE the commit so the post-write forget
         // can never kill a flight that started after it and reads the fresh row
         // (A10 audit N1).
         CompletableFuture<ShortLink> priorFlight = singleFlight.peek(code);
+        if (clearPassword) {
+            // MyBatis-Plus's default NOT_NULL update strategy skips null fields in
+            // updateById — the clear must be an explicit SET NULL (D-Bw345-32).
+            shortLinkMapper.update(null, new LambdaUpdateWrapper<ShortLink>()
+                    .eq(ShortLink::getId, link.getId())
+                    .set(ShortLink::getAccessPasswordHash, null));
+            link.setAccessPasswordHash(null);
+        }
         shortLinkMapper.updateById(link);
         singleFlight.forget(code, priorFlight);
         // Write-through now, then a delayed delete clears any stale write-back a racing
@@ -421,6 +444,13 @@ public class ShortLinkService {
             meterRegistry.counter("linkforge.phishing.gate", "action", "block", "stage", "redirect").increment();
             return new RedirectOutcome.Blocked();
         }
+        // B3 password gate, row-authoritative: set/clear/change applies on the next
+        // request, no cache TTL involved. Read-only on the shared flight row.
+        if (link.getAccessPasswordHash() != null
+                && !linkAccessTokens.validate(accessCookie(request, code), link.getId(), code, link.getAccessPasswordHash())) {
+            meterRegistry.counter("linkforge.link.locked").increment();
+            return new RedirectOutcome.Locked(link);
+        }
         if (verdict.action() == TargetPolicy.Action.WARN) {
             if (warnContinueAllowed && "1".equals(request.getParameter("lf_continue"))) {
                 meterRegistry.counter("linkforge.phishing.continue").increment();
@@ -431,6 +461,77 @@ public class ShortLinkService {
             }
         }
         return new RedirectOutcome.Redirect(link, originalUrl);
+    }
+
+    /** B3: the unlock cookie for this code, or null when the request carries none. */
+    private String accessCookie(HttpServletRequest request, String code) {
+        jakarta.servlet.http.Cookie[] cookies = request.getCookies();
+        if (cookies == null) {
+            return null;
+        }
+        String name = linkAccessTokens.cookieName(code);
+        for (jakarta.servlet.http.Cookie cookie : cookies) {
+            if (name.equals(cookie.getName())) {
+                return cookie.getValue();
+            }
+        }
+        return null;
+    }
+
+    public record UnlockResult(ShortLink link, String cookieValue) {
+        public boolean unlocked() {
+            return cookieValue != null;
+        }
+
+        public boolean protectedLink() {
+            return link != null && link.getAccessPasswordHash() != null;
+        }
+    }
+
+    /**
+     * B3 unlock: Bloom/absent/row-state mirror the redirect path, then the two-tier
+     * rate limit fires BEFORE BCrypt — brute force must never buy BCrypt CPU
+     * (D-Bw345-34). Success issues the signed cookie; the caller renders the response.
+     */
+    public UnlockResult unlock(String code, String password, HttpServletRequest request) {
+        if (!codeBloom.mightContain(code) || absentKnown(code)) {
+            throw new BizException(404, "short link not found");
+        }
+        ShortLink link = singleFlight.run(code, () -> rowLoader.load(code));
+        if (link == null || link.getStatus() == null || link.getStatus() != 1) {
+            throw new BizException(404, "short link not found");
+        }
+        if (link.getExpireAt() != null && link.getExpireAt().isBefore(LocalDateTime.now())) {
+            throw new BizException(410, "short link expired");
+        }
+        LinkForgeProperties.LinkAccess cfg = properties.getLinkAccess();
+        LinkForgeProperties.RateLimit rl = properties.getRateLimit();
+        String ip = ClientIps.resolve(request, rl.isTrustXff());
+        RateLimitDecision perIp = rateLimiter.acquire(
+                RateLimitKeys.sw(rl.getKeyPrefix(), "unlock:code:" + code + ":ip:" + ip),
+                cfg.getUnlockIpMax(), cfg.getUnlockWindowSeconds());
+        if (!perIp.allowed()) {
+            meterRegistry.counter("linkforge.link.unlock", "result", "rate_limited").increment();
+            throw new RateLimitedException(perIp.retryAfterSeconds());
+        }
+        RateLimitDecision perCode = rateLimiter.acquire(
+                RateLimitKeys.sw(rl.getKeyPrefix(), "unlock:code:" + code),
+                cfg.getUnlockCodeMax(), cfg.getUnlockWindowSeconds());
+        if (!perCode.allowed()) {
+            meterRegistry.counter("linkforge.link.unlock", "result", "rate_limited").increment();
+            throw new RateLimitedException(perCode.retryAfterSeconds());
+        }
+        if (link.getAccessPasswordHash() == null) {
+            return new UnlockResult(link, null);
+        }
+        if (password == null || password.isBlank()
+                || !passwordEncoder.matches(password, link.getAccessPasswordHash())) {
+            meterRegistry.counter("linkforge.link.unlock", "result", "bad_password").increment();
+            return new UnlockResult(link, null);
+        }
+        meterRegistry.counter("linkforge.link.unlock", "result", "ok").increment();
+        return new UnlockResult(link,
+                linkAccessTokens.issue(link.getId(), code, link.getAccessPasswordHash()));
     }
 
     /**
@@ -446,6 +547,18 @@ public class ShortLinkService {
         if (verdict.action() == TargetPolicy.Action.WARN) {
             meterRegistry.counter("linkforge.phishing.gate", "action", "warn", "stage", "create").increment();
         }
+    }
+
+    /** B3: BCrypt-encode an access password; 4-64 chars when present, null stays null. */
+    private String encodeAccessPassword(String password) {
+        if (password == null || password.isBlank()) {
+            return null;
+        }
+        String trimmed = password.trim();
+        if (trimmed.length() < 4 || trimmed.length() > 64) {
+            throw new BizException("accessPassword must be 4-64 characters");
+        }
+        return passwordEncoder.encode(trimmed);
     }
 
     private ShortLink getOwnedLink(String code) {
@@ -543,6 +656,7 @@ public class ShortLinkService {
 
     private static ShortLinkDetail toDetail(ShortLink link) {
         return new ShortLinkDetail(link.getId(), link.getCode(), link.getOriginalUrl(), link.getTitle(),
-                link.getStatus(), link.getExpireAt(), link.getCreatedAt(), link.getUpdatedAt());
+                link.getStatus(), link.getExpireAt(), link.getCreatedAt(), link.getUpdatedAt(),
+                link.getAccessPasswordHash() != null);
     }
 }

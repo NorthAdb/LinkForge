@@ -24,4 +24,8 @@ public class CreateShortLinkRequest {
 
     /** Optional; must be in the future when present. */
     private LocalDateTime expireAt;
+
+    /** B3: 4-64 chars when present; stored as a BCrypt hash, never returned. */
+    @Size(max = 64, message = "accessPassword too long")
+    private String accessPassword;
 }

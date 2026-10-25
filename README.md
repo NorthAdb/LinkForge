@@ -251,6 +251,18 @@ MQ：`linkforge.click.exchange` → `linkforge.click.queue`（DLX：`linkforge.c
 - **行级 URL 校验门（B8 引入的护栏）**：每次跳转都会读行，行的 `original_url` 不可渲染时**一律 410，与缓存命中与否无关**——带 B8 后「脏行 + 旧缓存未清」会被旧缓存遮蔽成 302，此门保证脏行永远不被旧缓存掩盖（`LinkLifecycleIT` legacy-dirty 契约钉住）
 - **多实例诚实口径**：L1 进程内、实例间**不同步**（无 pub/sub 广播）——实例 A 改了 URL，实例 B 在 L1 TTL（≤10s）内可能仍跳旧 URL，与 Redis 双删窗口叠加时取更长者；空值缓存在 Redis、多实例共享。Bloom 的多实例限制见「防穿透」
 
+## 密码短链（B3：BCrypt + 签名 cookie + 先限流后校验）
+
+建链/改链可携带 `accessPassword`（**4–64 字符**）把短链设为受保护；库里只存 **BCrypt 哈希**（`access_password_hash`，V7），哈希与明文**永不出 API/CSV/日志**，Detail 只多一个 `passwordProtected` 布尔。改链设/换密码用 `accessPassword`、清除用 `clearAccessPassword:true`（两者同时出现 400；清除走显式 `SET NULL`——MP 默认 NOT_NULL 更新策略会跳过 null 字段，IT 钉住 DB 列确为 NULL）。
+
+- **受保护 GET**：无有效凭证 → **200 解锁页**（`POST /r/{code}/unlock` 表单；页面**不出现目标 URL 与 title**，`noindex` + `no-store`）；**不计点击**。**HEAD → 401**（探测方知道要凭证）。预览 bot 照 B2 规则看到解锁页、同样不计
+- **解锁**：成功 → `303` 回 `/r/{code}` + `Set-Cookie lf_ac_{code}`（`Path=/r/{code}`、`HttpOnly`、`SameSite=Lax`、1 小时 TTL）；失败 → 401 + 解锁页（不提示剩余次数）；未受保护的链接解锁 → 无害 303。带 cookie 的 GET 走正常跳转链（B9/B2 门照过、302 才计点击）
+- **cookie 语义**：值 = `{exp}.{HMAC-SHA256 签名}`，签名绑定 linkId+code+exp+**pwdVer**（当前哈希的 SHA-256 前 8 字节）——**改/清密码后旧 cookie 即刻失效**；校验用常量时间比较；跨链不通用。**密钥由 `JWT_SECRET` 域分离派生**（无新增 env、仓库无密钥）；**轮换 JWT_SECRET 会使全部解锁 cookie 失效**
+- **爆破防护**：`POST /r/{code}/unlock` **先两级限流、后 BCrypt**（同 IP 同码 5 次/300s + 同码总量 50 次/300s，键在 `sw:` 命名空间）——否则 BCrypt 的几十 ms CPU 会被打成 DoS；超限 429 + `Retry-After`。IT 用「第 6 次提交**正确**密码仍 429」钉住该顺序
+- **判定顺序（D-Bw345-51）**：B9 BLOCK 403 → **B3 密码门** → B9 WARN 中间页 → B2 分类 → 302。受保护的恶意链不给解锁页
+- **诚实边界**：保护的是「短链入口」**不是目标资源**——拿到原 URL 的人可直接访问目标；无 ACL/访问名单/一次性密码/审计日志；解锁表单无 CSRF token（CSRF 已全局关闭，SameSite=Lax + 表单只能解锁，风险低）
+- **指标**：`linkforge.link.unlock{result=ok|bad_password|rate_limited}`、`linkforge.link.locked`；env：`LINKFORGE_LINK_ACCESS_TTL_SECONDS` / `_UNLOCK_IP_MAX` / `_UNLOCK_CODE_MAX` / `_UNLOCK_WINDOW_SECONDS`
+
 ## 开放能力（B4 API Key / B5 Webhook）
 
 ### B4 API Key（哈希存储 + 配额）
@@ -326,10 +338,13 @@ curl -X POST -H "X-API-Key: lfk_xxxxxxxx_xxx" -H "Content-Type: application/json
 - `LINKFORGE_APIKEY_QUOTA_PER_MINUTE`（默认 120）/ `LINKFORGE_APIKEY_QUOTA_PER_DAY`（默认 10000）/ `LINKFORGE_APIKEY_MAX_ACTIVE`（默认 10）API Key 配额与上限（见「开放能力」）
 - `LINKFORGE_WEBHOOK_ENABLED`（默认 true）/ `LINKFORGE_WEBHOOK_SECRET_KEY`（Base64 32 字节 AES-256 主密钥，缺失时 endpoint 管理返回 503、投递意图照常落 PENDING，补密钥重启后补投）/ `LINKFORGE_WEBHOOK_RELAY_FIXED_DELAY_MS`（默认 2000）/ `LINKFORGE_WEBHOOK_MAX_ATTEMPTS`（默认 8）/ `LINKFORGE_WEBHOOK_ALLOW_PRIVATE_TARGETS`（默认 false，仅测试）
 - `LINKFORGE_IDEMPOTENCY_TTL_SECONDS` 创建幂等键保留时长（默认 86400 秒）
+- `LINKFORGE_CLICK_FILTER_ENABLED`（默认 true）/ `LINKFORGE_CLICK_FILTER_PREFETCH_ENABLED`（默认 true）/ `LINKFORGE_CLICK_FILTER_BOT_UA_TOKENS`（逗号分隔整表覆盖，默认 21 个具名预览 bot，见「非人点击」）
+- `LINKFORGE_PHISHING_ENABLED`（默认 true）/ `LINKFORGE_PHISHING_BLOCK_DOMAINS` / `LINKFORGE_PHISHING_WARN_DOMAINS`（逗号分隔整表覆盖，默认空）/ `LINKFORGE_PHISHING_BLOCKLIST_FILE`（每行一域、`#` 注释、`!warn ` 前缀=警示级，按 mtime 热加载）/ `LINKFORGE_PHISHING_RELOAD_INTERVAL`（毫秒，默认 30000）/ `LINKFORGE_PHISHING_REJECT_USERINFO`（默认 true），见「目标域名名单门禁」
+- `LINKFORGE_LINK_ACCESS_TTL_SECONDS`（默认 3600）/ `LINKFORGE_LINK_ACCESS_UNLOCK_IP_MAX`（默认 5）/ `LINKFORGE_LINK_ACCESS_UNLOCK_CODE_MAX`（默认 50）/ `LINKFORGE_LINK_ACCESS_UNLOCK_WINDOW_SECONDS`（默认 300），见「密码短链」
 - `LINKFORGE_TRUST_XFF` 是否信任 X-Forwarded-For（默认 false，仅在可信反代后开启）
 - 限流覆盖说明：注册按 IP、创建按用户（**含自定义短码创建，共用 POST /api/links 的限额**）；CSV 导出与统计查询属管理 API（JWT 必需、租户隔离），未单独限流，导出有 1 万行上限保护
 - `/actuator/health` 展示组件细节（db / redis / rabbit / diskSpace），依赖 DOWN 时整体 503
-- `/actuator/metrics/**` 暴露业务计数器（`linkforge.links.created`、`linkforge.redirects`、`linkforge.click.skipped{reason=prefetch|preview_bot}`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`、`linkforge.ratelimit.failopen{reason=error|null}`、`linkforge.bloom.rejected` / `linkforge.bloom.loaded` / `linkforge.bloom.loadfailed`、`linkforge.singleflight.loads` / `linkforge.singleflight.shared` / `linkforge.singleflight.timeout`、`linkforge.cache.absent.hit` / `linkforge.cache.absent.put`、`linkforge.l1.hit` / `linkforge.l1.miss`、`linkforge.phishing.gate{action,stage}` / `linkforge.phishing.continue` / `linkforge.phishing.reload{result}` / `linkforge.phishing.rules{level}`、`linkforge.apikey.auth{result=ok|invalid|revoked|ambiguous}` / `linkforge.apikey.quota.rejected{window}`、`linkforge.webhook.delivery{result}` / `linkforge.webhook.enqueued` / `linkforge.webhook.blocked` / `linkforge.webhook.enqueue.failed{reason}` / `linkforge.webhook.relay.skipped{reason}`、`linkforge.outbox.failed`），需 Bearer Token
+- `/actuator/metrics/**` 暴露业务计数器（`linkforge.links.created`、`linkforge.redirects`、`linkforge.click.skipped{reason=prefetch|preview_bot}`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`、`linkforge.ratelimit.failopen{reason=error|null}`、`linkforge.bloom.rejected` / `linkforge.bloom.loaded` / `linkforge.bloom.loadfailed`、`linkforge.singleflight.loads` / `linkforge.singleflight.shared` / `linkforge.singleflight.timeout`、`linkforge.cache.absent.hit` / `linkforge.cache.absent.put`、`linkforge.l1.hit` / `linkforge.l1.miss`、`linkforge.phishing.gate{action,stage}` / `linkforge.phishing.continue` / `linkforge.phishing.reload{result}` / `linkforge.phishing.rules{level}`、`linkforge.link.unlock{result=ok|bad_password|rate_limited}` / `linkforge.link.locked`、`linkforge.apikey.auth{result=ok|invalid|revoked|ambiguous}` / `linkforge.apikey.quota.rejected{window}`、`linkforge.webhook.delivery{result}` / `linkforge.webhook.enqueued` / `linkforge.webhook.blocked` / `linkforge.webhook.enqueue.failed{reason}` / `linkforge.webhook.relay.skipped{reason}`、`linkforge.outbox.failed`），需 Bearer Token
 - **公网部署**：本地 Demo 一律默认 profile（全开放）；对外部署设 `SPRING_PROFILES_ACTIVE=prod` 一键收紧——health 细节转 `when_authorized`、springdoc 与静态控制台关闭、文档/控制台路径在过滤器层 denyAll（见 application.yml prod 段与 ProdProfileIT）
 
 ## 架构

@@ -16,6 +16,11 @@ public sealed interface RedirectOutcome {
     record Blocked() implements RedirectOutcome {
     }
 
+    /** B3: protected link without a valid unlock cookie — GET renders the unlock page,
+     * HEAD answers 401. */
+    record Locked(ShortLink link) implements RedirectOutcome {
+    }
+
     /** B9 warn: 200 interstitial showing the escaped target; /r/{code}?lf_continue=1 proceeds. */
     record Warn(String code, String url, String asciiHost) implements RedirectOutcome {
     }
