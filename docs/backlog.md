@@ -23,6 +23,7 @@
 | 9 | Outbox SENT 行自动清理 | SENT 行当前永久保留；可按 `DELETE ... WHERE status='SENT' AND sent_at < NOW() - INTERVAL 30 DAY` 定期清理 | A7 审计 N5 |
 | 10 | Webhook SSRF 残余 | DNS rebinding（校验与连接两次解析的 TOCTOU）、端口白名单、出口代理隔离未做 | B 波 2 诚实限制 |
 | 11 | Webhook SENT 投递行归档 | 同 #9 思路，`lf_webhook_delivery` 长期运行的清理策略 | B5 运维边界 |
+| 12 | README「tests 211 green」静态徽章会腐化 | 例数增减时需手改徽章数字（或换 CI 生成/动态方案）；v2.0 发布轮跨模型复审 flag #2 | v2.0 复审 |
 
 ## 文档与测试残余（v2.0 发布轮处置状态）
 

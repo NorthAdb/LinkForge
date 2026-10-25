@@ -2,7 +2,7 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：**v2.0.0 发布轮终态**＝合并 `5e776fd`（审计 4 小项修复 + README 重写 + backlog + pom 2.0.0，**211 例全绿**；分支终态 run 40172677345、main 合并 run 40172956164，见文末「v2.0.0 发布轮」章），其上一个纯 docs 钉子提交（本提交）；**发布标识＝tag `v2.0.0`（打在本钉子上）**，审计以 `git rev-parse HEAD` 或 tag 为准，`5e776fd`、`bdda9a1`、`b700992015508632331fe676996991fc180d2cfc` 必为其祖先。
+> **当前 main tip**：**v2.0.0 发布轮终态（含复审修正）**＝本提交。发布链：合并 `5e776fd`（审计 4 小项 + README 重写 + backlog + pom 2.0.0，**211 例全绿**；分支 run 40172677345、合并 run 40172956164）→ 钉子 `623d1e1`（run 40173268350）→ 复审修正 `279c32e`（scripts jar 版本无关解析，run 40174344584）→ 本收口提交。**发布标识＝tag `v2.0.0`（重打在本提交上；首打 `623d1e1` 因 scripts 修复作废重切，见章末「复审与 tag 重切」）**；审计以 tag 为准，`279c32e`、`5e776fd`、`bdda9a1`、`b700992015508632331fe676996991fc180d2cfc` 必为其祖先。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节与文末发布轮章为准。
 > 本轮边界（v2.0.0 发布轮）：P0–P5、v1.0.0、深化 A2–A10、B 档波 1–5（含修复轮）均已交付并审计通过；本轮只做审计 4 小项 + 文档同步 + README 重写 + 发版。**B10（Linux bench 复跑）与 QR+UTM 继续挂起**，集中登记于 `docs/backlog.md`；开新轮需运营者指令。
 
@@ -1141,3 +1141,10 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 
 - 分支终态 run [40172677345](https://github.com/NorthAdb/LinkForge/actions/runs/40172677345) ✅（全部提交单次推送；CI 日志逐 suite 求和核实 **211 例**，`Tests run` 50 行零失败）；main 合并 run [40172956164](https://github.com/NorthAdb/LinkForge/actions/runs/40172956164) ✅（head＝合并提交 `5e776fd`）；钉子提交自身的 run 记录于 GitHub Release `v2.0.0` 说明与本地审计轨迹，不再追加仓库提交（一轮一钉纪律）
 - 发布标识：git tag **`v2.0.0`**（annotated，打在钉子提交上）+ GitHub Release 附变更摘要；CI 工作流只监听分支 push，tag 推送不触发流水线
+
+### 复审与 tag 重切
+
+- **跨模型复审**（general-purpose 子代理，复核轨迹对仓库与 Actions 逐条验证）：211 例构成独立对账通过（90=83 方法+7 参数化；119=121 IT−2 时区 fork）；2 flags——①`scripts/bench.sh` 与 `scripts/outbox-drill.sh` 仍硬编码 `target/linkforge-1.0.0.jar`，v2.0.0 checkout 上直接 fail（正是「同步文档防不一致」的漏网点）；②README「tests 211 green」为静态徽章，例数变化会腐化（登记 backlog 运维项）
+- ①修复＝两脚本改 **`ls target/linkforge-*.jar | sort -V | tail -1`** 取最新构建（`279c32e`，run [40174344584](https://github.com/NorthAdb/LinkForge/actions/runs/40174344584) ✅）——版本无关，后续升版不再破；progress 中两处 `linkforge-1.0.0.jar` 为历史快照，保留
+- **tag `v2.0.0` 重切**：首打于钉子 `623d1e1`，复审发现 scripts 问题时 Release 已发布。为让 tag 快照自带修复，删除 tag 与 Release、重打于本提交并重建 Release（发布 15 分钟内、受众为运营者与审计，重切成本小于带病快照；此后「审计以 tag 为准」指向重切后的 tag）
+- 轮内 runs 全景：分支 40172677345 ✅ → main 合并 40172956164 ✅ → 钉子 40173268350 ✅ → 复审修正 40174344584 ✅ → 本收口提交 run 记录于 Release 说明（一次复审重切，留档说明动因）
