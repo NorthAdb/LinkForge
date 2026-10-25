@@ -320,6 +320,14 @@ curl -X POST -H "X-API-Key: lfk_xxxxxxxx_xxx" -H "Content-Type: application/json
 | **核心**（主路径 Demo 只依赖这些） | 注册/登录（JWT）、创建短链、`/r/{code}` 302 跳转（Bloom 防穿透）、stats 统计、限流、同事务 Outbox + Relay 投递 + 幂等消费 + 断链追平、CI / bench | 冒烟（smoke.sh）与断链演练（mq-drill.sh / outbox-drill.sh）覆盖的即主路径 |
 | 可选（演示可用，面试可讲，主路径不强制） | 自定义短码、CSV 导出、Swagger UI、静态控制台、精确 UV / 点击明细、**维度分布（设备/来源）** | R2–R4 与深化 A8 落地，均有集成测试与隔离验证；prod profile 下文档与控制台默认关闭 |
 
+## 可观测（B1 Prometheus + Grafana）
+
+- **抓取端点**：`/actuator/prometheus`，由专用抓取令牌守卫——请求带 `Authorization: Bearer {LINKFORGE_METRICS_SCRAPE_TOKEN}`，常量时间比较；**令牌未配置 = 端点对所有请求 401（fail-closed）**；API Key 打它仍 403、JWT 用户与 `/actuator/metrics` 的关系不变（其余 actuator 规则零改动）。令牌不进仓库（`.env` 与 Prometheus 的 `ops/observability/scrape-token` 文件各放一份，后者已 gitignore；Prometheus 原生 `authorization.credentials_file`）
+- **指标面**：全部既有计数器 + 新增 `linkforge.cache.l2{result=hit|miss}`、`linkforge.outbox.sent`、积压 gauge `linkforge.outbox.pending` / `linkforge.webhook.pending` / `linkforge.webhook.failed`（`BacklogGauges` 每 15s 定时采样 `COUNT(*)`，**不在 scrape 线程查库**，采样失败保留上次值）、B2/B6/B9/B3 各自的新计数（见各节与指标总表）；`http.server.requests` 开了 **percentile 直方图 + SLO 桶**（5ms…1s，仅该 meter）；公共 tag `application="linkforge"`。**tag 有界**：任何 tag 不含 code/URL/域名/IP/用户/Key id，`uri` 只出现模板值（`/r/{code}`）——IT 钉住 scrape 里搜不到测试 code
+- **一键起观测栈**：`docker compose --profile observability up -d`（默认 `up -d` 不含 Prometheus/Grafana）。镜像 tag 写死（`prom/prometheus:v2.55.1`、`grafana/grafana-oss:11.3.0`），端口只绑 `127.0.0.1`（9090/3000）；Prometheus 抓**宿主机上的应用**（`host.docker.internal:host-gateway`，Linux 必需）。Grafana 管理员密码走 `GRAFANA_ADMIN_PASSWORD`（默认值仅限本机，README 外的部署必须改）。看板「LinkForge SLO」自动 provision（datasource uid 固定 `linkforge-prom`）
+- **看板内容**：跳转 QPS/状态、P50/P95/P99（直方图）、SLO 达标率（≤100ms 占比）与 5xx 率、跳过与限流拒绝、L1/L2 命中率、Bloom/absent、singleflight、fail-open、Outbox/Webhook 积压与投递、API Key 认证与配额、门禁与解锁、JVM/Hikari。**SLO 阈值是 Demo 目标、不是生产承诺**；看板不等于压测——压测数字见 `docs/bench.md`（测于固定窗口时期，新数字留待 B10）
+- **一致性测试**：`DashboardMetricsIT` 解析看板 JSON 里所有 `linkforge_*` 名字，断言都能在真实 scrape 里找到（防「面板引用不存在的指标」）；导出但未被看板使用的指标只打印不失败
+
 ## 配置要点
 
 见 `src/main/resources/application.yml`。口令与 `JWT_SECRET` 只有环境变量，没有写在 yml 或 Java 默认值里。本地示例见 `.env.example`。

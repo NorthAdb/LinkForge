@@ -24,6 +24,15 @@ public class LinkForgeProperties {
     private ClickFilter clickFilter = new ClickFilter();
     private Phishing phishing = new Phishing();
     private LinkAccess linkAccess = new LinkAccess();
+    private Metrics metrics = new Metrics();
+
+    @Data
+    public static class Metrics {
+        /** B1: bearer token for /actuator/prometheus; empty = the endpoint rejects everyone. */
+        private String scrapeToken = "";
+        /** BacklogGauges sampling period (DB COUNT queries run off the scrape path). */
+        private long backlogSampleIntervalMs = 15000;
+    }
 
     @Data
     public static class LinkAccess {

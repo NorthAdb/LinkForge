@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: linkforge
+    metrics_path: /actuator/prometheus
+    # the token file holds exactly the value of LINKFORGE_METRICS_SCRAPE_TOKEN;
+    # it lives outside version control (see .gitignore)
+    authorization:
+      type: Bearer
+      credentials_file: /etc/linkforge/scrape-token
+    static_configs:
+      - targets: ["host.docker.internal:8080"]

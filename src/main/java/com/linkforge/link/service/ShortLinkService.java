@@ -399,6 +399,9 @@ public class ShortLinkService {
         boolean servedFromLocal = cached != null && !cached.isBlank();
         if (!servedFromLocal) {
             cached = stringRedisTemplate.opsForValue().get(cacheKey);
+            // B1: the Redis L2 round-trip had no metric — dashboards need the hit rate
+            meterRegistry.counter("linkforge.cache.l2", "result",
+                    cached != null && !cached.isBlank() ? "hit" : "miss").increment();
         }
         // A10: concurrent same-code reads merge into one in-flight DB read (whether
         // or not Redis hit). The verdicts below still run per request on the row the

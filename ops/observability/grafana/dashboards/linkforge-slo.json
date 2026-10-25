@@ -1,0 +1,266 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "row",
+      "title": "Redirect (SLO demo targets, not a production promise)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100
+    },
+    {
+      "type": "timeseries",
+      "title": "Redirect QPS by status (template uri, never a code)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "id": 1,
+      "datasource": { "type": "prometheus", "uid": "linkforge-prom" },
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(http_server_requests_seconds_count{uri=\"/r/{code}\"}[1m]))",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Redirect latency P50 / P95 / P99 (SLO demo: P99 ≤ 100ms)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "id": 2,
+      "datasource": { "type": "prometheus", "uid": "linkforge-prom" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_server_requests_seconds_bucket{uri=\"/r/{code}\"}[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{uri=\"/r/{code}\"}[5m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_requests_seconds_bucket{uri=\"/r/{code}\"}[5m])))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "SLO: redirect ≤ 100ms (5m)",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 9 },
+      "id": 3,
+      "datasource": { "type": "prometheus", "uid": "linkforge-prom" },
+      "targets": [
+        {
+          "expr": "sum(rate(http_server_requests_seconds_bucket{uri=\"/r/{code}\",le=\"0.1\"}[5m])) / sum(rate(http_server_requests_seconds_count{uri=\"/r/{code}\"}[5m]))",
+          "legendFormat": "within SLO"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "thresholds": { "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 0.99 } ] } } }
+    },
+    {
+      "type": "stat",
+      "title": "Redirect error rate 5xx (5m)",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 9 },
+      "id": 4,
+      "datasource": { "type": "prometheus", "uid": "linkforge-prom" },
+      "targets": [
+        {
+          "expr": "sum(rate(http_server_requests_seconds_count{uri=\"/r/{code}\",status=~\"5..\"}[5m])) / sum(rate(http_server_requests_seconds_count{uri=\"/r/{code}\"}[5m]))",
+          "legendFormat": "5xx"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 0.001 } ] } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Skipped jumps by reason (B2) and rate-limit rejections",
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 9 },
+      "id": 5,
+      "datasource": { "type": "prometheus", "uid": "linkforge-prom" },
+      "targets": [
+        { "expr": "sum by (reason) (rate(linkforge_click_skipped_total[5m]))", "legendFormat": "skipped {{reason}}" },
+        { "expr": "sum by (entry) (rate(linkforge_ratelimit_rejected_total[5m]))", "legendFormat": "rejected {{entry}}" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Caches (L1 / L2 / absent / Bloom)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 },
+      "id": 101
+    },
+    {
+      "type": "timeseries",
+      "title": "L1 hit/miss and L2 hit/miss rates",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 14 },
+      "id": 6,
+      "datasource": { "type": "prometheus", "uid": "linkforge-prom" },
+      "targets": [
+        { "expr": "rate(linkforge_l1_hit_total[5m])", "legendFormat": "l1 hit" },
+        { "expr": "rate(linkforge_l1_miss_total[5m])", "legendFormat": "l1 miss" },
+        { "expr": "rate(linkforge_cache_l2_total{result=\"hit\"}[5m])", "legendFormat": "l2 hit" },
+        { "expr": "rate(linkforge_cache_l2_total{result=\"miss\"}[5m])", "legendFormat": "l2 miss" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Bloom rejections and absent-cache hits",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 14 },
+      "id": 7,
+      "datasource": { "type": "prometheus", "uid": "linkforge-prom" },
+      "targets": [
+        { "expr": "rate(linkforge_bloom_rejected_total[5m])", "legendFormat": "bloom rejected" },
+        { "expr": "rate(linkforge_cache_absent_hit_total[5m])", "legendFormat": "absent hit" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Singleflight (A10)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 },
+      "id": 102
+    },
+    {
+      "type": "timeseries",
+      "title": "singleflight loads / shared / timeouts",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 22 },
+      "id": 8,
+      "datasource": { "type": "prometheus", "uid": "linkforge-prom" },
+      "targets": [
+        { "expr": "rate(linkforge_singleflight_loads_total[5m])", "legendFormat": "loads" },
+        { "expr": "rate(linkforge_singleflight_shared_total[5m])", "legendFormat": "shared" },
+        { "expr": "rate(linkforge_singleflight_timeout_total[5m])", "legendFormat": "timeout" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Rate limiting (B6 sliding window)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 28 },
+      "id": 103
+    },
+    {
+      "type": "timeseries",
+      "title": "fail-open counter (limiter silently off when this climbs)",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 29 },
+      "id": 9,
+      "datasource": { "type": "prometheus", "uid": "linkforge-prom" },
+      "targets": [
+        { "expr": "sum by (reason) (rate(linkforge_ratelimit_failopen_total[5m]))", "legendFormat": "{{reason}}" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Outbox (A7)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 35 },
+      "id": 104
+    },
+    {
+      "type": "timeseries",
+      "title": "Outbox backlog / sent / failed",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 36 },
+      "id": 10,
+      "datasource": { "type": "prometheus", "uid": "linkforge-prom" },
+      "targets": [
+        { "expr": "linkforge_outbox_pending", "legendFormat": "pending" },
+        { "expr": "rate(linkforge_outbox_sent_total[5m])", "legendFormat": "sent/s" },
+        { "expr": "linkforge_outbox_failed_total", "legendFormat": "failed" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Webhook (B5)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 42 },
+      "id": 105
+    },
+    {
+      "type": "timeseries",
+      "title": "Webhook backlog / delivery results / blocked / skipped",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 43 },
+      "id": 11,
+      "datasource": { "type": "prometheus", "uid": "linkforge-prom" },
+      "targets": [
+        { "expr": "linkforge_webhook_pending", "legendFormat": "pending" },
+        { "expr": "linkforge_webhook_failed_total", "legendFormat": "failed" },
+        { "expr": "sum by (result) (rate(linkforge_webhook_delivery_total[5m]))", "legendFormat": "{{result}}" },
+        { "expr": "rate(linkforge_webhook_blocked_total[5m])", "legendFormat": "blocked" },
+        { "expr": "sum by (reason) (rate(linkforge_webhook_relay_skipped_total[5m]))", "legendFormat": "skipped {{reason}}" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "API keys (B4)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 49 },
+      "id": 106
+    },
+    {
+      "type": "timeseries",
+      "title": "Key auth results and quota rejections",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 50 },
+      "id": 12,
+      "datasource": { "type": "prometheus", "uid": "linkforge-prom" },
+      "targets": [
+        { "expr": "sum by (result) (rate(linkforge_apikey_auth_total[5m]))", "legendFormat": "{{result}}" },
+        { "expr": "sum by (window) (rate(linkforge_apikey_quota_rejected_total[5m]))", "legendFormat": "quota {{window}}" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Gates (B9 phishing / B3 unlock)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 56 },
+      "id": 107
+    },
+    {
+      "type": "timeseries",
+      "title": "phishing gate hits, continues, rule counts",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 57 },
+      "id": 13,
+      "datasource": { "type": "prometheus", "uid": "linkforge-prom" },
+      "targets": [
+        { "expr": "sum by (action, stage) (rate(linkforge_phishing_gate_total[5m]))", "legendFormat": "{{action}} {{stage}}" },
+        { "expr": "rate(linkforge_phishing_continue_total[5m])", "legendFormat": "continue" },
+        { "expr": "linkforge_phishing_rules", "legendFormat": "rules {{level}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "unlock results and locked-page renders",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 57 },
+      "id": 14,
+      "datasource": { "type": "prometheus", "uid": "linkforge-prom" },
+      "targets": [
+        { "expr": "sum by (result) (rate(linkforge_link_unlock_total[5m]))", "legendFormat": "{{result}}" },
+        { "expr": "rate(linkforge_link_locked_total[5m])", "legendFormat": "locked" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "JVM / Hikari",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 63 },
+      "id": 108
+    },
+    {
+      "type": "timeseries",
+      "title": "Heap used / GC pause / Hikari connections",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 64 },
+      "id": 15,
+      "datasource": { "type": "prometheus", "uid": "linkforge-prom" },
+      "targets": [
+        { "expr": "sum(jvm_memory_used_bytes{area=\"heap\"})", "legendFormat": "heap used" },
+        { "expr": "rate(jvm_gc_pause_seconds_sum[5m])", "legendFormat": "gc pause/s" },
+        { "expr": "hikaricp_connections_active", "legendFormat": "active" },
+        { "expr": "hikaricp_connections_pending", "legendFormat": "pending" }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["linkforge"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timezone": "browser",
+  "title": "LinkForge SLO (Demo targets, not a production promise)",
+  "uid": "linkforge-slo",
+  "version": 1,
+  "weekStart": ""
+}

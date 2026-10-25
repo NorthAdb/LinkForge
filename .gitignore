@@ -46,3 +46,6 @@ application-local.yaml
 
 # Local decision trail (assistant working artifact)
 .audit/
+
+# B1 metrics scrape token (compose mounts it into Prometheus)
+ops/observability/scrape-token

@@ -5,10 +5,11 @@ spring:
     active: ${SPRING_PROFILES_ACTIVE:dev}
   task:
     scheduling:
-      # B5: the ClickOutboxRelay, reconciler and WebhookDeliveryRelay must not share
-      # one thread — a slow webhook endpoint must never delay click outbox catch-up.
+      # B5: relays must not share one thread — a slow webhook endpoint must never
+      # delay click outbox catch-up. B9 adds the blocklist reload and B1 the backlog
+      # sampler (D-Bw345-54: 4 → 6).
       pool:
-        size: ${LINKFORGE_SCHEDULING_POOL_SIZE:4}
+        size: ${LINKFORGE_SCHEDULING_POOL_SIZE:6}
   flyway:
     # Versioned migrations for every profile; empty DBs get V1, legacy volumes
     # (tables already present, no history) are baselined at 1 and skip V1.
@@ -21,11 +22,20 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info,metrics,prometheus   # B1: scrape endpoint, token-gated (D-Bw345-42)
   endpoint:
     health:
       show-details: always
       show-components: always
+  metrics:
+    tags:
+      application: linkforge                      # B1: common tag on every meter
+    distribution:
+      percentiles-histogram:
+        # only this meter gets buckets — the redirect SLO panel needs the latency distribution
+        http.server.requests: true
+      slo:
+        http.server.requests: 5ms,10ms,25ms,50ms,100ms,250ms,500ms,1s
 
 ---
 spring:
@@ -182,6 +192,10 @@ linkforge:
     unlock-ip-max: ${LINKFORGE_LINK_ACCESS_UNLOCK_IP_MAX:5}
     unlock-code-max: ${LINKFORGE_LINK_ACCESS_UNLOCK_CODE_MAX:50}
     unlock-window-seconds: ${LINKFORGE_LINK_ACCESS_UNLOCK_WINDOW_SECONDS:300}
+  metrics:
+    # B1: /actuator/prometheus accepts only this bearer token; empty = fail-closed 401
+    scrape-token: ${LINKFORGE_METRICS_SCRAPE_TOKEN:}
+    backlog-sample-interval-ms: ${LINKFORGE_METRICS_BACKLOG_INTERVAL:15000}
 
 logging:
   level:

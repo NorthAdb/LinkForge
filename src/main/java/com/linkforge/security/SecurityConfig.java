@@ -23,6 +23,7 @@ public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
     private final ApiKeyAuthFilter apiKeyAuthFilter;
+    private final MetricsScrapeTokenFilter metricsScrapeTokenFilter;
 
     /** false in prod: docs are denied at the filter chain before reaching springdoc. */
     @Value("${linkforge.docs-enabled:true}")
@@ -56,6 +57,9 @@ public class SecurityConfig {
                     // stay JWT-only, and everything else defaults to JWT-only as well.
                     auth.requestMatchers("/api/links/**").hasAnyRole("USER", "API_KEY")
                             .requestMatchers("/api/keys/**", "/api/webhooks/**").hasRole("USER")
+                            // B1: the scrape endpoint answers only to ROLE_METRICS
+                            // (granted by MetricsScrapeTokenFilter); must sit before /actuator/**
+                            .requestMatchers("/actuator/prometheus").hasRole("METRICS")
                             .requestMatchers("/actuator/**").hasRole("USER")
                             .anyRequest().hasRole("USER");
                 })
@@ -72,8 +76,10 @@ public class SecurityConfig {
                             response.setContentType("application/json;charset=UTF-8");
                             response.getWriter().write("{\"code\":403,\"message\":\"forbidden\",\"data\":null}");
                         }))
-                // JWT first (Bearer parsing), then the X-API-Key filter; either one may
+                // metrics scrape token first (it must see the raw Bearer before the JWT filter),
+                // then JWT, then the X-API-Key filter; either of the latter two may
                 // establish the SecurityContext. Both together is a 400 from the key filter.
+                .addFilterBefore(metricsScrapeTokenFilter, JwtAuthFilter.class)
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterAfter(apiKeyAuthFilter, JwtAuthFilter.class);
         return http.build();
