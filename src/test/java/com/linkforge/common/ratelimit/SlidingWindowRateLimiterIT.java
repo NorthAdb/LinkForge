@@ -95,11 +95,14 @@ class SlidingWindowRateLimiterIT extends AbstractIntegrationTest {
         long t0 = System.nanoTime();
         assertTrue(limiter.tryAcquire(key, 1, 10));
         sleepUntil(t0, 2000);
+        long rejectedAtMs = elapsedMs(t0);
         RateLimitDecision rejected = limiter.acquire(key, 1, 10);
         assertFalse(rejected.allowed());
         assertTrue(rejected.retryAfterSeconds() >= 5 && rejected.retryAfterSeconds() <= 10,
                 "expected ~8s (oldest at t0, window 10s, ~2s elapsed), got " + rejected.retryAfterSeconds());
-        sleepUntil(t0, (rejected.retryAfterSeconds() + 1L) * 1000);
+        // Retry-After counts from the rejection moment: the t0 entry dies at t0+10s.
+        // Margin covers the ceil to seconds plus scheduler jitter.
+        sleepUntil(t0, rejectedAtMs + rejected.retryAfterSeconds() * 1000L + 300);
         assertTrue(limiter.tryAcquire(key, 1, 10),
                 "sleeping the reported Retry-After must buy a slot");
     }
@@ -153,7 +156,8 @@ class SlidingWindowRateLimiterIT extends AbstractIntegrationTest {
         assertTrue(third.retryAfterSeconds() >= 1 && third.retryAfterSeconds() <= 5);
 
         assertEquals(failOpensBefore, failOpenTotal(), "the sw: path must not fail open");
-        assertEquals("zset", redis.type(key));
+        assertTrue("zset".equalsIgnoreCase(redis.type(key)),
+                "the sw: key must be a ZSET, got " + redis.type(key));
         Long pttl = redis.getExpire(key, TimeUnit.MILLISECONDS);
         assertTrue(pttl != null && pttl > 0 && pttl <= 5000, "PTTL " + pttl + " not within the window");
     }
