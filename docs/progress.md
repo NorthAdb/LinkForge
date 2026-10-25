@@ -988,6 +988,55 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 
 ---
 
+## B 档波 3+4+5 合并轮：B6 滑窗限流 / B2 非人点击不计 / B9 钓鱼门禁 / B3 密码短链 / B1 Prometheus+Grafana（feat/deepen-b-wave345，发车基线 main@3fe1fb1，2026-10-25）
+
+范围：交接单 `记录追踪/05-阶段交接/LinkForge-phase-B-wave345-handoff.md`（Q1–Q14 全部拍板：t93u Q1–Q6、t94u B3=密码短链+B10 移出、t95u Q7–Q14 全 A）。开工提交收 Bw2fix-N1…N12（+可选 N7/N8/Bw345-pre-1）；B10 压测不在本轮（Bw345-F2，放到最后、将来审计侧 box 跑）。分支提交序：kickoff `059af1a` → B6 红 `09c9107`/绿 `3a80d2c`+测试侧修复 `6381ed0`/`82919d2` → B2 红 `473f334`/绿 `d1edf5b` → B9 红 `98cbf15`/`479a88b`/`af98c9c`/绿（amend）`4f7e24a`+`a8d4c4a`+`42c422c` → B3 红 `29ca919`/绿 `240ecf9`+`0d3f97c` → B1 红 `53fa8cf`/绿 `63d7cfd`+`9908824`+`bfa0498`+`8da89e0`+（编译修）`76d24a3`/`f3fbf9d`+`0c3420b`。红先提交只含测试、其 CI run 即红证据；绿提交含实现+文档改口。
+
+### 拍板与关键决策落地（D-Bw345 摘要；全文见交接单 §1.0/§1.1）
+
+| 决策 | 落地 |
+|----|------|
+| D-Bw345-9…19（B6） | ZSET+Lua 滑窗日志（`redis/sliding_window.lua`，Redis `TIME` µs 时钟，只放行才 ZADD，成员 `now_us-nonce`）；新命名空间 `{prefix}sw:`（`RateLimitKeys`）；`acquire()`→`RateLimitDecision{allowed,retryAfterSeconds,count}`，`tryAcquire` 委托；429 全带 `Retry-After`（`RateLimitedException`+handler，Q3=A）；fail-open 保留 + `linkforge.ratelimit.failopen{reason=error\|null}`；**API Key 日配额保持上海自然日固定计数（Q2=A）→ 保留 `tryAcquireFixedWindow`（INCR/EXPIRE）仅供日窗**，分钟窗改滑窗（修 Bw2-N12 恒 60）；Q5a=A 无开关、Q5b 本轮不重跑 bench（三处时期注） |
+| D-Bw345-1…8（B2） | `link/support/ClickFilter`：`Sec-Purpose`(token 精确)/`Purpose`/`X-Purpose`/`X-Moz` + 21 个具名预览 bot 小写子串；判定点在 `resolveTarget` 后 `recordClick` 前；跳过=同 302 同 Location、全链路不计、`linkforge.click.skipped{reason=prefetch\|preview_bot}`；HEAD 不经过（Q6=A）；`enabled=false`/prefetch 开关/env 整表覆盖（D-Bw345-5） |
+| D-Bw345-20…29（B9） | `TargetPolicy` 纯函数：IDN 规范化 + label 边界后缀匹配 + BLOCK>WARN + userinfo 规则（建链 BLOCK/存量 WARN，Q10=A）；建链/改链 400（不回显名单项）+ 跳转复查（**行权威**——评的是 `link.getOriginalUrl()`，缓存旧值不遮蔽）；`PhishingPolicy` volatile 快照 + 文件 mtime 热加载（坏文件保旧 + `reload{result=failed}`）；`GatePages` 转义+CSP/nosniff/no-store/no-referrer；BLOCK=403 拦截页无目标无 Location、WARN=200 中间页 + `?lf_continue=1` 只跳 WARN 且 302 才计（Q9=A）；不做 DNS/SSRF、不复用 WebhookTargetGuard（对照表在 README）；指标 `phishing.gate{action,stage}`/`continue`/`reload{result}`/`rules{level}` |
+| D-Bw345-30…40（B3） | V7 `access_password_hash`（BCrypt 复用 bean）；Detail 只加 `passwordProtected`、哈希/明文不出 API/CSV/日志；4–64 校验、`accessPassword`+`clearAccessPassword` 互斥 400；**清除走显式 `LambdaUpdateWrapper.set(null)`**（MP NOT_NULL 坑，IT 钉住 DB 列 NULL）；判定顺序 D-Bw345-51：BLOCK → 密码门（`Locked` outcome，GET 200 解锁页/HEAD 401）→ WARN → B2 → 302；`POST /r/{code}/unlock` 先两级限流（同 IP 5/300s + 同码 50/300s，`sw:` 键）**后 BCrypt**（IT 用「第 6 次提交正确密码仍 429」钉顺序）；cookie `lf_ac_{code}` = `{exp}.{HMAC}`，签名绑 linkId+code+exp+**pwdVer**（当前哈希 SHA-256 前 8 字节）——改/清密码旧 cookie 即废；HMAC key 从 JWT_SECRET 域分离派生（无新 env） |
+| D-Bw345-41…50（B1） | `micrometer-registry-prometheus`（Boot BOM）；exposure 加 `prometheus` + 公共 tag `application=linkforge` + `http.server.requests` 直方图+SLO 桶；`/actuator/prometheus` 由 `MetricsScrapeTokenFilter` 守（常量时间比较、**空令牌 fail-closed**、JwtAuthFilter 对该路径 shouldNotFilter、SecurityConfig `hasRole(METRICS)` 先于 `/actuator/**`、API Key 仍 403）；新指标 `cache.l2{result}`/`outbox.sent`/`BacklogGauges`（15s 定时采样 OUTBOX PENDING + WEBHOOK PENDING/FAILED，不在 scrape 线程查库）；**uri 标签 MeterFilter 白名单**（非模板一律压 UNKNOWN——见执行记录第 5 条）；compose `profiles:["observability"]`（prometheus v2.55.1 + grafana-oss 11.3.0 写死、端口 127.0.0.1、host-gateway、令牌文件 gitignore）；看板 JSON 入库（datasource uid `linkforge-prom` 固定）+ `DashboardMetricsIT`（看板名 ⊆ 真实 scrape ∪ 有因 CONTEXT_LIMITED 集）+ 截图 3 张（Q13=A）；调度池 4→6（D-Bw345-54） |
+| 交接偏离登记 | ①`LINKFORGE_PHISHING_RELOAD_INTERVAL` 用**毫秒**（交接建议 `30s`——`@Scheduled` 占位符只认毫秒/ISO-8601，run 40157637874 红）；②warn 页转义用例用 `'`/`&`（交接的 `<script>` 在 `isRenderableUrl` 的 URI 解析下不可达 410，run 40156726448 红证实）；③B3 互斥校验在 PATCH（D-Bw345-32 原文即 update 语义，红 IT 误放 create 已修）；④交接 §4 手验脚本「201」应为 200（create 实际契约，RateLimitIT 既证） |
+
+### 红先证据（Bw345-33；每项：红 run @ 提交 = 预期断言红，绿 run @ 提交）
+
+| 项 | 红证据 | 绿证据 |
+|----|--------|--------|
+| B6 | run [40153960882](https://github.com/NorthAdb/LinkForge/actions/runs/40153960882) @ `09c9107`＝91 IT 中 5 断言红：`SlidingWindowRateLimiterIT.boundaryBurstDoesNotDoubleTheWindow`（**expected 1 but was 3**，固定窗口 2× 突发实证）+ RateLimitIT/RegisterRateLimitIT 429 无 Retry-After ×3 + ApiKeyIT Retry-After=60 | run [40154955119](https://github.com/NorthAdb/LinkForge/actions/runs/40154955119) @ `82919d2` |
+| B2 | run [40155274015](https://github.com/NorthAdb/LinkForge/actions/runs/40155274015) @ `473f334`＝`BotPrefetchClickIT`：prefetch+Slackbot 计点击 **expected 0 but was 2** | run [40155643671](https://github.com/NorthAdb/LinkForge/actions/runs/40155643671) @ `d1edf5b` |
+| B9 | run [40156726448](https://github.com/NorthAdb/LinkForge/actions/runs/40156726448) @ `af98c9c`＝6 断言红：blocked 建链 400 expected got 200、userinfo 400 got 200、blocked 跳转 403 got 302 ×2（GET/HEAD）、warn 页 200 got 302、bot 访问 blocked 403 got 302 | run [40158461826](https://github.com/NorthAdb/LinkForge/actions/runs/40158461826) @ `42c422c` |
+| B3 | run [40158722790](https://github.com/NorthAdb/LinkForge/actions/runs/40158722790) @ `29ca919`＝7 断言红：`passwordProtected` 缺失、解锁端点 401×2、无长度校验 200 got 400、受保护 GET 302 got 解锁页、爆破第 6 次 401 got（应 429） | run [40159419082](https://github.com/NorthAdb/LinkForge/actions/runs/40159419082) @ `0d3f97c` |
+| B1 | run [40159657579](https://github.com/NorthAdb/LinkForge/actions/runs/40159657579) @ `53fa8cf`＝4 红：令牌 scrape **401 got（应 200）**、`linkforge_redirects_total` 缺、积压 gauge 缺、看板 JSON 缺 | run [40164727414](https://github.com/NorthAdb/LinkForge/actions/runs/40164727414) @ `0c3420b` |
+
+审计可对任一项临时还原实现复现红（还原对应绿提交的实现文件、保留红测试提交的测试文件即可）。
+
+### 分支 CI 红史（修复轮教训的延续；全部如实记录）
+
+- **B6 两红**：[40154398901](https://github.com/NorthAdb/LinkForge/actions/runs/40154398901)＝新 IT 两处测试 bug（`redis.type()` 返回 DataType 枚举大小写；Retry-After 睡眠锚点错 1s）；[40154799476](https://github.com/NorthAdb/LinkForge/actions/runs/40154799476)（`6381ed0`）＝**mvn 退出码被管道吞掉导致带编译错推送**（redis.type 返回 DataType 非 String）——教训已在仓内记忆/progress 双重固化：`mvn -B test -q > log; MVN=$?; [ $MVN -eq 0 ] && git…`
+- **B9 五红**：40156008312（红 IT 两处测试 bug：create 契约 200 非 201、DB 直插行 Bloom 不可见 404）→ 40156332051（warn 用例 `<script>` 撞 isRenderableUrl 410）→ 40157134151（**B9 提交混入未提交的 B3 引用**——ShortLinkService/RedirectController 为 B9/B3 共享文件，amend `4f7e24a` 剥离并 stash 验证快照可编译；LinkAccess 配置键无害随 B9 提交先行）→ 40157637874（`@Scheduled` 不认 `30s`）→ 40157980534（**门禁评估了缓存生效 URL 而非行 URL**——缓存旧值遮蔽改写后的行，改 `link.getOriginalUrl()` 行权威）
+- **B3 一红**：40159000648＝set+clear 互斥误放 create（D-Bw345-32 是 update 语义，IT 改 PATCH）
+- **B1 五红**：40159945710（`addFilterBefore(metrics, JwtAuthFilter.class)` 在 JWT 注册位置前调用→无注册序）→ 40160274568（**根因级发现：`@SpringBootTest` 默认经 `DisableObservabilityContextCustomizer` 关闭 metrics 导出，Prometheus registry/scrape 端点 bean 在所有测试上下文不存在**——修=`@AutoConfigureObservability`）→ 40162469539（API Key 403 被抓取过滤器 401 抢答 + 计数器未触发不导出）→ 40163153381（L1 命中遮蔽 l2 计数器；看板一致性需触发后比对；**gauge 样本解析**）→ 40164056098（`Meter.Id` 无 replaceTag、getTag 返回 String——同管道吞退出码教训第二次触发，改为显式 `$?` 判定）
+
+### 例数、连接预算与 CI
+
+- **修复后例数**：surefire **86**（63+23：ClickFilterTest 6、TargetPolicyTest 7、LinkAccessTokenTest 6、RedisRateLimiterTest 重写 +4）＋ failsafe 默认 execution **119**（90+29：SlidingWindowRateLimiterIT 5、BotPrefetchClickIT 1、PhishingGateIT 10、PasswordLinkIT 7、PrometheusScrapeIT 5、DashboardMetricsIT 1）＋ `webhook-tz-it` fork **2** ＝ **合计 207 例全绿**（+52 vs 基线 155）；分支终态 run [40164727414](https://github.com/NorthAdb/LinkForge/actions/runs/40164727414) ✅
+- **连接预算**：新增 3 个上下文（默认组合×1＝SlidingWindowRateLimiterIT+PasswordLinkIT 共用；PhishingGateIT×1；PrometheusScrapeIT+DashboardMetricsIT 共用×1）→ 24 个常规（hikari 默认 10）+ 4 个收紧（各 4）→ 峰值 ≈ 24×10+4×4 = **256 < 500**，全绿即 `Too many connections`=0
+- **CI**：分支终态 run [40164727414](https://github.com/NorthAdb/LinkForge/actions/runs/40164727414) ✅（head `0c3420b`）；合 main 与 tip run 见下方钉子（合并后补记）
+- **观测栈手验（本机 Compose，2026-10-25）**：`docker compose --profile observability up -d` → Prometheus `/api/v1/targets`＝`host.docker.internal:8080 **up**`；Grafana 看板自动 provision（uid `linkforge-slo`）、datasource `linkforge-prom` health OK；手工流量后三区截图入库：`docs/img/grafana-redirect-slo.png`（187KB）/`grafana-singleflight-outbox.png`（114KB）/`grafana-keys-gates-jvm.png`（137KB），全部 ≤300KB（Q13=A）。本机 3000 端口被无关进程占用，截图容器临时用 13000（compose 配置未动）；Grafana 挂载再次踩 MSYS 路径转换坑（`MSYS_NO_PATHCONV=1` 解）。截图为手工流量、非压测数字，图注=看板标题内嵌「Demo targets, not a production promise」
+- **快速手验对照**（交接 §4 命令）：prefetch/Slackbot 302 不计、curl 计 ✓（IT 同断言）；滑窗 Retry-After 递减 ✓（ApiKeyIT <60）；blocked 403/warn 中间页/continue 计数 ✓；密码解锁+清除立即生效+爆破 429 ✓；Prometheus 令牌三态+API Key 403+tag 有界 ✓——IT 全覆盖，交接 §4 为人工复验路径
+
+### Backlog（不混入本轮）
+
+- **Bw345-F1**：B3 备选 QR+UTM（萧北 t94u 不做；将来另开一轮，差异表见交接单 §1.9）
+- **Bw345-F2**：B10 Linux 复跑 bench 并刷新数字（放到最后、审计侧 box；`docs/bench.md` 页头已注明现有数字测于 `df904f8` 固定窗口时期）
+
+---
+
 ## 审计修复轮（依据《LinkForge-P0-P3-内审报告》，2026-10-24）
 
 审计结论：P0–P3 基线带条件通过；建议开 P4 前先修 M1。本轮处置如下。
