@@ -66,8 +66,8 @@ public class PhishingPolicy {
 
     /** Reload the blocklist file now; also the scheduled entry point. Public so ITs
      * can drive it deterministically instead of sleeping a reload interval. */
-    @Scheduled(fixedDelayString = "${linkforge.phishing.reload-interval:30s}",
-            initialDelayString = "${linkforge.phishing.reload-interval:30s}")
+    @Scheduled(fixedDelayString = "${linkforge.phishing.reload-interval-ms:30000}",
+            initialDelayString = "${linkforge.phishing.reload-interval-ms:30000}")
     public void reload() {
         if (!fileConfigured()) {
             return;

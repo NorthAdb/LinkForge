@@ -46,7 +46,8 @@ public class LinkForgeProperties {
         /** Optional file: one domain per line, # comments, "!warn " prefix = warn level;
          * hot-reloaded by mtime. Empty = not loaded. */
         private String blocklistFile = "";
-        private java.time.Duration reloadInterval = java.time.Duration.ofSeconds(30);
+        /** @Scheduled reads millis (its placeholder parsing knows no Boot duration style). */
+        private long reloadIntervalMs = 30000;
         /** Create/update rejects userinfo targets (https://user@host); existing rows only warn. */
         private boolean rejectUserinfo = true;
     }

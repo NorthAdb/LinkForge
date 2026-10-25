@@ -46,7 +46,7 @@ class PhishingGateIT extends AbstractIntegrationTest {
         registry.add("linkforge.phishing.block-domains", () -> "blocked.invalid");
         registry.add("linkforge.phishing.warn-domains", () -> "warn.invalid");
         registry.add("linkforge.phishing.blocklist-file", () -> BLOCKLIST.toString());
-        registry.add("linkforge.phishing.reload-interval", () -> "600s");
+        registry.add("linkforge.phishing.reload-interval-ms", () -> "600000");
         registry.add("linkforge.rate-limit.key-prefix", () -> "linkforge:rl:it-phish:");
         registry.add("linkforge.rate-limit.register-max", () -> "1000");
         registry.add("linkforge.rate-limit.create-max", () -> "200");

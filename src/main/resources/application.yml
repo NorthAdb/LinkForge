@@ -174,7 +174,7 @@ linkforge:
     block-domains: ${LINKFORGE_PHISHING_BLOCK_DOMAINS:}
     warn-domains: ${LINKFORGE_PHISHING_WARN_DOMAINS:}
     blocklist-file: ${LINKFORGE_PHISHING_BLOCKLIST_FILE:}
-    reload-interval: ${LINKFORGE_PHISHING_RELOAD_INTERVAL:30s}
+    reload-interval-ms: ${LINKFORGE_PHISHING_RELOAD_INTERVAL:30000}
     reject-userinfo: ${LINKFORGE_PHISHING_REJECT_USERINFO:true}
   link-access:
     # B3: unlock cookie TTL and brute-force windows (rate limit runs before BCrypt)
