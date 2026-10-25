@@ -4,7 +4,7 @@
 #   2. stops RabbitMQ -> M redirects must all stay 302 and park as PENDING in lf_outbox
 #   3. starts RabbitMQ -> relay delivers; aggregate, consumer-written detail and UV converge
 # Proves the pre-A7 story ("sync off + MQ down = clicks lost") is gone.
-# Requires: compose stack up, built jar (target/linkforge-1.0.0.jar), .env.
+# Requires: compose stack up, built jar (target/linkforge-*.jar, newest wins), .env.
 # Env: M (default 10), APP_PORT (default 8082).
 set -u
 cd "$(dirname "$0")/.."
@@ -12,7 +12,7 @@ cd "$(dirname "$0")/.."
 M="${M:-10}"
 APP_PORT="${APP_PORT:-8082}"
 BASE_URL="http://localhost:$APP_PORT"
-JAR="target/linkforge-1.0.0.jar"
+JAR="$(ls -1 target/linkforge-*.jar 2>/dev/null | sort -V | tail -1)"
 
 fail() { echo "OUTBOX DRILL FAIL: $1"; exit 1; }
 json_str() { grep -o "\"$1\":\"[^\"]*\"" | head -1 | sed "s/\"$1\":\"//;s/\"$//"; }
