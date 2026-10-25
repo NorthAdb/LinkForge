@@ -118,12 +118,16 @@ class PhishingGateIT extends AbstractIntegrationTest {
 
     @Test
     void redirectOfWarnRowShowsInterstitial() throws Exception {
-        String code = seedWithTarget("https://warn.invalid/?q=<script>\"x");
+        // Raw < > " cannot pass isRenderableUrl (410) — URI.create rejects them — so the
+        // escaping proof uses the HTML-dangerous chars that ARE legal in a URI: ' and &.
+        String code = seedWithTarget("https://warn.invalid/?q='quoted'&r=2");
         var resp = get("/r/" + code, null);
         assertEquals(200, resp.getStatusCode().value(), resp.getBody());
         assertNull(resp.getHeaders().getLocation());
-        assertTrue(resp.getBody().contains("&lt;script&gt;"), "target must be escaped: " + resp.getBody());
-        assertFalse(resp.getBody().contains("<script>"), "no raw script may leak");
+        assertTrue(resp.getBody().contains("&#39;quoted&#39;"), "single quotes must be escaped: " + resp.getBody());
+        assertFalse(resp.getBody().contains("'quoted'"), "no raw quote may leak");
+        assertTrue(resp.getBody().contains("&amp;r=2"), "& must be escaped");
+        assertFalse(resp.getBody().contains("&r=2"), "no raw ampersand may leak");
         assertTrue(resp.getBody().contains("/r/" + code + "?lf_continue=1"), "one explicit continue link");
         assertEquals("no-referrer", resp.getHeaders().getFirst("Referrer-Policy"));
         assertNotNull(resp.getHeaders().getFirst("Content-Security-Policy"));
