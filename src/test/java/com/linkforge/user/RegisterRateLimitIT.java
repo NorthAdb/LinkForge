@@ -11,6 +11,8 @@ import org.springframework.test.context.ActiveProfiles;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "linkforge.rate-limit.key-prefix=linkforge:rl:it-rl:",
@@ -42,5 +44,9 @@ class RegisterRateLimitIT extends AbstractIntegrationTest {
                 "tenantName", unique("rlx"), "username", unique("u"), "password", "it-pass-123456")), null);
         assertEquals(429, limited.getStatusCode().value(), limited.getBody());
         assertEquals(429, body(limited).path("code").asInt());
+        String retryAfter = limited.getHeaders().getFirst("Retry-After");
+        assertNotNull(retryAfter, "429 must carry Retry-After");
+        int seconds = Integer.parseInt(retryAfter.trim());
+        assertTrue(seconds >= 1 && seconds <= 10, "Retry-After " + seconds + " outside [1, 10]");
     }
 }
