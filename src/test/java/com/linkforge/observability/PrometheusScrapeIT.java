@@ -51,6 +51,9 @@ class PrometheusScrapeIT extends AbstractIntegrationTest {
     @Autowired
     private JdbcTemplate jdbc;
 
+    @Autowired
+    private com.linkforge.link.support.UrlLocalCache urlLocalCache;
+
     private ResponseEntity<String> scrape(String authorization) {
         HttpHeaders headers = new HttpHeaders();
         if (authorization != null) {
@@ -85,6 +88,9 @@ class PrometheusScrapeIT extends AbstractIntegrationTest {
     void exportCarriesTheNewMetrics() throws Exception {
         String token = registerForToken();
         String code = createLink(token, "https://example.com/prom-" + unique(""));
+        // create() wrote L1+L2, so a plain GET never reaches Redis — invalidate L1 to
+        // force one L2 round-trip so the l2 counter exists in the export
+        urlLocalCache.invalidate(code);
         assertEquals(302, get("/r/" + code, null).getStatusCode().value());
 
         String body = scrape("Bearer " + TOKEN).getBody();
@@ -106,8 +112,16 @@ class PrometheusScrapeIT extends AbstractIntegrationTest {
         assertEquals(302, get("/r/" + code, null).getStatusCode().value());
         String body = scrape("Bearer " + TOKEN).getBody();
         assertNotNull(body);
-        assertFalse(body.contains(code), "the short code must never appear in the export");
-        assertFalse(body.contains(secret), "request-level values must never appear");
+        assertFalse(body.contains(code),
+                "the short code must never appear in the export, saw: "
+                        + window(body, code));
+        assertFalse(body.contains(secret),
+                "request-level values must never appear, saw: " + window(body, secret));
+    }
+
+    private static String window(String body, String needle) {
+        int at = body.indexOf(needle);
+        return at < 0 ? "(absent)" : body.substring(Math.max(0, at - 60), Math.min(body.length(), at + 40));
     }
 
     @Test

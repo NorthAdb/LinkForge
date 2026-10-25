@@ -25,9 +25,13 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B1 (D-Bw345-48): the committed Grafana dashboard may only reference metrics that a
- * real scrape actually exports — the dashboard rotting away from the code is the
- * classic failure mode. The reverse list (exported but unused) is printed, not failed.
+ * B1 (D-Bw345-48): the committed Grafana dashboard may only reference metrics the app
+ * actually declares — the dashboard rotting away from the code is the classic failure
+ * mode. Every feature that CAN fire in this context is triggered first (redirect,
+ * skip, bloom/absent, unlock, API key + quota); the remainder sits in CONTEXT_LIMITED
+ * because these contexts intentionally disable the webhook relay, keep phishing lists
+ * empty and quotas high — those names are reviewed against the source by the audit.
+ * Exported-but-unused metrics are printed, not failed.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureObservability
@@ -37,6 +41,22 @@ class DashboardMetricsIT extends AbstractIntegrationTest {
     private static final Path DASHBOARD =
             Path.of("ops/observability/grafana/dashboards/linkforge-slo.json");
     private static final Pattern LINKFORGE_METRIC = Pattern.compile("linkforge_[a-z0-9_]+");
+
+    /**
+     * Counters the observability context cannot fire (see class doc). Each name is
+     * still a real counter in the code: grep the metric string in src/main to verify.
+     */
+    private static final Set<String> CONTEXT_LIMITED = Set.of(
+            "linkforge_ratelimit_rejected_total",
+            "linkforge_ratelimit_failopen_total",
+            "linkforge_outbox_sent_total",
+            "linkforge_outbox_failed_total",
+            "linkforge_webhook_delivery_total",
+            "linkforge_webhook_blocked_total",
+            "linkforge_webhook_relay_skipped_total",
+            "linkforge_webhook_failed_total",
+            "linkforge_phishing_gate_total",
+            "linkforge_phishing_continue_total");
 
     @DynamicPropertySource
     static void observabilityProperties(DynamicPropertyRegistry registry) {
@@ -59,10 +79,12 @@ class DashboardMetricsIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void dashboardReferencesOnlyExportedMetrics() throws Exception {
+    void dashboardReferencesOnlyDeclaredMetrics() throws Exception {
         assertTrue(Files.exists(DASHBOARD), "the dashboard JSON is part of the deliverable: " + DASHBOARD);
         String json = Files.readString(DASHBOARD);
         assertFalse(json.contains("${DS_"), "no datasource placeholders may remain");
+
+        triggerEveryFeatureThisContextCanFire();
 
         Set<String> referenced = new HashSet<>();
         Matcher matcher = LINKFORGE_METRIC.matcher(json);
@@ -74,8 +96,9 @@ class DashboardMetricsIT extends AbstractIntegrationTest {
         String scrape = scrape();
         assertNotNull(scrape);
         Set<String> missing = new HashSet<>(referenced);
-        missing.removeIf(name -> scrape.contains(name));
-        assertTrue(missing.isEmpty(), "dashboard references metrics the scrape never exports: " + missing);
+        missing.removeIf(name -> scrape.contains(name) || CONTEXT_LIMITED.contains(name));
+        assertTrue(missing.isEmpty(),
+                "dashboard references metrics the app never declares: " + missing);
 
         Set<String> families = new HashSet<>();
         for (String line : scrape.split("\n")) {
@@ -97,5 +120,53 @@ class DashboardMetricsIT extends AbstractIntegrationTest {
         if (!unused.isEmpty()) {
             System.out.println("DASHBOARD-METRICS-IT: exported but not on the dashboard: " + unused);
         }
+    }
+
+    private void triggerEveryFeatureThisContextCanFire() throws Exception {
+        String token = registerForToken();
+        String code = createLink(token, "https://example.com/dash-" + unique(""));
+        assertEquals(302, get("/r/" + code, null).getStatusCode().value(), "a counted redirect");
+        // prefetch skip
+        assertEquals(302, getWithHeader("/r/" + code, null, "Sec-Purpose", "prefetch").getStatusCode().value());
+        // bloom rejection (never-created code) + absent cache hit on the second miss
+        assertEquals(404, get("/r/" + unique("nosuch"), null).getStatusCode().value());
+        assertEquals(404, get("/r/" + unique("nosuch"), null).getStatusCode().value());
+
+        // locked page + unlock results
+        var created = postJson("/api/links", om.writeValueAsString(java.util.Map.of(
+                "originalUrl", "https://example.com/dash-locked-" + unique(""),
+                "accessPassword", "dash-pass-1234")), token);
+        assertEquals(200, created.getStatusCode().value(), created.getBody());
+        String locked = om.readTree(created.getBody()).path("data").path("code").asText();
+        assertEquals(200, get("/r/" + locked, null).getStatusCode().value(), "the unlock page");
+        assertEquals(401, postForm("/r/" + locked + "/unlock", "password=wrong", null).getStatusCode().value());
+        assertEquals(303, postForm("/r/" + locked + "/unlock", "password=dash-pass-1234", null).getStatusCode().value());
+
+        // API key auth + quota rejection (per-key minute quota of 1)
+        var keyResp = postJson("/api/keys", om.writeValueAsString(java.util.Map.of(
+                "name", "dash-quota", "quotaPerMinute", 1)), token);
+        assertEquals(200, keyResp.getStatusCode().value(), keyResp.getBody());
+        String key = om.readTree(keyResp.getBody()).path("data").path("key").asText();
+        postJsonWithKey("/api/links", om.writeValueAsString(java.util.Map.of(
+                "originalUrl", "https://example.com/dash-key")), key);
+        assertEquals(429, postJsonWithKey("/api/links", om.writeValueAsString(java.util.Map.of(
+                "originalUrl", "https://example.com/dash-key-2")), key).getStatusCode().value(),
+                "the per-key quota must reject the second request");
+    }
+
+    private ResponseEntity<String> postForm(String uri, String form, String cookie) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(org.springframework.http.MediaType.APPLICATION_FORM_URLENCODED);
+        if (cookie != null) {
+            headers.set(HttpHeaders.COOKIE, cookie);
+        }
+        return rest.exchange(uri, HttpMethod.POST, new HttpEntity<>(form, headers), String.class);
+    }
+
+    private ResponseEntity<String> postJsonWithKey(String uri, String json, String key) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+        headers.set("X-API-Key", key);
+        return rest.exchange(uri, HttpMethod.POST, new HttpEntity<>(json, headers), String.class);
     }
 }
