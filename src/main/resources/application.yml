@@ -30,6 +30,11 @@ management:
   metrics:
     tags:
       application: linkforge                      # B1: common tag on every meter
+    enable:
+      # the only instrumented client in this app is the test harness's RestTemplate
+      # (the webhook relay uses a raw java.net.http.HttpClient); client-side meters
+      # would record raw request paths of tests into the export — off for good
+      http.client.requests: false
     distribution:
       percentiles-histogram:
         # only this meter gets buckets — the redirect SLO panel needs the latency distribution
