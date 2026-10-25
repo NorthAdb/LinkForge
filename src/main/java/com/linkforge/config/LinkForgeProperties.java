@@ -4,6 +4,8 @@ import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
+
 @Data
 @Component
 @ConfigurationProperties(prefix = "linkforge")
@@ -19,6 +21,7 @@ public class LinkForgeProperties {
     private L1 l1 = new L1();
     private ApiKey apiKey = new ApiKey();
     private Webhook webhook = new Webhook();
+    private ClickFilter clickFilter = new ClickFilter();
 
     @Data
     public static class Jwt {
@@ -117,6 +120,23 @@ public class LinkForgeProperties {
         private int requestTimeoutMs = 5000;
         /** IT-only escape hatch; must never be true in prod (D-Bw2-15). */
         private boolean allowPrivateTargets = false;
+    }
+
+    @Data
+    public static class ClickFilter {
+        /** B2: prefetch headers and named preview bots get the normal 302 but record no click. */
+        private boolean enabled = true;
+        private boolean prefetchHeadersEnabled = true;
+        /**
+         * Lowercase substrings matched against User-Agent; the env value replaces the whole
+         * list. Keep out curl/wget/java//okhttp and the generic "bot" — they would swallow
+         * ITs, drill scripts and real tooling (D-Bw345-3).
+         */
+        private List<String> botUaTokens = List.of(
+                "slackbot", "slack-imgproxy", "facebookexternalhit", "facebookcatalog", "twitterbot",
+                "telegrambot", "whatsapp", "discordbot", "linkedinbot", "skypeuripreview",
+                "pinterestbot", "redditbot", "embedly", "iframely", "googlebot", "bingbot",
+                "bingpreview", "applebot", "yandexbot", "duckduckbot", "baiduspider");
     }
 
     @Data

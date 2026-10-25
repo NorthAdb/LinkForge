@@ -172,6 +172,10 @@ bash scripts/outbox-drill.sh  # sync 关 + 断 MQ → 恢复追平（A7 硬验�
 
 跳转路径缓存键：`linkforge:code:{code}`。更新/禁用会主动删除该键，下一次跳转回源后重建。  
 
+## 非人点击（B2：预取与预览 bot 照常 302 但不计）
+
+浏览器/IM 的**预取请求**（`Sec-Purpose: prefetch` 及 `prefetch;prerender`、旧式 `Purpose`/`X-Purpose`/`X-Moz`）与**具名预览 bot**（Slackbot、facebookexternalhit、Twitterbot、TelegramBot、WhatsApp、Discordbot、Googlebot 等 21 个默认 token，可配置）照常得到 302 与相同 `Location`，但**全链路不计**：无明细、无 UV、无聚合、无 Webhook、不加 `linkforge.redirects`，只计 `linkforge.click.skipped{reason=prefetch|preview_bot}`（tag 仅这两个有界值，命中的 token 只进 DEBUG 日志）。判定点在跳转限流**之后**——预览 bot 照样消耗按 IP 的跳转限流；跳过名单是**窄名单**：`curl`/`wget`/`java`/`okhttp`、泛词 `bot` 与 App 内置浏览器（FBAN/Instagram/MicroMessenger 等，真人）**都不在名单、照常计数**（名单外自动化 UA 仍进 `device=bot` 维度桶，可在 breakdown 剔除）。配置：`LINKFORGE_CLICK_FILTER_ENABLED` / `LINKFORGE_CLICK_FILTER_PREFETCH_ENABLED` / `LINKFORGE_CLICK_FILTER_BOT_UA_TOKENS`（逗号分隔**整表覆盖**）。**诚实边界**：UA 可伪造，本过滤只挡「自报家门」的预览 bot；浏览器若把预取到的 302 直接用于真实导航，这次真实点击会**少计**；名单外爬虫仍计数；`enabled=false` 恢复旧口径。
+
 ## 点击统计管道（A7 Transactional Outbox）
 
 跳转产生一次点击后，在**同一 DB 事务**内写入：
@@ -314,7 +318,7 @@ curl -X POST -H "X-API-Key: lfk_xxxxxxxx_xxx" -H "Content-Type: application/json
 - `LINKFORGE_TRUST_XFF` 是否信任 X-Forwarded-For（默认 false，仅在可信反代后开启）
 - 限流覆盖说明：注册按 IP、创建按用户（**含自定义短码创建，共用 POST /api/links 的限额**）；CSV 导出与统计查询属管理 API（JWT 必需、租户隔离），未单独限流，导出有 1 万行上限保护
 - `/actuator/health` 展示组件细节（db / redis / rabbit / diskSpace），依赖 DOWN 时整体 503
-- `/actuator/metrics/**` 暴露业务计数器（`linkforge.links.created`、`linkforge.redirects`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`、`linkforge.ratelimit.failopen{reason=error|null}`、`linkforge.bloom.rejected` / `linkforge.bloom.loaded` / `linkforge.bloom.loadfailed`、`linkforge.singleflight.loads` / `linkforge.singleflight.shared` / `linkforge.singleflight.timeout`、`linkforge.cache.absent.hit` / `linkforge.cache.absent.put`、`linkforge.l1.hit` / `linkforge.l1.miss`、`linkforge.apikey.auth{result=ok|invalid|revoked|ambiguous}` / `linkforge.apikey.quota.rejected{window}`、`linkforge.webhook.delivery{result}` / `linkforge.webhook.enqueued` / `linkforge.webhook.blocked` / `linkforge.webhook.enqueue.failed{reason}` / `linkforge.webhook.relay.skipped{reason}`、`linkforge.outbox.failed`），需 Bearer Token
+- `/actuator/metrics/**` 暴露业务计数器（`linkforge.links.created`、`linkforge.redirects`、`linkforge.click.skipped{reason=prefetch|preview_bot}`、`linkforge.ratelimit.rejected{entry=register|create|redirect}`、`linkforge.ratelimit.failopen{reason=error|null}`、`linkforge.bloom.rejected` / `linkforge.bloom.loaded` / `linkforge.bloom.loadfailed`、`linkforge.singleflight.loads` / `linkforge.singleflight.shared` / `linkforge.singleflight.timeout`、`linkforge.cache.absent.hit` / `linkforge.cache.absent.put`、`linkforge.l1.hit` / `linkforge.l1.miss`、`linkforge.apikey.auth{result=ok|invalid|revoked|ambiguous}` / `linkforge.apikey.quota.rejected{window}`、`linkforge.webhook.delivery{result}` / `linkforge.webhook.enqueued` / `linkforge.webhook.blocked` / `linkforge.webhook.enqueue.failed{reason}` / `linkforge.webhook.relay.skipped{reason}`、`linkforge.outbox.failed`），需 Bearer Token
 - **公网部署**：本地 Demo 一律默认 profile（全开放）；对外部署设 `SPRING_PROFILES_ACTIVE=prod` 一键收紧——health 细节转 `when_authorized`、springdoc 与静态控制台关闭、文档/控制台路径在过滤器层 denyAll（见 application.yml prod 段与 ProdProfileIT）
 
 ## 架构

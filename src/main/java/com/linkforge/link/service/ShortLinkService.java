@@ -17,6 +17,7 @@ import com.linkforge.link.dto.UpdateShortLinkRequest;
 import com.linkforge.link.entity.ShortLink;
 import com.linkforge.link.mapper.ShortLinkMapper;
 import com.linkforge.link.support.CodeBloomFilter;
+import com.linkforge.link.support.ClickFilter;
 import com.linkforge.link.support.CsvFormat;
 import com.linkforge.link.support.LinkValidations;
 import com.linkforge.link.support.ShortCodes;
@@ -39,6 +40,7 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -66,6 +68,7 @@ public class ShortLinkService {
     private final SingleFlight<String, ShortLink> singleFlight;
     private final ShortLinkRowLoader rowLoader;
     private final UrlLocalCache urlLocalCache;
+    private final ClickFilter clickFilter;
 
     private final ScheduledExecutorService evictor = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "cache-evictor");
@@ -302,12 +305,20 @@ public class ShortLinkService {
     }
 
     /**
-     * Resolve redirect URL: Redis first, then MySQL. The DB row is always read so a
-     * disabled or expired link is rejected even while a stale cache entry exists.
-     * Records the click synchronously; optionally publishes to MQ when enabled.
+     * Resolve redirect URL for a real navigation: Redis first, then MySQL. The DB row is
+     * always read so a disabled or expired link is rejected even while a stale cache
+     * entry exists. Prefetch/preview-bot jumps (B2) return the same 302 but record
+     * nothing; everything else records the click synchronously and optionally publishes
+     * to MQ when enabled.
      */
     public String resolveAndRecord(String code, HttpServletRequest request) {
         ResolvedRedirect resolved = resolveTarget(code, request);
+        Optional<ClickFilter.SkipReason> skip = clickFilter.classify(request);
+        if (skip.isPresent()) {
+            // Same 302, same Location; nothing is recorded downstream (HEAD contract).
+            meterRegistry.counter("linkforge.click.skipped", "reason", skip.get().tag()).increment();
+            return resolved.url();
+        }
         clickRecordService.recordClick(resolved.link(), request);
         meterRegistry.counter("linkforge.redirects").increment();
         return resolved.url();

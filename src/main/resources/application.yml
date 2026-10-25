@@ -161,6 +161,13 @@ linkforge:
     # Honor X-Forwarded-For only when a trusted reverse proxy fronts the app.
     trust-xff: ${LINKFORGE_TRUST_XFF:false}
     key-prefix: ${LINKFORGE_RATELIMIT_KEY_PREFIX:linkforge:rl:}
+  click-filter:
+    # B2: prefetch headers and named preview bots get the normal 302 but record no click.
+    enabled: ${LINKFORGE_CLICK_FILTER_ENABLED:true}
+    prefetch-headers-enabled: ${LINKFORGE_CLICK_FILTER_PREFETCH_ENABLED:true}
+    # comma-separated, whole-list override; keep out curl/wget/java/ generic bot tokens
+    # (they would swallow drill scripts and integration tests, D-Bw345-3)
+    bot-ua-tokens: ${LINKFORGE_CLICK_FILTER_BOT_UA_TOKENS:slackbot,slack-imgproxy,facebookexternalhit,facebookcatalog,twitterbot,telegrambot,whatsapp,discordbot,linkedinbot,skypeuripreview,pinterestbot,redditbot,embedly,iframely,googlebot,bingbot,bingpreview,applebot,yandexbot,duckduckbot,baiduspider}
 
 logging:
   level:
