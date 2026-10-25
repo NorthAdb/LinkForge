@@ -23,7 +23,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * B9: a local domain blocklist/warnlist gates create/update and every redirect.
  * BLOCK = hard 403 interstitial with no target; WARN = 200 interstitial showing the
  * escaped target, ?lf_continue=1 proceeds (and that 302 counts). Rows that predate a
- * list change are re-checked at redirect time (inserted straight into the DB here).
+ * list change are re-checked at redirect time — seeded through the API (so Bloom knows
+ * the code) with the target rewritten straight in the DB.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
@@ -55,10 +56,12 @@ class PhishingGateIT extends AbstractIntegrationTest {
     @Autowired
     private JdbcTemplate jdbc;
 
-    private String insertRow(String url) {
-        String code = "bl" + unique("").substring(0, 8);
-        jdbc.update("INSERT INTO lf_short_link (tenant_id, code, original_url, title, status) "
-                + "VALUES (999999, ?, ?, 'phish-it', 1)", code, url);
+    /** Creates a link through the API, then rewrites its target in the DB — the row is
+     * Bloom-visible and its URL bypasses create-time validation. */
+    private String seedWithTarget(String finalUrl) throws Exception {
+        String token = registerForToken();
+        String code = createLink(token, "https://example.com/seed-" + unique(""));
+        jdbc.update("UPDATE lf_short_link SET original_url = ? WHERE code = ?", finalUrl, code);
         return code;
     }
 
@@ -82,7 +85,7 @@ class PhishingGateIT extends AbstractIntegrationTest {
         String token = registerForToken();
         var resp = postJson("/api/links",
                 om.writeValueAsString(java.util.Map.of("originalUrl", "https://warn.invalid/ok")), token);
-        assertEquals(201, resp.getStatusCode().value(), resp.getBody());
+        assertEquals(200, resp.getStatusCode().value(), resp.getBody());
     }
 
     @Test
@@ -98,12 +101,12 @@ class PhishingGateIT extends AbstractIntegrationTest {
         String token = registerForToken();
         var resp = postJson("/api/links",
                 om.writeValueAsString(java.util.Map.of("originalUrl", "https://example.com/path@x")), token);
-        assertEquals(201, resp.getStatusCode().value(), resp.getBody());
+        assertEquals(200, resp.getStatusCode().value(), resp.getBody());
     }
 
     @Test
     void redirectOfBlockedRowIsHardBlocked() throws Exception {
-        String code = insertRow("https://x.blocked.invalid/target");
+        String code = seedWithTarget("https://x.blocked.invalid/target");
         var resp = get("/r/" + code, null);
         assertEquals(403, resp.getStatusCode().value(), resp.getBody());
         assertNull(resp.getHeaders().getLocation(), "a blocked jump must not carry a Location");
@@ -115,12 +118,13 @@ class PhishingGateIT extends AbstractIntegrationTest {
 
     @Test
     void redirectOfWarnRowShowsInterstitial() throws Exception {
-        String code = insertRow("https://warn.invalid/?q=<script>\"x");
+        String code = seedWithTarget("https://warn.invalid/?q=<script>\"x");
         var resp = get("/r/" + code, null);
         assertEquals(200, resp.getStatusCode().value(), resp.getBody());
         assertNull(resp.getHeaders().getLocation());
         assertTrue(resp.getBody().contains("&lt;script&gt;"), "target must be escaped: " + resp.getBody());
         assertFalse(resp.getBody().contains("<script>"), "no raw script may leak");
+        assertTrue(resp.getBody().contains("/r/" + code + "?lf_continue=1"), "one explicit continue link");
         assertEquals("no-referrer", resp.getHeaders().getFirst("Referrer-Policy"));
         assertNotNull(resp.getHeaders().getFirst("Content-Security-Policy"));
         assertEquals(0, clickRows(code), "the interstitial itself records no click");
@@ -132,7 +136,7 @@ class PhishingGateIT extends AbstractIntegrationTest {
 
     @Test
     void continueParameterSkipsOnlyTheWarnGateAndCounts() throws Exception {
-        String code = insertRow("https://warn.invalid/continue");
+        String code = seedWithTarget("https://warn.invalid/continue");
         long before = clickRows(code);
         var resp = get("/r/" + code + "?lf_continue=1", null);
         assertEquals(302, resp.getStatusCode().value(), resp.getBody());
@@ -141,7 +145,7 @@ class PhishingGateIT extends AbstractIntegrationTest {
 
     @Test
     void headOfBlockedRowIs403() throws Exception {
-        String code = insertRow("https://x.blocked.invalid/head");
+        String code = seedWithTarget("https://x.blocked.invalid/head");
         var resp = head("/r/" + code);
         assertEquals(403, resp.getStatusCode().value());
         assertNull(resp.getHeaders().getLocation());
@@ -149,7 +153,7 @@ class PhishingGateIT extends AbstractIntegrationTest {
 
     @Test
     void gateRunsBeforeTheBotSkip() throws Exception {
-        String code = insertRow("https://x.blocked.invalid/bot");
+        String code = seedWithTarget("https://x.blocked.invalid/bot");
         var resp = getWithHeader("/r/" + code, null, "User-Agent",
                 "Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)");
         assertEquals(403, resp.getStatusCode().value(),
@@ -161,6 +165,6 @@ class PhishingGateIT extends AbstractIntegrationTest {
         String token = registerForToken();
         var resp = postJson("/api/links",
                 om.writeValueAsString(java.util.Map.of("originalUrl", "https://evil.example.com/just-a-name")), token);
-        assertEquals(201, resp.getStatusCode().value(), resp.getBody());
+        assertEquals(200, resp.getStatusCode().value(), resp.getBody());
     }
 }
