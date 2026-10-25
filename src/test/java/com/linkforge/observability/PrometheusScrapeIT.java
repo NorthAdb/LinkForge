@@ -121,7 +121,13 @@ class PrometheusScrapeIT extends AbstractIntegrationTest {
 
     private static String window(String body, String needle) {
         int at = body.indexOf(needle);
-        return at < 0 ? "(absent)" : body.substring(Math.max(0, at - 60), Math.min(body.length(), at + 40));
+        if (at < 0) {
+            return "(absent)";
+        }
+        int lineStart = body.lastIndexOf('\n', at);
+        int lineEnd = body.indexOf('\n', at);
+        return "FULL LINE: " + body.substring(lineStart < 0 ? 0 : lineStart + 1,
+                lineEnd < 0 ? body.length() : lineEnd);
     }
 
     @Test
