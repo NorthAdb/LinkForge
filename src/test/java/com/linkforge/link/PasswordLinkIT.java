@@ -118,9 +118,9 @@ class PasswordLinkIT extends AbstractIntegrationTest {
     @Test
     void setAndClearTogetherIsRejected() throws Exception {
         String token = registerForToken();
-        var resp = postJson("/api/links",
+        String code = createLink(token, "https://example.org/pw-both");
+        var resp = patchJson("/api/links/" + code,
                 om.writeValueAsString(java.util.Map.of(
-                        "originalUrl", "https://example.org/pw-both",
                         "accessPassword", "s3cret-pass", "clearAccessPassword", true)), token);
         assertEquals(400, resp.getStatusCode().value(), resp.getBody());
     }
