@@ -38,11 +38,11 @@ public class HttpUriTagAllowList {
                 if (!"http.server.requests".equals(id.getName())) {
                     return id;
                 }
-                Tag uri = id.getTag("uri");
-                if (uri == null || ALLOWED.contains(uri.getValue())) {
+                String uri = id.getTag("uri");
+                if (uri == null || ALLOWED.contains(uri)) {
                     return id;
                 }
-                return id.replaceTag("uri", "UNKNOWN");
+                return id.withTag(Tag.of("uri", "UNKNOWN"));
             }
         };
     }
