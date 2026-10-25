@@ -2,7 +2,7 @@
 
 > 执行者：GLM（zcode + pstack poteto-mode），按《LinkForge 实施与验收方案》顺序推进。
 > 本文件是审计核对的主要证据：每阶段验收勾选、真实执行的命令与输出摘要、决策记录。
-> **当前 main tip**：B 波 2 修复轮终态＝合并 `bd24ab0`（M1/S1/S2 + N1-N11，155 例全绿）+ docs 收口 `751a46a2de1f6a2c203ec028e944cd22f27ffa66`（其上至多一个纯 docs 钉子提交；审计以 `git rev-parse HEAD` 为准，`751a46a2de1f6a2c203ec028e944cd22f27ffa66` 必为其祖先）。
+> **当前 main tip**：B 波 3+4+5 合并轮终态＝合并 `b700992015508632331fe676996991fc180d2cfc`（B6/B2/B9/B3/B1，207 例全绿；分支终态 run 40166329511、main 合并 run 40166609931，见「B 档波 3+4+5」章），其上至多一个纯 docs 钉子提交；审计以 `git rev-parse HEAD` 为准，`b700992015508632331fe676996991fc180d2cfc` 必为其祖先。
 > **历史快照说明**：下文 P0–P5 / R2–R4 各节及其引用的 SHA 是**当时的历史快照，非当前 tip**；当前轮次证据以「深化」小节为准。
 > 本轮边界：P0–P5、v1.0.0 与深化 A2/A3/B12、A6–A10、B 档波 1–2（含修复轮，终态 `3fe1fb1`，155 例全绿、PASS_WITH_NITS）均已交付；本轮为 **B 档波 3+4+5 合并轮：B6 滑窗限流、B2 非人点击不计、B9 钓鱼门禁、B3 密码短链、B1 Prometheus+Grafana**（B10 压测待做、放到最后，Bw345-F2；Bw2fix-N9 改口），交接单 `记录追踪/05-阶段交接/LinkForge-phase-B-wave345-handoff.md`（Q1–Q14 全部拍板）。
 
@@ -1026,7 +1026,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 
 - **修复后例数**：surefire **86**（63+23：ClickFilterTest 6、TargetPolicyTest 7、LinkAccessTokenTest 6、RedisRateLimiterTest 重写 +4）＋ failsafe 默认 execution **119**（90+29：SlidingWindowRateLimiterIT 5、BotPrefetchClickIT 1、PhishingGateIT 10、PasswordLinkIT 7、PrometheusScrapeIT 5、DashboardMetricsIT 1）＋ `webhook-tz-it` fork **2** ＝ **合计 207 例全绿**（+52 vs 基线 155）；分支终态 run [40164727414](https://github.com/NorthAdb/LinkForge/actions/runs/40164727414) ✅
 - **连接预算**：新增 3 个上下文（默认组合×1＝SlidingWindowRateLimiterIT+PasswordLinkIT 共用；PhishingGateIT×1；PrometheusScrapeIT+DashboardMetricsIT 共用×1）→ 24 个常规（hikari 默认 10）+ 4 个收紧（各 4）→ 峰值 ≈ 24×10+4×4 = **256 < 500**，全绿即 `Too many connections`=0
-- **CI**：分支终态 run [40164727414](https://github.com/NorthAdb/LinkForge/actions/runs/40164727414) ✅（head `0c3420b`）；合 main 与 tip run 见下方钉子（合并后补记）
+- **CI**：分支终态 run [40166329511](https://github.com/NorthAdb/LinkForge/actions/runs/40166329511) ✅（head `5407fa4`，docs 收口）；main 合并 run [40166609931](https://github.com/NorthAdb/LinkForge/actions/runs/40166609931) ✅（head＝合并提交 `b700992`，即 tip）；tip run＝合并 run 同 SHA。钉子提交其上（见头部 tip 行）
 - **观测栈手验（本机 Compose，2026-10-25）**：`docker compose --profile observability up -d` → Prometheus `/api/v1/targets`＝`host.docker.internal:8080 **up**`；Grafana 看板自动 provision（uid `linkforge-slo`）、datasource `linkforge-prom` health OK；手工流量后三区截图入库：`docs/img/grafana-redirect-slo.png`（187KB）/`grafana-singleflight-outbox.png`（114KB）/`grafana-keys-gates-jvm.png`（137KB），全部 ≤300KB（Q13=A）。本机 3000 端口被无关进程占用，截图容器临时用 13000（compose 配置未动）；Grafana 挂载再次踩 MSYS 路径转换坑（`MSYS_NO_PATHCONV=1` 解）。截图为手工流量、非压测数字，图注=看板标题内嵌「Demo targets, not a production promise」
 - **快速手验对照**（交接 §4 命令）：prefetch/Slackbot 302 不计、curl 计 ✓（IT 同断言）；滑窗 Retry-After 递减 ✓（ApiKeyIT <60）；blocked 403/warn 中间页/continue 计数 ✓；密码解锁+清除立即生效+爆破 429 ✓；Prometheus 令牌三态+API Key 403+tag 有界 ✓——IT 全覆盖，交接 §4 为人工复验路径
 
