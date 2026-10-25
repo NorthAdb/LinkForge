@@ -156,8 +156,8 @@ class SlidingWindowRateLimiterIT extends AbstractIntegrationTest {
         assertTrue(third.retryAfterSeconds() >= 1 && third.retryAfterSeconds() <= 5);
 
         assertEquals(failOpensBefore, failOpenTotal(), "the sw: path must not fail open");
-        assertTrue("zset".equalsIgnoreCase(redis.type(key)),
-                "the sw: key must be a ZSET, got " + redis.type(key));
+        assertEquals(org.springframework.data.redis.connection.DataType.ZSET, redis.type(key),
+                "the sw: key must be a ZSET");
         Long pttl = redis.getExpire(key, TimeUnit.MILLISECONDS);
         assertTrue(pttl != null && pttl > 0 && pttl <= 5000, "PTTL " + pttl + " not within the window");
     }
