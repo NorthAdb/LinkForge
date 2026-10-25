@@ -414,9 +414,9 @@ public class ShortLinkService {
             cacheUrl(code, originalUrl);
         }
 
-        // B9 gate on the URL this request would actually jump to. The row was read
-        // above, so a list change applies to pre-existing rows immediately.
-        TargetPolicy.Verdict verdict = phishingPolicy.evaluate(originalUrl, false);
+        // B9 gate on the ROW's target (row-authoritative, D-Bw345-21): a stale cache
+        // entry must never mask what the DB says the link points at today.
+        TargetPolicy.Verdict verdict = phishingPolicy.evaluate(link.getOriginalUrl(), false);
         if (verdict.action() == TargetPolicy.Action.BLOCK) {
             meterRegistry.counter("linkforge.phishing.gate", "action", "block", "stage", "redirect").increment();
             return new RedirectOutcome.Blocked();
@@ -426,7 +426,8 @@ public class ShortLinkService {
                 meterRegistry.counter("linkforge.phishing.continue").increment();
             } else {
                 meterRegistry.counter("linkforge.phishing.gate", "action", "warn", "stage", "redirect").increment();
-                return new RedirectOutcome.Warn(code, originalUrl, TargetPolicy.asciiHost(originalUrl));
+                return new RedirectOutcome.Warn(code, link.getOriginalUrl(),
+                        TargetPolicy.asciiHost(link.getOriginalUrl()));
             }
         }
         return new RedirectOutcome.Redirect(link, originalUrl);
