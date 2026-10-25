@@ -139,9 +139,13 @@ class PrometheusScrapeIT extends AbstractIntegrationTest {
     }
 
     private static boolean moreThan(String body, String metric, long min) {
+        // gauge samples export as `name{labels} value` — parse the trailing number
         return body.lines()
-                .filter(line -> line.startsWith(metric + " "))
-                .mapToLong(line -> (long) Double.parseDouble(line.substring(metric.length() + 1)))
+                .filter(line -> line.startsWith(metric + "{") || line.startsWith(metric + " "))
+                .mapToLong(line -> {
+                    String value = line.substring(line.lastIndexOf(' ') + 1);
+                    return (long) Double.parseDouble(value.trim());
+                })
                 .sum() >= min;
     }
 }

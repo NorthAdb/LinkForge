@@ -56,7 +56,12 @@ class DashboardMetricsIT extends AbstractIntegrationTest {
             "linkforge_webhook_relay_skipped_total",
             "linkforge_webhook_failed_total",
             "linkforge_phishing_gate_total",
-            "linkforge_phishing_continue_total");
+            "linkforge_phishing_continue_total",
+            "linkforge_singleflight_shared_total",
+            "linkforge_singleflight_timeout_total",
+            // a Bloom-negative 404 never reaches the DB, so the absent cache is never
+            // written in this context (only Bloom false positives would write it)
+            "linkforge_cache_absent_hit_total");
 
     @DynamicPropertySource
     static void observabilityProperties(DynamicPropertyRegistry registry) {
@@ -68,6 +73,9 @@ class DashboardMetricsIT extends AbstractIntegrationTest {
         registry.add("linkforge.rate-limit.create-max", () -> "200");
         registry.add("linkforge.rate-limit.redirect-max", () -> "1000");
     }
+
+    @Autowired
+    private com.linkforge.link.support.UrlLocalCache urlLocalCache;
 
     private String scrape() {
         HttpHeaders headers = new HttpHeaders();
@@ -128,8 +136,10 @@ class DashboardMetricsIT extends AbstractIntegrationTest {
         assertEquals(302, get("/r/" + code, null).getStatusCode().value(), "a counted redirect");
         // prefetch skip
         assertEquals(302, getWithHeader("/r/" + code, null, "Sec-Purpose", "prefetch").getStatusCode().value());
-        // bloom rejection (never-created code) + absent cache hit on the second miss
-        assertEquals(404, get("/r/" + unique("nosuch"), null).getStatusCode().value());
+        // L1 miss + L2 round-trip (create() wrote both caches)
+        urlLocalCache.invalidate(code);
+        assertEquals(302, get("/r/" + code, null).getStatusCode().value());
+        // bloom rejection (never-created code)
         assertEquals(404, get("/r/" + unique("nosuch"), null).getStatusCode().value());
 
         // locked page + unlock results
