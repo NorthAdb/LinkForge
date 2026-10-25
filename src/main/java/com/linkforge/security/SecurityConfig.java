@@ -76,11 +76,12 @@ public class SecurityConfig {
                             response.setContentType("application/json;charset=UTF-8");
                             response.getWriter().write("{\"code\":403,\"message\":\"forbidden\",\"data\":null}");
                         }))
-                // metrics scrape token first (it must see the raw Bearer before the JWT filter),
-                // then JWT, then the X-API-Key filter; either of the latter two may
-                // establish the SecurityContext. Both together is a 400 from the key filter.
-                .addFilterBefore(metricsScrapeTokenFilter, JwtAuthFilter.class)
+                // JWT gets its chain position first; the metrics scrape filter then slots
+                // in front of it (it must see the raw Bearer before the JWT filter), and
+                // the X-API-Key filter sits after — either of the latter two may establish
+                // the SecurityContext. Both together is a 400 from the key filter.
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterBefore(metricsScrapeTokenFilter, JwtAuthFilter.class)
                 .addFilterAfter(apiKeyAuthFilter, JwtAuthFilter.class);
         return http.build();
     }
