@@ -3,6 +3,7 @@ package com.linkforge.observability;
 import com.linkforge.AbstractIntegrationTest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -26,9 +27,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * B1: /actuator/prometheus is guarded by the dedicated scrape token (fail-closed when
  * unset), API keys stay 403, the export carries the new counters/gauges plus the
  * http.server.requests histogram, and no per-request value (code, URL, IP) leaks into
- * a tag.
+ * a tag. @AutoConfigureObservability re-enables metrics export — @SpringBootTest
+ * disables it by default (DisableObservabilityContextCustomizer), which would otherwise
+ * remove the endpoint bean from every test context.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@AutoConfigureObservability
 @ActiveProfiles("test")
 class PrometheusScrapeIT extends AbstractIntegrationTest {
 

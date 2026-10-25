@@ -32,6 +32,11 @@ public class MetricsScrapeTokenFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
+        // API-key requests fall through so ApiKeyAuthFilter can answer its clean 403
+        // (a key against actuator is a 403 by the B4 whitelist, never a 401)
+        if (request.getHeader(com.linkforge.security.ApiKeyAuthFilter.API_KEY_HEADER) != null) {
+            return true;
+        }
         return !request.getRequestURI().equals("/actuator/prometheus");
     }
 

@@ -2,6 +2,7 @@ package com.linkforge.observability;
 
 import com.linkforge.AbstractIntegrationTest;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -29,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * classic failure mode. The reverse list (exported but unused) is printed, not failed.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@AutoConfigureObservability
 @ActiveProfiles("test")
 class DashboardMetricsIT extends AbstractIntegrationTest {
 
