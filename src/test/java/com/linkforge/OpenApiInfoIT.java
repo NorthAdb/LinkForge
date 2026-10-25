@@ -25,6 +25,6 @@ class OpenApiInfoIT extends AbstractIntegrationTest {
         var resp = get("/v3/api-docs", null);
         assertEquals(200, resp.getStatusCode().value(), resp.getBody());
         assertEquals("LinkForge", body(resp).path("info").path("title").asText());
-        assertEquals("1.0.0", body(resp).path("info").path("version").asText());
+        assertEquals("2.0.0", body(resp).path("info").path("version").asText());
     }
 }

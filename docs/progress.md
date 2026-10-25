@@ -26,6 +26,9 @@
 | 深化 | A10 singleflight 防热点击穿 | feat/deepen-a10-singleflight | ✅ 完成（见「深化 A10 singleflight 防热点击穿」） |
 | 深化 | B 档波 1：B7 空值缓存+抖动 / B8 L1 | feat/deepen-b-wave1-b7b8 | ✅ 完成（见「B 档波 1：B7+B8」） |
 | 深化 | B 档波 2：B4 API Key / B5 Webhook | feat/deepen-b-wave2-b4b5 | ✅ 完成（见「B 档波 2：B4+B5」） |
+| 深化 | B 波 2 修复轮（M1/S1/S2 + nit） | fix/bw2-audit | ✅ 完成（见「B 波 2 修复轮」；补录索引，终态 `3fe1fb1`） |
+| 深化 | B 档波 3+4+5：B6/B2/B9/B3/B1 | feat/deepen-b-wave345 | ✅ 完成（见「B 档波 3+4+5 合并轮」；补录索引，合并 `b700992`） |
+| 发布 | v2.0.0（审计 4 小项 + 文档重写 + 发版） | feat/v2-release | ✅ 完成（见文末「v2.0.0 发布轮」；tag `v2.0.0`） |
 | P4 | 工程化（CI/bench/隔离/收紧） | feat/p4-engineering | ✅ 完成（见「P4 工程化」） |
 
 ## 环境与工具事实（审计人须知）
@@ -1025,8 +1028,8 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 ### 例数、连接预算与 CI
 
 - **修复后例数**：surefire **86**（63+23：ClickFilterTest 6、TargetPolicyTest 7、LinkAccessTokenTest 6、RedisRateLimiterTest 重写 +4）＋ failsafe 默认 execution **119**（90+29：SlidingWindowRateLimiterIT 5、BotPrefetchClickIT 1、PhishingGateIT 10、PasswordLinkIT 7、PrometheusScrapeIT 5、DashboardMetricsIT 1）＋ `webhook-tz-it` fork **2** ＝ **合计 207 例全绿**（+52 vs 基线 155）；分支终态 run [40164727414](https://github.com/NorthAdb/LinkForge/actions/runs/40164727414) ✅
-- **连接预算**：新增 3 个上下文（默认组合×1＝SlidingWindowRateLimiterIT+PasswordLinkIT 共用；PhishingGateIT×1；PrometheusScrapeIT+DashboardMetricsIT 共用×1）→ 24 个常规（hikari 默认 10）+ 4 个收紧（各 4）→ 峰值 ≈ 24×10+4×4 = **256 < 500**，全绿即 `Too many connections`=0
-- **CI**：分支终态 run [40166329511](https://github.com/NorthAdb/LinkForge/actions/runs/40166329511) ✅（head `5407fa4`，docs 收口）；main 合并 run [40166609931](https://github.com/NorthAdb/LinkForge/actions/runs/40166609931) ✅（head＝合并提交 `b700992`，即 tip）；tip run＝合并 run 同 SHA。钉子提交其上（见头部 tip 行）
+- **连接预算**：新增 3 个上下文（默认组合×1＝SlidingWindowRateLimiterIT+PasswordLinkIT 共用；PhishingGateIT×1；PrometheusScrapeIT+DashboardMetricsIT 共用×1）→ 24 个常规（hikari 默认 10）+ 4 个收紧（各 4）→ 峰值 ≈ 24×10+4×4 = **256**。**口径澄清（v2.0 发布轮审计 #4）**：256 是**推导值**——按「每个上下文的 Hikari 同时满池」这一最坏情形纸面相加，实际各上下文懒建连接、极少同时满载；真实天花板是共享 Testcontainers MySQL 的 `--max-connections=500`（`AbstractIntegrationTest`），需求侧 256 vs 配置侧 500，余量 244；全绿即 `Too many connections`=0
+- **CI**：分支终态 run [40166329511](https://github.com/NorthAdb/LinkForge/actions/runs/40166329511) ✅（head `5407fa4`，docs 收口）；main 合并 run [40166609931](https://github.com/NorthAdb/LinkForge/actions/runs/40166609931) ✅（head＝合并提交 `b700992`）；其上钉子 docs 提交 `bdda9a1`＝合并后的 main tip，run [40166917264](https://github.com/NorthAdb/LinkForge/actions/runs/40166917264) ✅（v2.0 发布轮审计 #1 改口：原「tip＝合并提交、tip run＝合并 run 同 SHA」漏了钉子自身的 run）
 - **观测栈手验（本机 Compose，2026-10-25）**：`docker compose --profile observability up -d` → Prometheus `/api/v1/targets`＝`host.docker.internal:8080 **up**`；Grafana 看板自动 provision（uid `linkforge-slo`）、datasource `linkforge-prom` health OK；手工流量后三区截图入库：`docs/img/grafana-redirect-slo.png`（187KB）/`grafana-singleflight-outbox.png`（114KB）/`grafana-keys-gates-jvm.png`（137KB），全部 ≤300KB（Q13=A）。本机 3000 端口被无关进程占用，截图容器临时用 13000（compose 配置未动）；Grafana 挂载再次踩 MSYS 路径转换坑（`MSYS_NO_PATHCONV=1` 解）。截图为手工流量、非压测数字，图注=看板标题内嵌「Demo targets, not a production promise」
 - **快速手验对照**（交接 §4 命令）：prefetch/Slackbot 302 不计、curl 计 ✓（IT 同断言）；滑窗 Retry-After 递减 ✓（ApiKeyIT <60）；blocked 403/warn 中间页/continue 计数 ✓；密码解锁+清除立即生效+爆破 429 ✓；Prometheus 令牌三态+API Key 403+tag 有界 ✓——IT 全覆盖，交接 §4 为人工复验路径
 
@@ -1110,3 +1113,31 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
   5. `curl -s http://localhost:8080/actuator/health`（db/redis/rabbit 组件可见；停 rabbitmq 后 503）
   6. 对账：`SELECT (SELECT COUNT(*) FROM lf_click_log) detail, (SELECT IFNULL(SUM(clicks),0) FROM lf_click_daily) aggregate;`（应相等）
 - 审计关注点对照：正确性与租户隔离（P1 全套测试）、D7 双写与幂等（P2 全套 + mq-drill）、限流/缓存失效/创建幂等/并发（P3 全套）、有无越界做前端或 AI（无；本文件决策日志可查）
+
+---
+
+## v2.0.0 发布轮（审计 4 小项修复 + 文档重写 + 发版；feat/v2-release，发车基线 main@bdda9a1，2026-10-25）
+
+> 触发：bw345 外部审计通过，留 4 个文档/残余风险小项；运营者指令「修完后同步文档防不一致、集中记录待办、README 模块化重写（设计/使用/上手+美化）、发布 2.0」。**范围**：无新功能代码；B10（Linux bench 复跑）与 QR+UTM 按拍板继续挂起，集中登记到 `docs/backlog.md`；开新轮仍需运营者指令。
+
+### 审计 4 小项处置
+
+| # | 审计意见 | 处置 | 证据 |
+|---|---------|------|------|
+| 1 | progress CI 段写「tip＝合并提交」，漏钉子 run id | B 波 3+4+5 章 CI 行改口：钉子 `bdda9a1`、run [40166917264](https://github.com/NorthAdb/LinkForge/actions/runs/40166917264) | 本文件「B 档波 3+4+5」章 CI 行 |
+| 2 | README 未写 scrape-token 须对 Prometheus 进程可读（踩过权限坑） | README「快速上手·常见坑」+「可观测」节：容器内进程（nobody）须可读 `/etc/linkforge/scrape-token`，Linux 下 `chmod 644`，`printf '%s'` 写入避免尾随换行；Windows/Docker Desktop 不校验权限位 | README 两处 |
+| 3 | 警告页尖括号转义被 URL 校验前置拦截，IT 只能间接证明 | 新增**纯单测** `GatePagesTest`（4 例）直接断言 warn/unlock/block 页对 `<`/`>`/`&`/引号的转义——纯 JUnit 不走 HTTP，URL 校验不构成障碍 | `src/test/java/com/linkforge/link/support/GatePagesTest.java` |
+| 4 | 连接预算 256 是推导值，上限实际是 500 | B 波 3+4+5 章预算行注明口径：256＝「每上下文 Hikari 同时满池」最坏情形纸面推导（实际懒建连接、极少同时满载），配置侧天花板是共享容器 `--max-connections=500`，余量 244 | 本文件「B 档波 3+4+5」章预算行 |
+
+### 文档与发版
+
+- **README 全量重写**（v2.0.0）：徽章、目录、功能总览表、快速上手（前置表 + 五步 + 常见坑）、架构图更新（观测栈与门禁入图）、「跳转判定总顺序」12 步、模块详解 12 节（设计/使用/边界/指标四要素）、配置参考按域分组、指标参考表、测试与质量、版本历史表。**纪律**：既有审计核对过的事实、边界声明与数字原样迁移，未新增任何未实测数字；压测节继续声明「数字测于固定窗口时期，B10 复测为准」
+- **`docs/backlog.md` 新建**：集中登记 8 项功能待办（B10、QR+UTM、Bloom 共享化/回收、L1 广播、维度扩展、AI 延期、云部署）+ 3 项运维项 + 本轮 4 小项闭环状态，每项带来源
+- **版本**：pom `1.0.0→2.0.0`；`OpenApiInfoIT` 版本断言联动 `2.0.0`（build-info 随 pom，漏改必红）；pom description 去「(MVP)」；README jar 名引用 `target/linkforge-2.0.0.jar`
+- **例数**：207→**211**（surefire 86→90，+4＝GatePagesTest；failsafe 119 与 `webhook-tz-it` fork 2 不变）；连接预算**零新增上下文**（GatePagesTest 纯单测不起 Spring）
+- 本地验证：宿主 Maven `mvn -B test`（退出码显式判定）**90 单测全绿**，`GatePagesTest` 4/4
+
+### CI 与发布
+
+- 分支终态 run ＜分支A＞（全部提交单次推送）、main 合并 run ＜合并M＞（钉子提交回填）；钉子提交自身的 run 记录于 GitHub Release `v2.0.0` 说明与本地审计轨迹，不再追加仓库提交（一轮一钉纪律）
+- 发布标识：git tag **`v2.0.0`**（annotated，打在钉子提交上）+ GitHub Release 附变更摘要；CI 工作流只监听分支 push，tag 推送不触发流水线
