@@ -18,6 +18,7 @@ public class UserAccount {
     private String username;
     private String passwordHash;
     private Integer status;
+    private String tenantRole;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     @TableLogic

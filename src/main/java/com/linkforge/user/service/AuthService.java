@@ -52,7 +52,8 @@ public class AuthService {
             throw new BizException(401, "invalid credentials");
         }
         String token = jwtService.createToken(user.getId(), tenant.getId(), user.getUsername());
-        return new LoginResponse(token, user.getId(), tenant.getId(), user.getUsername(), tenant.getName());
+        return new LoginResponse(token, user.getId(), tenant.getId(), user.getUsername(),
+                tenant.getName(), user.getTenantRole());
     }
 
     /**
@@ -87,11 +88,14 @@ public class AuthService {
         user.setUsername(request.getUsername());
         user.setPasswordHash(passwordEncoder.encode(request.getPassword()));
         user.setStatus(1);
+        // the founder administers the tenant they just created (D-C1-13)
+        user.setTenantRole("ADMIN");
         user.setCreatedAt(LocalDateTime.now());
         user.setUpdatedAt(LocalDateTime.now());
         userAccountMapper.insert(user);
 
         String token = jwtService.createToken(user.getId(), tenant.getId(), user.getUsername());
-        return new LoginResponse(token, user.getId(), tenant.getId(), user.getUsername(), tenant.getName());
+        return new LoginResponse(token, user.getId(), tenant.getId(), user.getUsername(),
+                tenant.getName(), user.getTenantRole());
     }
 }

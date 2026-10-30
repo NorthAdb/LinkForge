@@ -44,6 +44,7 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
@@ -204,14 +205,18 @@ public class ShortLinkService {
 
     public PageResponse<ShortLinkDetail> list(int page, int size) {
         AuthUser user = requireUser();
-        return pageOwn(user.getUserId(), Math.max(1, page), size < 1 || size > 100 ? 20 : size);
+        return pageOwn(user, Math.max(1, page), size < 1 || size > 100 ? 20 : size);
     }
 
-    private PageResponse<ShortLinkDetail> pageOwn(Long userId, long current, long pageSize) {
-        Page<ShortLink> result = shortLinkMapper.selectPage(new Page<>(current, pageSize),
-                new LambdaQueryWrapper<ShortLink>()
-                        .eq(ShortLink::getCreatedBy, userId)
-                        .orderByDesc(ShortLink::getId));
+    private PageResponse<ShortLinkDetail> pageOwn(AuthUser user, long current, long pageSize) {
+        LambdaQueryWrapper<ShortLink> query = new LambdaQueryWrapper<ShortLink>()
+                .orderByDesc(ShortLink::getId);
+        if (isTenantWide(user)) {
+            query.eq(ShortLink::getTenantId, user.getTenantId());
+        } else {
+            query.eq(ShortLink::getCreatedBy, user.getUserId());
+        }
+        Page<ShortLink> result = shortLinkMapper.selectPage(new Page<>(current, pageSize), query);
         List<ShortLinkDetail> records = result.getRecords().stream().map(ShortLinkService::toDetail).toList();
         return new PageResponse<>(records, result.getTotal(), result.getCurrent(), result.getSize(), result.getPages());
     }
@@ -223,7 +228,7 @@ public class ShortLinkService {
         int exported = 0;
         long page = 1;
         while (exported < 10000) {
-            PageResponse<ShortLinkDetail> chunk = pageOwn(user.getUserId(), page++, 500);
+            PageResponse<ShortLinkDetail> chunk = pageOwn(user, page++, 500);
             for (ShortLinkDetail link : chunk.getRecords()) {
                 sb.append(csvRow(link));
                 exported++;
@@ -567,10 +572,21 @@ public class ShortLinkService {
     private ShortLink getOwnedLink(String code) {
         AuthUser user = requireUser();
         ShortLink link = shortLinkMapper.selectOne(new LambdaQueryWrapper<ShortLink>().eq(ShortLink::getCode, code));
+        if (isTenantWide(user)) {
+            if (link == null || !Objects.equals(link.getTenantId(), user.getTenantId())) {
+                throw new BizException(404, "short link not found");
+            }
+            return link;
+        }
         if (link == null || link.getCreatedBy() == null || !link.getCreatedBy().equals(user.getUserId())) {
             throw new BizException(404, "short link not found");
         }
         return link;
+    }
+
+    /** D-C1-12: a TENANT-scope key sees the whole tenant; JWT and USER keys stay per-creator. */
+    private static boolean isTenantWide(AuthUser user) {
+        return "TENANT".equals(user.getApiKeyScope());
     }
 
     private static AuthUser requireUser() {

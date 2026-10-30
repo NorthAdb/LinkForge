@@ -17,6 +17,8 @@ public final class ApiKeyDtos {
         @NotBlank
         @Size(max = 64)
         private String name;
+        /** USER|TENANT; blank/null = USER, validated in the service. */
+        private String scope;
         /** NULL = default quota from linkforge.api-key. */
         @Min(1)
         private Integer quotaPerMinute;
@@ -31,6 +33,8 @@ public final class ApiKeyDtos {
         private String name;
         private String prefix;
         private String key;
+        private String scope;
+        private Long createdBy;
         private Integer quotaPerMinute;
         private Integer quotaPerDay;
         private LocalDateTime createdAt;
@@ -42,6 +46,8 @@ public final class ApiKeyDtos {
         private Long id;
         private String name;
         private String prefix;
+        private String scope;
+        private Long createdBy;
         private Integer quotaPerMinute;
         private Integer quotaPerDay;
         private LocalDateTime lastUsedAt;
