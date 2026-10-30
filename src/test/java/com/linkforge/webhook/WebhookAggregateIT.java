@@ -153,12 +153,15 @@ class WebhookAggregateIT extends AbstractIntegrationTest {
         return rows.isEmpty() ? null : rows.get(0);
     }
 
+    /** The digest must have converged through the relay, not merely been enqueued —
+     * asserting SENT outside the await raced the 500 ms relay poll. */
     private void awaitLatestDigest(String token) {
         await().atMost(java.time.Duration.ofSeconds(90)).untilAsserted(() -> {
             Map<String, Object> row = latestDeliveryFor(token);
             assertNotNull(row, "no delivery row yet");
             assertTrue(String.valueOf(row.get("event_id")).startsWith("digest-"),
                     "latest row must be a digest, got: " + row);
+            assertEquals("SENT", row.get("status"), "relay must send the digest: " + row);
         });
     }
 
