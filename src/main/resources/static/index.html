@@ -129,7 +129,7 @@
     <h2>点击 Webhook</h2>
     <p class="stats-line">每租户一个端点。路径不是 <code>/api/webhooks</code> 根：</p>
     <ul class="stats-line">
-      <li><code>PUT /api/webhooks/endpoint</code> — JSON 字段 <code>url</code>（必填）、<code>enabled</code>（可选布尔）。新建时响应带一次明文 <code>secret</code>；更新 url 不轮换 secret。</li>
+      <li><code>PUT /api/webhooks/endpoint</code> — JSON 字段 <code>url</code>（必填）、<code>enabled</code>（可选布尔）、<code>deliveryMode</code>/<code>aggregateWindowSeconds</code>/<code>aggregateMaxEvents</code>（可选，缺省保持原值）。新建时响应带一次明文 <code>secret</code>；更新 url 不轮换 secret。</li>
       <li><code>GET /api/webhooks/endpoint</code> — 查看当前配置，secret 只有掩码 <code>secretMasked</code>。</li>
       <li><code>POST /api/webhooks/endpoint/rotate-secret</code> — 轮换，明文只此一次。</li>
       <li><code>DELETE /api/webhooks/endpoint</code> — 删除。</li>
@@ -139,6 +139,13 @@
     <label style="display:flex;align-items:center;gap:8px;margin-top:8px">
       <input id="hookEnabled" type="checkbox" checked style="width:auto"> enabled
     </label>
+    <label>模式</label>
+    <select id="hookMode" onchange="syncAggregateInputs()">
+      <option value="PER_CLICK">逐次 PER_CLICK</option>
+      <option value="AGGREGATE">聚合 AGGREGATE</option>
+    </select>
+    <label>聚合窗口秒（15-300）</label><input id="hookWindow" type="number" min="15" max="300" value="60">
+    <label>事件阈值</label><input id="hookMaxEvents" type="number" min="1" value="100">
     <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
       <button onclick="saveWebhook()">保存（PUT /api/webhooks/endpoint）</button>
       <button class="ghost" onclick="rotateWebhook()">轮换 secret</button>
@@ -323,9 +330,16 @@ async function revokeKey(id) {
   loadKeys();
 }
 
+function syncAggregateInputs() {
+  const aggregate = $('hookMode').value === 'AGGREGATE';
+  $('hookWindow').disabled = !aggregate;
+  $('hookMaxEvents').disabled = !aggregate;
+}
+
 async function loadWebhook() {
   const r = await api('GET', '/api/webhooks/endpoint');
   if (r.status === 404) {
+    $('hookMode').value = 'PER_CLICK'; syncAggregateInputs();
     $('hookView').textContent = '尚未配置。保存会 PUT /api/webhooks/endpoint ，JSON 字段名是 url 和 enabled。';
     return;
   }
@@ -333,20 +347,34 @@ async function loadWebhook() {
   const v = r.data || {};
   $('hookUrl').value = v.url || '';
   $('hookEnabled').checked = v.enabled !== false;
+  $('hookMode').value = v.deliveryMode || 'PER_CLICK';
+  $('hookWindow').value = v.aggregateWindowSeconds ?? 60;
+  $('hookMaxEvents').value = v.aggregateMaxEvents ?? 100;
+  syncAggregateInputs();
+  const last = v.lastDelivery;
   $('hookView').textContent = '当前 url=' + (v.url || '') + ' · enabled=' + v.enabled
-    + ' · secretMasked=' + (v.secretMasked || '（无明文）');
+    + ' · secretMasked=' + (v.secretMasked || '（无明文）')
+    + ' · 模式=' + (v.deliveryMode || 'PER_CLICK')
+    + ' · 窗口=' + (v.aggregateWindowSeconds ?? '-') + 's'
+    + ' · 阈值=' + (v.aggregateMaxEvents ?? '-')
+    + ' · 最近投递=' + (last ? (last.status + '/' + last.eventType + '/' + (last.createdAt || '-')) : '-');
 }
 async function saveWebhook() {
   const url = $('hookUrl').value.trim();
   if (!url) return setMsg('hookMsg', 'url 必填', false);
   hideOnce('hookOnce');
-  const r = await api('PUT', '/api/webhooks/endpoint', { url, enabled: $('hookEnabled').checked });
+  const payload = { url, enabled: $('hookEnabled').checked, deliveryMode: $('hookMode').value };
+  if ($('hookMode').value === 'AGGREGATE') {
+    payload.aggregateWindowSeconds = Number($('hookWindow').value) || 60;
+    payload.aggregateMaxEvents = Number($('hookMaxEvents').value) || 100;
+  }
+  const r = await api('PUT', '/api/webhooks/endpoint', payload);
   if (r.error) return setMsg('hookMsg', '保存失败：' + r.error, false);
   if (r.data && r.data.secret) {
     setMsg('hookMsg', '已创建。下面的 secret 只出现这一次。', true);
     showOnce('hookOnce', r.data.secret);
   } else {
-    setMsg('hookMsg', '已更新 url/enabled（secret 未轮换，GET 只返回掩码）。', true);
+    setMsg('hookMsg', '已更新 url/enabled/模式（secret 未轮换，GET 只返回掩码）。', true);
   }
   loadWebhook();
 }

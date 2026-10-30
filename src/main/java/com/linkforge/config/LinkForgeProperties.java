@@ -189,6 +189,8 @@ public class LinkForgeProperties {
         private int requestTimeoutMs = 5000;
         /** IT-only escape hatch; must never be true in prod (D-Bw2-15). */
         private boolean allowPrivateTargets = false;
+        /** C1 wave C (D-C1-23): hard cap on digest parts per window; overflow sets truncated. */
+        private int aggregateMaxParts = 10;
     }
 
     @Data
