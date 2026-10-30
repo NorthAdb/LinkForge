@@ -194,7 +194,7 @@ class QrMaterialIT extends AbstractIntegrationTest {
 
         var ok = postJson("/api/links", om.writeValueAsString(Map.of(
                 "originalUrl", "https://target.example.com/a",
-                "utmSource", "a".repeat(64) + "_-.")), token);
+                "utmSource", "_-." + "a".repeat(61))), token);
         assertEquals(200, ok.getStatusCode().value(), "64 chars of the allowed alphabet pass: "
                 + ok.getBody());
     }
