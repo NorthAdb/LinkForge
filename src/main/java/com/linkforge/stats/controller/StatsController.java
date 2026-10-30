@@ -37,13 +37,15 @@ public class StatsController {
         return ApiResponse.ok(clickStatsService.stats(link.getId(), code, window));
     }
 
+    public static final String DIM_REQUIRED = "dim is required and must be one of device, referer_host";
+
     /** A8: per-bucket click counts (device / referer_host). Dimension clicks are not UV. */
     @GetMapping("/api/links/{code}/stats/breakdown")
     public ApiResponse<List<DimBreakdown>> breakdown(@PathVariable String code,
-                                                     @RequestParam String dim,
+                                                     @RequestParam(required = false) String dim,
                                                      @RequestParam(defaultValue = "7") int days) {
-        if (!DIM_TYPES.contains(dim)) {
-            throw new BizException("dim must be one of " + DIM_TYPES);
+        if (dim == null || dim.isBlank() || !DIM_TYPES.contains(dim)) {
+            throw new BizException(DIM_REQUIRED);
         }
         ShortLinkDetail link = shortLinkService.detail(code);
         int window = days < 1 ? 7 : Math.min(days, 90);

@@ -93,7 +93,7 @@ public class RedirectController {
                     .header("Cache-Control", "no-store")
                     .header("Content-Security-Policy", GatePages.CSP)
                     .header("X-Content-Type-Options", "nosniff");
-            return withBody ? builder.body(GatePages.block()) : builder.build();
+            return withBody ? html(builder).body(GatePages.block()) : builder.build();
         }
         if (outcome instanceof RedirectOutcome.Locked) {
             ResponseEntity.BodyBuilder builder = ResponseEntity.status(withBody
@@ -101,7 +101,7 @@ public class RedirectController {
                     .header("Cache-Control", "no-store")
                     .header("Content-Security-Policy", GatePages.CSP)
                     .header("X-Content-Type-Options", "nosniff");
-            return withBody ? builder.body(GatePages.unlock(code, null)) : builder.build();
+            return withBody ? html(builder).body(GatePages.unlock(code, null)) : builder.build();
         }
         if (outcome instanceof RedirectOutcome.Warn warn) {
             ResponseEntity.BodyBuilder builder = ResponseEntity.status(HttpStatus.OK)
@@ -110,9 +110,14 @@ public class RedirectController {
                     .header("Content-Security-Policy", GatePages.CSP)
                     .header("X-Content-Type-Options", "nosniff");
             return withBody
-                    ? builder.body(GatePages.warn(warn.url(), warn.asciiHost(), warn.code()))
+                    ? html(builder).body(GatePages.warn(warn.url(), warn.asciiHost(), warn.code()))
                     : builder.build();
         }
         throw new IllegalStateException("unknown redirect outcome " + outcome.getClass());
+    }
+
+    /** HTML bodies must not fall through to StringHttpMessageConverter's text/plain default. */
+    private static ResponseEntity.BodyBuilder html(ResponseEntity.BodyBuilder builder) {
+        return builder.contentType(HTML_UTF8);
     }
 }

@@ -4,12 +4,15 @@ import com.linkforge.AbstractIntegrationTest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -109,6 +112,7 @@ class PhishingGateIT extends AbstractIntegrationTest {
         String code = seedWithTarget("https://x.blocked.invalid/target");
         var resp = get("/r/" + code, null);
         assertEquals(403, resp.getStatusCode().value(), resp.getBody());
+        assertHtmlUtf8(resp);
         assertNull(resp.getHeaders().getLocation(), "a blocked jump must not carry a Location");
         assertNotNull(resp.getHeaders().getCacheControl());
         assertTrue(resp.getHeaders().getCacheControl().contains("no-store"));
@@ -123,6 +127,7 @@ class PhishingGateIT extends AbstractIntegrationTest {
         String code = seedWithTarget("https://warn.invalid/?q='quoted'&r=2");
         var resp = get("/r/" + code, null);
         assertEquals(200, resp.getStatusCode().value(), resp.getBody());
+        assertHtmlUtf8(resp);
         assertNull(resp.getHeaders().getLocation());
         assertTrue(resp.getBody().contains("&#39;quoted&#39;"), "single quotes must be escaped: " + resp.getBody());
         assertFalse(resp.getBody().contains("'quoted'"), "no raw quote may leak");
@@ -170,5 +175,13 @@ class PhishingGateIT extends AbstractIntegrationTest {
         var resp = postJson("/api/links",
                 om.writeValueAsString(java.util.Map.of("originalUrl", "https://evil.example.com/just-a-name")), token);
         assertEquals(200, resp.getStatusCode().value(), resp.getBody());
+    }
+
+    private static void assertHtmlUtf8(ResponseEntity<String> resp) {
+        MediaType ct = resp.getHeaders().getContentType();
+        assertNotNull(ct, "HTML gate must declare Content-Type: " + resp.getHeaders());
+        assertEquals("text", ct.getType());
+        assertEquals("html", ct.getSubtype());
+        assertEquals(StandardCharsets.UTF_8, ct.getCharset());
     }
 }
