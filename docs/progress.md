@@ -1150,3 +1150,72 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 - **tag `v2.0.0` 重切**：首打于钉子 `623d1e1`，复审发现 scripts 问题时 Release 已发布。为让 tag 快照自带修复，删除 tag 与 Release、重打于本提交并重建 Release（发布 15 分钟内、受众为运营者与审计，重切成本小于带病快照；此后「审计以 tag 为准」指向重切后的 tag）
 - 轮内 runs 全景：分支 40172677345 ✅ → main 合并 40172956164 ✅ → 钉子 40173268350 ✅ → 复审修正 40174344584 ✅ → 本收口提交 run 记录于 Release 说明（一次复审重切，留档说明动因）
 - 发布后 docs：`resume.md` 从 P4 时代口径（63 例/旧叙事）刷新至 **v2.0.0 口径**（211 例构成、滑窗限流、Outbox 修正语义、安全与开放能力、面试防线清单；bench 数字保留并保留时代免责），不改发布物与 tag
+
+## C1 深化轮：QR+UTM + 租户级 API Key + Webhook 聚合推送（feat/deepen-c1-qr-utm-tenant-key-agg-webhook，发车基线 main@7970deb，2026-10-31）
+
+> 交接单：记录追踪/05-阶段交接/LinkForge-phase-C1-qr-utm-tenant-key-agg-webhook-handoff.md（t107s567 确认 Q1–Q8 全 A）。三 backlog 项并一轮（Bw345-F1 + Bw2-F1 + Bw2-F2），命名 C1 = post-B backlog round 1。
+
+### 决策记录（D-C1 落地与实现注记）
+
+| ID | 落地 |
+|----|------|
+| D-C1-1/3/4 | ZXing `core`+`javase` 钉 3.5.3（pom `zxing.version` property）；QR 码面恒为 `{public-base-url}/r/{code}`（新配置 `linkforge.public-base-url`，默认 http://localhost:8080）；size 128–1024 默认 256、margin 0–4 默认 1、ec L/M/Q/H 默认 M，非法 400（`QrParams` 纯类） |
+| D-C1-2/33 | 下载鉴权：`GET /api/links/{code}/qr.png` 走 USER/API_KEY/QR_SHARE 三角色；**无 permitAll QR 路由**——新 `QrShareAuthFilter` 仅在 `exp+sig` HMAC 验签通过（常量时间比较、过期 fail-closed）时授予 `ROLE_QR_SHARE`；分享 URL 由 `POST /api/links/{code}/qr-share` 铸造（TTL 默认 300s、请求体钳制 1–3600）；签名密钥 `LINKFORGE_QR_SHARE_SECRET` 留空则由 `JWT_SECRET` 域分离派生（`ShareTokenSigner`） |
+| D-C1-5/9 | 下载 `Cache-Control: private, max-age=60`；分享响应 `private, no-store`；密码链出 QR 后扫码仍走解锁流（QrMaterialIT 钉 200 解锁页非 302） |
+| D-C1-6/7/8 | UTM 五键 write-time merge 进 `original_url`（`UtmMerger` 纯类：规范序 source/medium/campaign/term/content、已有同名 query 不覆盖、fragment 保持在尾、合并后 >2048 → 400）；值限 `[A-Za-z0-9._-]` ≤64（DTO @Pattern/@Size）；请求体其它 `utm*`（大小写不敏感）与 9 个已知投放 id（gclid/fbclid/msclkid/ttclid/yclid/dclid/igshid/wbraid/gbraid）→ 400，其余未知字段维持静默忽略；**不加列、不拆字段、/r/** 零改动** |
+| D-C1-11..17 | `V8__api_key_scope.sql`：`lf_api_key.scope`（默认 USER）+ `lf_user.tenant_role`（默认 MEMBER）；`AuthUser.apiKeyScope`（JWT=null）；TENANT Key 归属按 `tenant_id`（getOwnedLink/pageOwn/exportOwnCsv 分支，JWT 与 USER Key 行为逐字不变；replayIdempotentCreate 不变——幂等键本就按创建者）；**注册创办人与 bootstrap 用户即 ADMIN**（实现注记：交接单未写注册用户角色，不设 ADMIN 则 API 注册租户永远无人可签发 TENANT Key，取创办人=管理员读法）；TENANT Key 建链 `created_by`=Key 创建者；Key 列表/详情暴露 scope/createdBy/lastUsedAt（listOwn 保持只看自己的 Key——ADMIN 是签发权不是管理权） |
+| D-C1-18..23 | `V9__webhook_aggregate.sql`：endpoint 三列（delivery_mode/aggregate_window_seconds/aggregate_max_events）+ `lf_webhook_agg_buffer`（UK endpoint+window+link）；PER_CLICK 路径逐字保留（`enqueuePerClick` 原体）；AGGREGATE 入队走 ODKU 桶（样本取首击、late 布尔或入）；**双触发**：阈值（消费事务内 inline flush，REQUIRED 传播）+ 扫窗（`@Scheduled` 5s，`window_start <= UNIX_TIMESTAMP()-window` DB 时钟）；digest `event_id=digest-{endpointId}-{windowStart}[-partN]`，单 part ≤500 link 桶、超出同窗续篇；`aggregate-max-parts`（默认 10）硬上限超出时末 part 置 `truncated:true`（partCount 始终为真实分片数）；payload 无 IP/完整 UA、每 link 至多 1 sample |
+| D-C1-24 | 迟到点击并入开放窗并 `late:true`（`AggregateWindows.slotOf` 纯函数：own=floorDiv(clickedAt)，own<open 即迟到→落 open 窗） |
+| D-C1-25 | AGGREGATE→PER_CLICK 先 flushAllOpenWindows 再存模式；删除带缓冲 endpoint：缓冲以 FAILED digest 行留痕（lastError='endpoint deleted with pending aggregate buffer'，不发送不静默丢） |
+| D-C1-26/34 | 指标 `linkforge.webhook.aggregate.flush{result=ok|partial|error}`；enqueued 复用（聚合入队同样计数）；视图/控制台：模式/窗口/阈值 + 最近投递（status/type/时间） |
+| D-C1-28..32 | 单分支单波；README 补物料/TENANT/聚合三节 + 配置/指标行；pom 版本**不升**（2.0.0 沿用发版轮口径，版本历史记 C1 行）——交接单未要求发版，OpenApiInfoIT 联动不动 |
+
+### 红先证据（三轮各一红 run；红提交只含测试）
+
+| 波 | 红 run | 内容 |
+|----|--------|------|
+| A 租户 Key | [41081236062](https://github.com/NorthAdb/LinkForge/actions/runs/41081236062) | TenantApiKeyIT 4 例中 3 例按钉死断言失败（scope 缺失 / MEMBER 建 TENANT 未 403 / 租户跨用户 404）；99 单测与既有 IT 全绿 |
+| B QR+UTM | [41083852762](https://github.com/NorthAdb/LinkForge/actions/runs/41083852762) | QrMaterialIT 8/8 失败（merge 未发生、qr.png 500、分享 404 等，期望/实际成对留痕） |
+| C 聚合 | [41084346370](https://github.com/NorthAdb/LinkForge/actions/runs/41084346370) | WebhookAggregateIT 4/5 ConditionTimeout（最新行停留 `evt_…/link.clicked`，证明 deliveryMode 被忽略）；PER_CLICK 钉子例绿 |
+
+### 改动清单（8 提交）
+
+| 提交 | 内容 |
+|------|------|
+| `70fabdc` 之前的无号红提交→`4fa0057` | A 红（仅测试）→ A 绿：V8 + scope/tenant_role + AuthUser.apiKeyScope + 归属分支 + ADMIN 签发 + LoginResponse.tenantRole + 控制台 scope UI |
+| `70fabdc` | B 红测试（QrMaterialIT） |
+| `6cba4e6` | C 红测试（WebhookAggregateIT） |
+| `7b93535` | B 绿：pom ZXing、public-base-url/qr 配置、UtmMerger/QrParams/ShareTokenSigner、QrShareAuthFilter、qr.png/qr-share 端点、DTO 五键+catch-all、控制台 UTM 输入与物料操作、uri 白名单 +15 单测；**同提交带上 A 轮漏 add 的 index.html 控制台改动**（暂存遗漏，A 绿提交只进了 Java/V8——如实记录） |
+| `1f38b0b` | 测试修正：64 字符边界值误写 67 字符（`"a".repeat(64)+"_-."`），断言钉错载荷，实现无错 |
+| `6acf78c` | C 绿：V9 + buffer/flusher/AggregateWindows + service 分支/切换冲刷/删除留痕 + 视图最近投递 + 控制台聚合 UI + 8 单测 |
+| `b122371` | 测试修正：digest SENT 断言移入 await（原写法对 500ms relay 轮询存在 PENDING 竞态，CI 实测命中一次） |
+
+### 验收勾选（C1-1..15）
+
+- [x] **C1-1** 基线 `7970deb8c92764ea8e20aa535502fb97c281fa7b`；V1–V7 零改动（V8/V9 均新增文件）
+- [x] **C1-2** qr.png 所有者 JWT/Key 200、非所有者 404、未登录无 sig 401；无 permitAll（`SecurityConfig` 仅 `hasAnyRole(USER,API_KEY,QR_SHARE)` + 过滤器验签）
+- [x] **C1-3** 码面解码 = `{base}/r/{code}`（QrMaterialIT `qrPatternDecodesToTheShortLinkOnly`，ZXing 解码断言，无 sig/Bearer 入码面）；有效 exp+sig 免登录下图（IT + 手验）；过期/改签 401（IT + 手验）
+- [x] **C1-4** 五键 merge、未知 utm*/投放 id 400、已有同名不覆盖、README 维度口径钉死
+- [x] **C1-5** 密码链 QR 后 `/r/{code}` 200 解锁页（非 302）
+- [x] **C1-6** USER Key 跨用户仍拒（同租户种子用户场景，TenantApiKeyIT）
+- [x] **C1-7** TENANT 同租户跨用户允许、跨租户拒、非 ADMIN 403、Key 不可调 keys/webhooks（TenantApiKeyIT 4 例）
+- [x] **C1-8** 列表见 scope/createdBy/lastUsedAt；明文仅创建响应；吊销下一请求 401
+- [x] **C1-9** PER_CLICK 回归：WebhookDeliveryIT 9 例 + 签名/SSRF 全绿（run 41096159455）；`enqueuePerClick` 原体保留
+- [x] **C1-10** 双触发（窗口 15s 到期 + 阈值 5 事件提前封窗）各有 IT；event_id 幂等（UK + DKE 吞）；HMAC 可校验（IT 内 `WebhookSigner.sign` 复算）
+- [x] **C1-11** payload 无 ip/UA（断言 `\"ip\"` 不出现）；>500 桶 part 续篇（flusher 确定性分片 + `partCount`）；迟到 `late:true`
+- [x] **C1-12** 控制台手验（见下）
+- [x] **C1-13** 全量 verify 绿 run [41096159455](https://github.com/NorthAdb/LinkForge/actions/runs/41096159455)（failsafe 137 + surefire 122 + tz 2）；三轮红先 run 留档
+- [x] **C1-14** README：分享 TTL/ADMIN 签发/双触发/at-least-once/无 utm 桶/B10 未做
+- [x] **C1-15** 合入后 docs/backlog.md Bw345-F1 标闭环 + 记录追踪 Bw2-F1/F2 闭环（合并后 docs 提交）
+
+### 手验（本机 Compose 栈 + 浏览器控制台 + API）
+
+- `docker compose up -d mysql redis rabbitmq` + 全新卷启动 `linkforge-2.0.0.jar`（Flyway V1–V9 自动迁移）→ 注册创办人登录控制台
+- 控制台：scope 下拉 ADMIN 可见 TENANT；五 UTM 输入即时刻性校验；建链列表显示合并后 URL（`?utm_source=console&utm_medium=manual`）；「下载 QR」触发 blob 下载（download 事件 + 成功提示）、「复制分享链」入剪贴板；TENANT Key 创建明文只出现一次、列表行 `scope TENANT · 创建人 454 · 最近使用`；Webhook 卡模式/窗口/阈值（PER_CLICK 下禁用）、保存 AGGREGATE 窗口 15s 后 `hookView` 显示 `最近投递=FAILED/link.clicks.digest/时间`
+- API：点链 → 15s 窗到期 → `lastDelivery = digest-4-1793380365 / link.clicks.digest / FAILED(attempts=1)`（example.com 拒收 4xx，链路本身走通）；分享链匿名 GET 200 image/png、改签 401
+
+### 验证与例数
+
+- **261 = surefire 122 + failsafe 137 + tz fork 2**；连接预算 26×10+8×4 = **292**（35 个 \*IT、8 个显式 hikari=4，C1 新增 3 个均 4）
+- 分支终态 run [41096159455](https://github.com/NorthAdb/LinkForge/actions/runs/41096159455) ✅；修复轮两枚（`1f38b0b` 测试值、`b122371` 测试竞态）均为测试自身缺陷、实现零改动
+- 本地（无 Testcontainers）：`mvn -B verify -DskipITs` 退出码 0，surefire 122 全绿（每轮提交前显式判 `$?`）
