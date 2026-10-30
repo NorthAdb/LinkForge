@@ -55,65 +55,137 @@
 
 ### 五步跑通
 
-**1. 启动依赖**（仓库根目录；Compose 不内置口令，必须先有 `.env`）：
+下面每一步都给了 PowerShell 和 bash 两段。Windows 上的 Cursor 终端、Windows PowerShell、PowerShell 7 用 PowerShell 段。macOS、Linux、Git Bash 用 bash 段。`docker compose` 两边相同。cmd.exe 只把第一步的复制换成 `copy .env.example .env`，后面的 `docker`、`mvn`、`java` 与 PowerShell 相同，但不要用 bash 的 `source` 和 `$TOKEN`。
 
-```bash
-cp .env.example .env    # 本地示例值；.env 已 gitignore，不要提交
+PowerShell 里的 `curl` 是 `Invoke-WebRequest` 的别名，请求请写 `curl.exe`。PowerShell 用反引号续行，不认识 bash 的行末 `\`。
+
+**1. 启动依赖**（仓库根目录）。Compose 自己读 `.env`，只替换 `docker-compose.yml` 里的 `${...}`。`SPRING_*`、`JWT_SECRET`、`LINKFORGE_*` 不会进容器。`.env` 已在 `.gitignore` 里，不要提交。文件已存在时不要覆盖，否则会冲掉你改过的口令。
+
+PowerShell：
+
+```powershell
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 docker compose up -d
-docker compose ps       # 期望：mysql / redis / rabbitmq 三行 healthy（MySQL 首次初始化约 5 分钟）
+docker compose ps
 ```
 
-**2. 编译**：
+bash：
 
 ```bash
-mvn -q -DskipTests package
-# 无本地 Maven / JDK17 时（Windows PowerShell 把 $PWD 换成 ${PWD}）：
-docker run --rm -v "$PWD":/app -v linkforge_m2:/root/.m2 -w /app \
+test -f .env || cp .env.example .env
+docker compose up -d
+docker compose ps
+```
+
+`docker compose ps` 里 mysql、redis、rabbitmq 都应为 healthy。MySQL 第一次初始化大约 5 分钟。
+
+**2. 编译**。这一步只生成 jar，不启动应用。PowerShell 里给 `-D` 参数加引号，避免被当成 PowerShell 参数。
+
+```powershell
+mvn -q "-DskipTests" package
+```
+
+没有本机 Maven 时用镜像编译。PowerShell：
+
+```powershell
+docker run --rm -v "${PWD}:/app" -v linkforge_m2:/root/.m2 -w /app maven:3.9-eclipse-temurin-17 mvn -B package
+```
+
+bash。Git Bash 先关掉自动路径转换，否则 `/app` 会被改成磁盘路径：
+
+```bash
+MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD":/app -v linkforge_m2:/root/.m2 -w /app \
   maven:3.9-eclipse-temurin-17 mvn -B package
 ```
 
-**3. 运行**（应用不自动加载 `.env`，先导出再启动）：
+产物是 `target/linkforge-2.0.0.jar`。JDK 17 或更高版本都能编。JDK 21 会按 `pom.xml` 的 `java.version=17` 生成字节码，不必再装一套 JDK 17。
+
+**3. 运行**。应用不读 `.env` 文件。先把变量放进当前窗口，再启动。换一个窗口就要再导一次。
+
+PowerShell：
+
+```powershell
+Get-Content .env | ForEach-Object {
+  if ($_ -match '^\s*#' -or $_ -notmatch '=') { return }
+  $name, $value = $_.Split('=', 2)
+  Set-Item -Path "Env:$($name.Trim())" -Value $value
+}
+java -jar target/linkforge-2.0.0.jar
+```
+
+bash：
 
 ```bash
 set -a
 source .env
 set +a
-java -jar target/linkforge-2.0.0.jar   # 或 mvn spring-boot:run；默认端口 8080，profile dev
+java -jar target/linkforge-2.0.0.jar
 ```
 
-**4. 冒烟**：
+不想先打 jar 时，在同一个已经导出变量的窗口里执行 `mvn spring-boot:run`。它会先编译，再从 `target/classes` 启动，不读上面那个 jar。默认端口 8080，Spring profile 是 `dev`。前台进程用 Ctrl+C 停止。
+
+**4. 冒烟**。新开的窗口要先重复第 3 步的导入。把最后一条命令里的 `CODE` 换成创建接口返回的短码。健康检查期望正文里有 `"status":"UP"`。跳转期望 `302` 和 `Location`。
+
+PowerShell：
+
+```powershell
+curl.exe -s http://localhost:8080/actuator/health
+
+$body = @{
+  tenantName = $env:LINKFORGE_BOOTSTRAP_TENANT
+  username   = $env:LINKFORGE_BOOTSTRAP_USERNAME
+  password   = $env:LINKFORGE_BOOTSTRAP_PASSWORD
+} | ConvertTo-Json
+$login = curl.exe -s -X POST http://localhost:8080/api/auth/login -H "Content-Type: application/json" -d $body | ConvertFrom-Json
+$token = $login.data.token
+
+$link = @{ originalUrl = "https://example.com" } | ConvertTo-Json
+curl.exe -s -X POST http://localhost:8080/api/links -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d $link
+curl.exe -s -D - -o NUL http://localhost:8080/r/CODE
+```
+
+bash：
 
 ```bash
-# 健康检查
-curl -s http://localhost:8080/actuator/health          # 期望 {"status":"UP",...}
+curl -s http://localhost:8080/actuator/health
 
-# 登录 → 拿 token
 TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"tenantName":"'"${LINKFORGE_BOOTSTRAP_TENANT:-demo}"'","username":"'"${LINKFORGE_BOOTSTRAP_USERNAME:-admin}"'","password":"'"${LINKFORGE_BOOTSTRAP_PASSWORD}"'"}' \
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["token"])')
 
-# 建链 → 302
 curl -s -X POST http://localhost:8080/api/links -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{"originalUrl":"https://example.com"}'
-curl -s -D - -o /dev/null http://localhost:8080/r/CODE   # 期望 HTTP/1.1 302 + Location
+curl -s -D - -o /dev/null http://localhost:8080/r/CODE
 ```
 
-**5. 验证脚本**（口令读 `.env`，期望输出 `SMOKE OK` 等）：
+没有 `python3` 的环境把最后那个解析换成 `python`。Windows 上常见的是 `python`。
+
+**5. 验证脚本**。这三个文件是 bash，会自己读 `.env`。期望 `scripts/smoke.sh` 输出 `SMOKE OK`。`mq-drill.sh` 在 sync 开着时断开 RabbitMQ 再追平。`outbox-drill.sh` 在 sync 关着时做同样的事，并自己另起一个 8082 端口的实例。
+
+bash：
 
 ```bash
-bash scripts/smoke.sh        # health → 登录 → 建链 → 302 → Redis 校验 → 注册 → 生命周期
-bash scripts/mq-drill.sh     # sync 开 + 断 MQ → 恢复追平
-bash scripts/outbox-drill.sh # sync 关 + 断 MQ → 恢复追平（自带 8082 独立实例）
+bash scripts/smoke.sh
+bash scripts/mq-drill.sh
+bash scripts/outbox-drill.sh
 ```
 
-浏览器入口：`http://localhost:8080/` 极简控制台（登录/注册、建链、列表、启停/删除、统计、CSV 导出；可选特性，非主路径依赖）；接口文档 `http://localhost:8080/swagger-ui/index.html`（springdoc 生成，prod 下关闭）。
+PowerShell 里通常没有 `bash`（Git 默认只把 `Git\cmd` 放进 PATH）。打开 Git Bash 跑上面三行，或显式调用 bash：
+
+```powershell
+& "C:\Program Files\Git\bin\bash.exe" scripts/smoke.sh
+```
+
+浏览器入口是 `http://localhost:8080/` 极简控制台（登录、注册、建链、列表、启停、删除、统计、CSV 导出。控制台是可选入口）。接口文档是 `http://localhost:8080/swagger-ui/index.html`（springdoc 生成，prod 下关闭）。
 
 ### 常见坑
 
-- **必填环境变量缺失起不来**：`LINKFORGE_BOOTSTRAP_PASSWORD`、`SPRING_DATASOURCE_PASSWORD`、`SPRING_RABBITMQ_PASSWORD`、`JWT_SECRET`（≥32 字符）没有默认值，Spring 占位符解析失败即退出。
+- **必填环境变量缺失起不来**：`LINKFORGE_BOOTSTRAP_PASSWORD`、`SPRING_DATASOURCE_PASSWORD`、`SPRING_RABBITMQ_PASSWORD`、`JWT_SECRET`（至少 32 字符）没有默认值，Spring 占位符解析失败即退出。
+- **PowerShell 不要粘贴 bash 导出**：`source`、`set -a`、行末 `\` 都会失败。用第 3 步的 `Get-Content` 循环。请求用 `curl.exe`。
+- **MySQL 口令写在数据卷里**：`MYSQL_PASSWORD` 只在卷 `linkforge_mysql_data` 第一次初始化时创建账号。之后只改 `.env`，应用仍会报 `Access denied for user 'linkforge'`（1045，`using password: YES`）。让 `SPRING_DATASOURCE_PASSWORD` 与当初的口令一致。确认可以清空数据时，再执行 `docker compose down -v` 然后重新 `up`。`docker compose stop` 只停容器，卷还在。
 - **Linux 上 Prometheus 抓不到宿主机应用**：Compose 已为 Prometheus 配 `host.docker.internal:host-gateway`；自己起容器跑应用/测试时用 `--network host` 并把连接变量指向 `127.0.0.1`。
-- **scrape-token 文件权限**（Linux 踩坑实录）：Prometheus 容器内进程（`prom/prometheus` 以 nobody 运行）必须能读 `/etc/linkforge/scrape-token`。宿主机上该文件若是 `600` 且属主是登录用户，容器内读取被拒、target 永久 down。Linux 下 `chmod 644 ops/observability/scrape-token`（Windows / Docker Desktop 不校验 Unix 权限位，无此坑）。文件内容须与 `.env` 的 `LINKFORGE_METRICS_SCRAPE_TOKEN` 逐字一致，建议 `printf '%s' <token> >` 写入、避免尾随换行引入差异。
+- **scrape-token 文件权限**（Linux 踩坑实录）：Prometheus 容器内进程（`prom/prometheus` 以 nobody 运行）必须能读 `/etc/linkforge/scrape-token`。宿主机上该文件若是 `600` 且属主是登录用户，容器内读取被拒、target 永久 down。Linux 下 `chmod 644 ops/observability/scrape-token`（Windows / Docker Desktop 不校验 Unix 权限位，无此坑）。文件内容须与 `.env` 的 `LINKFORGE_METRICS_SCRAPE_TOKEN` 逐字一致，末尾不要换行。bash 用 `printf '%s' "$token" > ops/observability/scrape-token`。PowerShell 用 `Set-Content -NoNewline -Path ops/observability/scrape-token -Value $token`。
 - **本机开 Clash/Surge fake-IP**：198.18.0.0/15 段会被 Webhook SSRF 防护拒掉，保存公网 webhook 目标返回 400；联调前关 fake-IP 或改 redir-host。
 - **jar 名随版本走**：v2.0.0 起 jar 为 `target/linkforge-2.0.0.jar`。
 
@@ -294,10 +366,12 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 - **配额**：分钟滑窗 + 日固定窗两道闸（见[限流体系](#限流体系b6滑动窗口)），超限 429 + `Retry-After`；默认 120/分钟、10000/日，创建时可覆盖；每用户活跃上限 10
 - 管理 API（仅 JWT）：`POST /api/keys` / `GET /api/keys` / `DELETE /api/keys/{id}`
 
+下面是 bash。PowerShell 把 `curl` 写成 `curl.exe`，`$JWT` 换成你的 token。
+
 ```bash
 curl -X POST -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" \
   -d '{"name":"ci","quotaPerMinute":60}' http://localhost:8080/api/keys
-# → data.key = "lfk_xxxxxxxx_..." （仅此一次）
+# data.key = "lfk_xxxxxxxx_..." （仅此一次）
 curl -X POST -H "X-API-Key: lfk_xxxxxxxx_xxx" -H "Content-Type: application/json" \
   -d '{"originalUrl":"https://example.com"}' http://localhost:8080/api/links
 ```
@@ -309,15 +383,15 @@ curl -X POST -H "X-API-Key: lfk_xxxxxxxx_xxx" -H "Content-Type: application/json
 - **投递来源**：`recordClick` 热路径零新增——点击照旧 outbox → MQ → consume，在幂等去重事务内落 `lf_webhook_delivery(PENDING)`，独立 relay 轮询 HTTP 投递；断 MQ 期间点击停在 outbox，恢复后自动补出投递
 - **签名与防重放**：`X-LinkForge-Event-Id`（跨重试稳定）/ `X-LinkForge-Timestamp`（Unix 秒）/ `X-LinkForge-Signature: v1=HMAC-SHA256(secret, ts + "." + rawBody)`；接收方常量时间比较 + **±300s** 容差 + 按 event id 去重
 - **payload 最小化**：`{id, type, createdAt, data:{linkId, code, clickedAt, device, refererHost}}`——不推原始 IP / 完整 UA / 完整 Referer
-- **secret at-rest**：AES-256-GCM 密文（`v1:` + Base64(nonce‖ct‖tag)），主密钥 env `LINKFORGE_WEBHOOK_SECRET_KEY`（Base64 32 字节，`openssl rand -base64 32`）；明文只在创建/轮换时返回一次，GET 只给掩码。**主密钥缺失时 endpoint 管理 503，投递意图照常落 PENDING**（不静默丢），补密钥重启后补投；主密钥丢失须对全部租户 rotate-secret 重发
+- **secret at-rest**：AES-256-GCM 密文（`v1:` + Base64(nonce‖ct‖tag)），主密钥 env `LINKFORGE_WEBHOOK_SECRET_KEY`（Base64 的 32 字节）。bash 用 `openssl rand -base64 32`。PowerShell 用 `[Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }))`。明文只在创建或轮换时返回一次，GET 只给掩码。**主密钥缺失时 endpoint 管理 503，投递意图照常落 PENDING**（不静默丢），补密钥重启后补投；主密钥丢失须对全部租户 rotate-secret 重发
 - **重试**：2xx = SENT；网络错/超时/408/429/5xx 按 `min(1h, 10s·2^attempts)` 退避（首次重试等 20s）；其它 4xx 首败即 FAILED；上限 8 次。退避在 **DB 时钟**上调度，JVM 与 MySQL 时区不一致不会拉长或杀掉退避
 - **SSRF 基本防护**：保存时与每次发送前双校验——仅 http/https、拒 userinfo、解析出的所有 IP 拒环回/私网/链路本地（含 169.254.169.254）/CGNAT/ULA、不跟随重定向。**诚实限制**：DNS rebinding TOCTOU 不做、无端口白名单、无出口代理隔离；`LINKFORGE_WEBHOOK_ALLOW_PRIVATE_TARGETS` 仅测试用
-- **调度隔离**：`spring.task.scheduling.pool.size=4`，webhook relay 慢不拖点击 outbox 追平；纯 sync 模式（`LINKFORGE_ASYNC_CLICK_ENABLED=false`）不产生回调
+- **调度隔离**：`spring.task.scheduling.pool.size` 默认 6（`LINKFORGE_SCHEDULING_POOL_SIZE`），webhook relay 慢不拖点击 outbox 追平；纯 sync 模式（`LINKFORGE_ASYNC_CLICK_ENABLED=false`）不产生回调
 
 ### 可观测（B1 Prometheus + Grafana）
 
 - **抓取端点**：`/actuator/prometheus` 由专用令牌守卫——`Authorization: Bearer {LINKFORGE_METRICS_SCRAPE_TOKEN}` 常量时间比较；**令牌未配置 = 对所有请求 401（fail-closed）**；API Key 打它 403；令牌不进仓库（`.env` 与 `ops/observability/scrape-token` 各一份，后者 gitignore；Prometheus 原生 `authorization.credentials_file`；**文件须对容器内进程可读，见「常见坑」**）
-- **一键起观测栈**：`docker compose --profile observability up -d`（默认 up 不含）。镜像 tag 写死（prom/prometheus:v2.55.1、grafana/grafana-oss:11.3.0），端口只绑 127.0.0.1（9090/3000）；Grafana 密码 `GRAFANA_ADMIN_PASSWORD`（默认值仅限本机）；看板「LinkForge SLO」自动 provision（datasource uid `linkforge-prom`），截图见 `docs/img/grafana-*.png`
+- **一键起观测栈**：`docker compose --profile observability up -d`（默认 up 不含）。镜像 tag 写死（prom/prometheus:v2.55.1、grafana/grafana-oss:11.3.0），端口只绑 127.0.0.1。Prometheus 是 9090，Grafana 宿主机端口是 3001（容器内仍是 3000，避开本机已被占用的 3000）；Grafana 密码 `GRAFANA_ADMIN_PASSWORD`（默认值仅限本机）；看板「LinkForge SLO」自动 provision（datasource uid `linkforge-prom`），截图见 `docs/img/grafana-*.png`
 - **看板**：跳转 QPS/状态、P50/P95/P99（直方图）、SLO 达标率（≤100ms）与 5xx 率、跳过与限流拒绝、L1/L2 命中率、Bloom/absent、singleflight、fail-open、Outbox/Webhook 积压、API Key、门禁与解锁、JVM/Hikari。**SLO 阈值是 Demo 目标不是生产承诺**；`DashboardMetricsIT` 断言看板引用的每个指标都真实存在于 scrape
 - **tag 有界**：任何 tag 不含 code/URL/域名/IP/用户/Key id，`uri` 只出现模板值（`/r/{code}`）；`http.server.requests` 开 percentile 直方图 + SLO 桶（仅该 meter）；积压 gauge（`BacklogGauges` 每 15s 采样，不在 scrape 线程查库，失败保留上次值）
 

@@ -47,5 +47,8 @@ application-local.yaml
 # Local decision trail (assistant working artifact)
 .audit/
 
+# Local architecture diagrams (archify candidates and HTML)
+.archify/
+
 # B1 metrics scrape token (compose mounts it into Prometheus)
 ops/observability/scrape-token
