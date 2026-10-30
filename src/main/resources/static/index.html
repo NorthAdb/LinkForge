@@ -15,7 +15,7 @@
   .card { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 16px 20px; }
   .card h2 { font-size: 15px; margin: 0 0 12px; }
   label { display: block; color: var(--muted); font-size: 12px; margin: 8px 0 2px; }
-  input { width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  input, select { width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
   button { padding: 7px 14px; border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 6px; cursor: pointer; font: inherit; }
   button.ghost { background: #fff; color: var(--accent); }
   button.danger { border-color: #dc2626; background: #fff; color: #dc2626; }
@@ -72,6 +72,18 @@
         <input id="accessPassword" type="password" placeholder="留空不设密码" autocomplete="new-password">
       </div>
     </div>
+    <div class="grid2">
+      <div>
+        <label>utmSource（可选）</label><input id="utmSource" maxlength="64" oninput="utmHint()">
+        <label>utmCampaign（可选）</label><input id="utmCampaign" maxlength="64" oninput="utmHint()">
+        <label>utmContent（可选）</label><input id="utmContent" maxlength="64" oninput="utmHint()">
+      </div>
+      <div>
+        <label>utmMedium（可选）</label><input id="utmMedium" maxlength="64" oninput="utmHint()">
+        <label>utmTerm（可选）</label><input id="utmTerm" maxlength="64" oninput="utmHint()">
+        <div class="msg" id="utmMsg"></div>
+      </div>
+    </div>
     <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
       <button onclick="createLink()">创建</button>
       <a href="#" id="exportLink" onclick="this.href='/api/links/export';return true;">导出 CSV</a>
@@ -93,10 +105,11 @@
 
   <section class="card hidden" id="keysCard">
     <h2>API Key</h2>
-    <p class="stats-line">仅登录 JWT。路径：<code>POST /api/keys</code> · <code>GET /api/keys</code> · <code>DELETE /api/keys/{id}</code>。创建字段 <code>name</code>（必填）、<code>quotaPerMinute</code> / <code>quotaPerDay</code>（可选，留空用服务端默认）。明文 <code>key</code> 只在创建响应出现一次，列表只有 <code>prefix</code>。</p>
+    <p class="stats-line">仅登录 JWT。路径：<code>POST /api/keys</code> · <code>GET /api/keys</code> · <code>DELETE /api/keys/{id}</code>。创建字段 <code>name</code>（必填）、<code>scope</code>（可选 USER/TENANT，TENANT 仅租户管理员可建）、<code>quotaPerMinute</code> / <code>quotaPerDay</code>（可选，留空用服务端默认）。明文 <code>key</code> 只在创建响应出现一次，列表只有 <code>prefix</code>。</p>
     <div class="grid2">
       <div>
         <label>name</label><input id="keyName" placeholder="ci-bot" maxlength="64">
+        <label>scope</label><select id="keyScope"><option value="USER">USER</option></select>
       </div>
       <div>
         <label>quotaPerMinute（可选）</label><input id="keyPerMin" inputmode="numeric" placeholder="默认 120">
@@ -138,7 +151,7 @@
   </section>
 </main>
 <script>
-let token = '', page = 1, idemSeq = 0;
+let token = '', page = 1, idemSeq = 0, tenantRole = 'MEMBER';
 const $ = id => document.getElementById(id);
 const setMsg = (id, text, ok) => { const el = $(id); el.textContent = text || ''; el.className = 'msg ' + (ok ? 'ok' : 'err'); };
 
@@ -156,14 +169,16 @@ async function api(method, path, body, raw) {
 async function login() {
   const r = await api('POST', '/api/auth/login', { tenantName: $('tenant').value.trim(), username: $('user').value.trim(), password: $('pass').value });
   if (r.error) return setMsg('authMsg', '登录失败：' + r.error, false);
-  token = r.data.token; afterAuth(r.data.username + '@' + r.data.tenantName);
+  token = r.data.token; afterAuth(r.data.username + '@' + r.data.tenantName, r.data.tenantRole);
 }
 async function register() {
   const r = await api('POST', '/api/auth/register', { tenantName: $('tenant').value.trim(), username: $('user').value.trim(), password: $('pass').value });
   if (r.error) return setMsg('authMsg', '注册失败：' + r.error, false);
-  token = r.data.token; afterAuth(r.data.username + '@' + r.data.tenantName);
+  token = r.data.token; afterAuth(r.data.username + '@' + r.data.tenantName, r.data.tenantRole);
 }
-function afterAuth(who) {
+function afterAuth(who, role) {
+  tenantRole = role === 'ADMIN' ? 'ADMIN' : 'MEMBER';
+  if (tenantRole === 'ADMIN') $('keyScope').insertAdjacentHTML('beforeend', '<option value="TENANT">TENANT</option>');
   $('who').textContent = who; $('logout').classList.remove('hidden');
   $('authCard').classList.add('hidden'); $('mainCard').classList.remove('hidden');
   $('keysCard').classList.remove('hidden'); $('hookCard').classList.remove('hidden');
@@ -171,16 +186,26 @@ function afterAuth(who) {
 }
 function logout() { token = ''; location.reload(); }
 
+const utmIds = ['utmSource', 'utmMedium', 'utmCampaign', 'utmTerm', 'utmContent'];
+
+function utmHint() {
+  const bad = utmIds.filter(id => !/^[A-Za-z0-9._-]{0,64}$/.test($(id).value));
+  setMsg('utmMsg', bad.length ? '仅允许字母数字 . _ -，≤64 位：' + bad.join(', ') : '');
+}
+
 async function createLink() {
   const body = { originalUrl: $('url').value.trim() };
   if ($('title').value.trim()) body.title = $('title').value.trim();
   if ($('customCode').value.trim()) body.customCode = $('customCode').value.trim();
   if ($('expireAt').value) body.expireAt = $('expireAt').value + ':00';
   if ($('accessPassword').value) body.accessPassword = $('accessPassword').value;
+  for (const id of utmIds) if ($(id).value.trim()) body[id] = $(id).value.trim();
   const r = await api('POST', '/api/links', body);
   if (r.error) return setMsg('createMsg', '创建失败：' + r.error + (r.code === 429 ? '（触发限流，稍后再试）' : ''), false);
   setMsg('createMsg', '已创建：' + location.origin + r.data.shortPath, true);
   $('url').value = ''; $('customCode').value = ''; $('expireAt').value = ''; $('accessPassword').value = '';
+  for (const id of utmIds) $(id).value = '';
+  setMsg('utmMsg', '');
   loadLinks();
 }
 
@@ -197,6 +222,8 @@ async function loadLinks() {
       <button class="ghost" onclick="setPassword('${l.code}')">设密码</button>
       <button class="ghost" onclick="clearPassword('${l.code}')">清密码</button>
       <button class="ghost" onclick="toggle('${l.code}', ${l.status === 1})">${l.status === 1 ? '禁用' : '启用'}</button>
+      <button class="ghost" onclick="downloadQr('${l.code}')">下载 QR</button>
+      <button class="ghost" onclick="copyShare('${l.code}')">复制分享链</button>
       <button class="danger" onclick="del('${l.code}')">删除</button>
     </div></td></tr>`).join('');
   $('rows').innerHTML = rows || '<tr><td colspan="4" class="stats-line">还没有短链</td></tr>';
@@ -256,6 +283,7 @@ function hideOnce(id) { $(id).classList.add('hidden'); $(id).textContent = ''; }
 async function createKey() {
   const body = { name: $('keyName').value.trim() };
   if (!body.name) return setMsg('keyMsg', 'name 必填', false);
+  body.scope = $('keyScope').value;
   const perMin = $('keyPerMin').value.trim();
   const perDay = $('keyPerDay').value.trim();
   if (perMin) {
@@ -280,9 +308,9 @@ async function loadKeys() {
   const r = await api('GET', '/api/keys');
   if (r.error) return setMsg('keyMsg', '加载失败：' + r.error, false);
   const rows = (r.data || []).map(k => `<tr>
-    <td>${k.id}<div class="stats-line">${esc(k.name || '')}</div></td>
+    <td>${k.id}<div class="stats-line">${esc(k.name || '')}</div><div class="stats-line">scope ${esc(k.scope || 'USER')} · 创建人 ${k.createdBy ?? '-'}</div></td>
     <td><code>${esc(k.prefix || '')}</code><div class="stats-line">分 ${k.quotaPerMinute ?? '默认'} · 日 ${k.quotaPerDay ?? '默认'}</div></td>
-    <td>${k.revokedAt ? '已吊销' : '有效'}</td>
+    <td>${k.revokedAt ? '已吊销' : '有效'}<div class="stats-line">最近使用 ${k.lastUsedAt ? k.lastUsedAt.replace('T', ' ') : '-'}</div></td>
     <td>${k.revokedAt ? '' : `<button class="danger" onclick="revokeKey(${k.id})">吊销</button>`}</td>
   </tr>`).join('');
   $('keyRows').innerHTML = rows || '<tr><td colspan="4" class="stats-line">还没有 API Key</td></tr>';
@@ -342,6 +370,30 @@ async function deleteWebhook() {
 }
 
 function copy(code) { navigator.clipboard.writeText(location.origin + '/r/' + code); }
+
+async function downloadQr(code) {
+  try {
+    const resp = await fetch(`/api/links/${code}/qr.png`, { headers: { Authorization: 'Bearer ' + token } });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const blob = await resp.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = code + '.png';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    setMsg('listMsg', code + ' 二维码已下载', true);
+  } catch (e) {
+    setMsg('listMsg', '二维码下载失败：' + e.message, false);
+  }
+}
+
+async function copyShare(code) {
+  const r = await api('POST', `/api/links/${code}/qr-share`, {});
+  if (r.error) return setMsg('listMsg', '分享链获取失败：' + r.error, false);
+  await navigator.clipboard.writeText(r.data.url);
+  setMsg('listMsg', '分享链已复制（短期有效，打开无需登录）', true);
+}
+
 function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
 </script>
 </body>

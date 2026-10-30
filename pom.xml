@@ -29,6 +29,8 @@
         <testcontainers.version>2.0.5</testcontainers.version>
         <!-- A9 redirect hot-path Bloom filter; Boot BOM does not manage Guava. -->
         <guava.version>33.4.8-jre</guava.version>
+        <!-- C1 wave B (D-C1-1): QR material matrix + PNG rendering. -->
+        <zxing.version>3.5.3</zxing.version>
     </properties>
 
     <dependencyManagement>
@@ -109,6 +111,18 @@
         <dependency>
             <groupId>com.github.ben-manes.caffeine</groupId>
             <artifactId>caffeine</artifactId>
+        </dependency>
+        <!-- C1 wave B: core builds the matrix, javase renders PNG and ships the
+             BufferedImageLuminanceSource the decode IT asserts with. -->
+        <dependency>
+            <groupId>com.google.zxing</groupId>
+            <artifactId>core</artifactId>
+            <version>${zxing.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.zxing</groupId>
+            <artifactId>javase</artifactId>
+            <version>${zxing.version}</version>
         </dependency>
         <dependency>
             <groupId>com.mysql</groupId>

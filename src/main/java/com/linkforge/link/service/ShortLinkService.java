@@ -28,6 +28,7 @@ import com.linkforge.link.support.ShortLinkRowLoader;
 import com.linkforge.link.support.SingleFlight;
 import com.linkforge.link.support.TargetPolicy;
 import com.linkforge.link.support.UrlLocalCache;
+import com.linkforge.link.support.UtmMerger;
 import com.linkforge.security.AuthUser;
 import com.linkforge.security.UserContext;
 import com.linkforge.stats.service.ClickRecordService;
@@ -44,8 +45,12 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -62,6 +67,11 @@ public class ShortLinkService {
     private static final String ABSENT_SENTINEL = "1";
     private static final int CODE_ATTEMPTS = 16;
     private static final long STALE_WRITEBACK_CLEAR_MS = 1000;
+    /** D-C1-8: captured unknown props that would smuggle click attribution are a 400;
+     * every other unknown prop keeps the silent-ignore contract. */
+    private static final Pattern UTM_PREFIX = Pattern.compile("^utm", Pattern.CASE_INSENSITIVE);
+    private static final Set<String> CLICK_ATTRIBUTION_IDS = Set.of(
+            "gclid", "fbclid", "msclkid", "ttclid", "yclid", "dclid", "igshid", "wbraid", "gbraid");
 
     private final ShortLinkMapper shortLinkMapper;
     private final StringRedisTemplate stringRedisTemplate;
@@ -100,6 +110,7 @@ public class ShortLinkService {
             throw new RateLimitedException(decision.retryAfterSeconds());
         }
 
+        rejectSmuggledAttribution(request.getUnknown());
         if (idempotencyKey != null && !idempotencyKey.isBlank()) {
             String idemKey = rl.getKeyPrefix() + "idem:" + user.getUserId() + ":" + idempotencyKey;
             CreateShortLinkResponse replayed = replayIdempotentCreate(idemKey, user);
@@ -143,7 +154,8 @@ public class ShortLinkService {
     }
 
     private CreateShortLinkResponse doCreate(CreateShortLinkRequest request, AuthUser user, String idemKey) {
-        String url = request.getOriginalUrl().trim();
+        String url = mergeUtm(request.getOriginalUrl().trim(), UtmMerger.canonical(request.getUtmSource(),
+                request.getUtmMedium(), request.getUtmCampaign(), request.getUtmTerm(), request.getUtmContent()));
         LinkValidations.requireHttpUrl(url);
         rejectBlockedTarget(url);
         if (request.getExpireAt() != null && !request.getExpireAt().isAfter(LocalDateTime.now())) {
@@ -255,11 +267,14 @@ public class ShortLinkService {
     }
 
     public ShortLinkDetail update(String code, UpdateShortLinkRequest request) {
+        rejectSmuggledAttribution(request.getUnknown());
         boolean hasUrl = request.getOriginalUrl() != null && !request.getOriginalUrl().isBlank();
         boolean clearPassword = Boolean.TRUE.equals(request.getClearAccessPassword());
         boolean setPassword = request.getAccessPassword() != null && !request.getAccessPassword().isBlank();
+        Map<String, String> utm = UtmMerger.canonical(request.getUtmSource(), request.getUtmMedium(),
+                request.getUtmCampaign(), request.getUtmTerm(), request.getUtmContent());
         if (!hasUrl && request.getTitle() == null && request.getExpireAt() == null
-                && !clearPassword && !setPassword) {
+                && !clearPassword && !setPassword && utm.isEmpty()) {
             throw new BizException("nothing to update");
         }
         if (clearPassword && setPassword) {
@@ -270,12 +285,14 @@ public class ShortLinkService {
         }
         ShortLink link = getOwnedLink(code);
         String effectiveUrl = link.getOriginalUrl();
-        if (hasUrl) {
-            String url = request.getOriginalUrl().trim();
-            LinkValidations.requireHttpUrl(url);
-            rejectBlockedTarget(url);
-            effectiveUrl = url;
-            link.setOriginalUrl(url);
+        // D-C1-6: utm fields alone are a valid update; merge into the provided or the
+        // stored URL and validate the MERGED result like create. Legacy-dirty rows with
+        // neither a new URL nor utm keep today's no-revalidation behavior.
+        if (hasUrl || !utm.isEmpty()) {
+            effectiveUrl = mergeUtm(hasUrl ? request.getOriginalUrl().trim() : effectiveUrl, utm);
+            LinkValidations.requireHttpUrl(effectiveUrl);
+            rejectBlockedTarget(effectiveUrl);
+            link.setOriginalUrl(effectiveUrl);
         }
         if (request.getTitle() != null) {
             link.setTitle(request.getTitle());
@@ -569,7 +586,35 @@ public class ShortLinkService {
         return passwordEncoder.encode(trimmed);
     }
 
-    private ShortLink getOwnedLink(String code) {
+    /** D-C1-6/7: write-time merge; a merge past the 2048 column cap is a 400, never a DB error. */
+    private static String mergeUtm(String url, Map<String, String> utm) {
+        String merged = UtmMerger.merge(url, utm);
+        if (merged == null) {
+            throw new BizException(400, "merged originalUrl exceeds 2048");
+        }
+        return merged;
+    }
+
+    private static void rejectSmuggledAttribution(Map<String, Object> unknown) {
+        for (String name : unknown.keySet()) {
+            if (UTM_PREFIX.matcher(name).lookingAt()
+                    || CLICK_ATTRIBUTION_IDS.contains(name.toLowerCase(Locale.ROOT))) {
+                throw new BizException(400, "unknown attribution parameter: " + name);
+            }
+        }
+    }
+
+    /** C1 wave B: material opened by share signature bypasses ownership (the signature
+     * IS the owner's consent) but the code must still exist — 404 without an identity. */
+    public ShortLink requireExisting(String code) {
+        ShortLink link = shortLinkMapper.selectOne(new LambdaQueryWrapper<ShortLink>().eq(ShortLink::getCode, code));
+        if (link == null) {
+            throw new BizException(404, "short link not found");
+        }
+        return link;
+    }
+
+    ShortLink getOwnedLink(String code) {
         AuthUser user = requireUser();
         ShortLink link = shortLinkMapper.selectOne(new LambdaQueryWrapper<ShortLink>().eq(ShortLink::getCode, code));
         if (isTenantWide(user)) {

@@ -98,6 +98,11 @@ linkforge:
   jwt:
     secret: ${JWT_SECRET}
     expire-hours: ${JWT_EXPIRE_HOURS:24}
+  public-base-url: ${LINKFORGE_PUBLIC_BASE_URL:http://localhost:8080}
+  qr:
+    # C1 wave B: QR share links; blank secret derives the HMAC key from the JWT secret.
+    share-secret: ${LINKFORGE_QR_SHARE_SECRET:}
+    share-ttl-seconds: 300
   short-link:
     # Redis key: linkforge:code:{code} -> originalUrl; TTL = base + uniform [0, jitter]
     cache-ttl-seconds: 3600

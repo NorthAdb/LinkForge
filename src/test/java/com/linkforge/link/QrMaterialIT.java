@@ -1,7 +1,13 @@
 package com.linkforge.link;
 
+import com.google.zxing.BinaryBitmap;
+import com.google.zxing.client.j2se.BufferedImageLuminanceSource;
+import com.google.zxing.common.HybridBinarizer;
+import com.google.zxing.qrcode.QRCodeReader;
 import com.linkforge.AbstractIntegrationTest;
+import com.linkforge.config.LinkForgeProperties;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -9,10 +15,14 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.ActiveProfiles;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.net.URI;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -30,6 +40,30 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 })
 @ActiveProfiles("test")
 class QrMaterialIT extends AbstractIntegrationTest {
+
+    @Autowired
+    private LinkForgeProperties properties;
+
+    @Test
+    void qrPatternDecodesToTheShortLinkOnly() throws Exception {
+        String token = registerForToken();
+        String code = createLink(token, "https://example.com/decode-" + System.currentTimeMillis());
+
+        ResponseEntity<byte[]> png = qrPng("/api/links/" + code + "/qr.png", token);
+        assertEquals(200, png.getStatusCode().value(), new String(png.getBody() == null ? new byte[0] : png.getBody()));
+        BufferedImage img = ImageIO.read(new ByteArrayInputStream(png.getBody()));
+        assertNotNull(img, "the body must be a real image");
+        String decoded = new QRCodeReader()
+                .decode(new BinaryBitmap(new HybridBinarizer(new BufferedImageLuminanceSource(img))))
+                .getText();
+        String publicBase = properties.getPublicBaseUrl();
+        if (publicBase.endsWith("/")) {
+            publicBase = publicBase.substring(0, publicBase.length() - 1);
+        }
+        assertEquals(publicBase + "/r/" + code, decoded, "D-C1-3: the matrix is exactly the short link");
+        assertFalse(decoded.contains("sig="), "no signature material inside the matrix");
+        assertFalse(decoded.contains("Bearer"), "no credential inside the matrix");
+    }
 
     @Test
     void ownerDownloadsQrPngWithControllableParams() throws Exception {

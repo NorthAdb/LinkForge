@@ -1,9 +1,14 @@
 package com.linkforge.link.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonAnySetter;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 @Data
 public class UpdateShortLinkRequest {
@@ -23,4 +28,40 @@ public class UpdateShortLinkRequest {
 
     /** B3: clear the access password entirely; must not be combined with accessPassword. */
     private Boolean clearAccessPassword;
+
+    /** C1 wave B (D-C1-6): merged into the effective originalUrl at write time, null = absent. */
+    @Pattern(regexp = "[A-Za-z0-9._-]*", message = "utmSource must be letters, digits, dot, underscore or hyphen")
+    @Size(max = 64, message = "utmSource too long")
+    private String utmSource;
+
+    @Pattern(regexp = "[A-Za-z0-9._-]*", message = "utmMedium must be letters, digits, dot, underscore or hyphen")
+    @Size(max = 64, message = "utmMedium too long")
+    private String utmMedium;
+
+    @Pattern(regexp = "[A-Za-z0-9._-]*", message = "utmCampaign must be letters, digits, dot, underscore or hyphen")
+    @Size(max = 64, message = "utmCampaign too long")
+    private String utmCampaign;
+
+    @Pattern(regexp = "[A-Za-z0-9._-]*", message = "utmTerm must be letters, digits, dot, underscore or hyphen")
+    @Size(max = 64, message = "utmTerm too long")
+    private String utmTerm;
+
+    @Pattern(regexp = "[A-Za-z0-9._-]*", message = "utmContent must be letters, digits, dot, underscore or hyphen")
+    @Size(max = 64, message = "utmContent too long")
+    private String utmContent;
+
+    /** D-C1-8: unknown props land here; the service 400s utm* and click-attribution
+     * ids captured this way, everything else stays silently ignored. */
+    @JsonIgnore
+    private final Map<String, Object> unknown = new LinkedHashMap<>();
+
+    @JsonIgnore
+    public Map<String, Object> getUnknown() {
+        return unknown;
+    }
+
+    @JsonAnySetter
+    void captureUnknown(String name, Object value) {
+        unknown.put(name, value);
+    }
 }
