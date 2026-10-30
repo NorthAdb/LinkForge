@@ -2,6 +2,7 @@ package com.linkforge.stats.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.linkforge.stats.entity.Outbox;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
@@ -24,4 +25,12 @@ public interface OutboxMapper extends BaseMapper<Outbox> {
     @Update("UPDATE lf_outbox SET attempts = attempts + 1, next_attempt_at = "
             + "DATE_ADD(NOW(), INTERVAL #{backoffSeconds} SECOND) WHERE id = #{id}")
     int markRetry(@Param("id") long id, @Param("backoffSeconds") long backoffSeconds);
+
+    /**
+     * Retention cleanup. {@code sent_at} is written with {@code NOW()}, so the cutoff
+     * is the DB clock too. Only terminal SENT rows; PENDING / FAILED stay.
+     */
+    @Delete("DELETE FROM lf_outbox WHERE status = 'SENT' AND sent_at IS NOT NULL "
+            + "AND sent_at < DATE_SUB(NOW(), INTERVAL #{retentionSeconds} SECOND) LIMIT #{limit}")
+    int deleteSentOlderThan(@Param("retentionSeconds") long retentionSeconds, @Param("limit") int limit);
 }

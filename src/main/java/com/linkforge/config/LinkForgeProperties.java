@@ -25,6 +25,25 @@ public class LinkForgeProperties {
     private Phishing phishing = new Phishing();
     private LinkAccess linkAccess = new LinkAccess();
     private Metrics metrics = new Metrics();
+    private Retention retention = new Retention();
+
+    @Data
+    public static class Retention {
+        /**
+         * Delete SENT {@code lf_outbox} and {@code lf_webhook_delivery} rows older than
+         * this many days. {@code <= 0} disables the job. PENDING, FAILED, and in-flight
+         * rows are never deleted. Outbox {@code sent_at} is compared on the DB clock
+         * (the column is written with {@code NOW()}); webhook {@code sent_at} is compared
+         * on the JVM clock (the column is written from Java).
+         */
+        private int sentDays = 7;
+        /** @Scheduled reads millis (its placeholder parsing knows no Boot duration style). */
+        private long cleanupIntervalMs = 3_600_000L;
+        private long cleanupInitialDelayMs = 60_000L;
+        private int cleanupBatchSize = 1000;
+        /** Cap DELETE batches per tick so one pass cannot pin a scheduler thread. */
+        private int cleanupMaxPasses = 10;
+    }
 
     @Data
     public static class Metrics {

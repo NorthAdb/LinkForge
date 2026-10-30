@@ -2,6 +2,7 @@ package com.linkforge.webhook.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.linkforge.webhook.entity.WebhookDelivery;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -36,4 +37,14 @@ public interface WebhookDeliveryMapper extends BaseMapper<WebhookDelivery> {
     @Update("UPDATE lf_webhook_delivery SET status = 'FAILED', attempts = attempts + 1, "
             + "last_status_code = #{code}, last_error = #{error} WHERE id = #{id} AND status = 'PENDING'")
     int markFailed(@Param("id") long id, @Param("code") Integer code, @Param("error") String error);
+
+    /**
+     * Retention cleanup. {@code sent_at} is a business column written from the JVM
+     * clock, so the caller passes a JVM cutoff — comparing it to {@code NOW()} would
+     * reintroduce the JVM/DB timezone skew this mapper's clock rule exists to avoid.
+     * Only terminal SENT rows; PENDING / FAILED stay.
+     */
+    @Delete("DELETE FROM lf_webhook_delivery WHERE status = 'SENT' AND sent_at IS NOT NULL "
+            + "AND sent_at < #{cutoff} LIMIT #{limit}")
+    int deleteSentOlderThan(@Param("cutoff") LocalDateTime cutoff, @Param("limit") int limit);
 }
