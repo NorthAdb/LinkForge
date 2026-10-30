@@ -31,6 +31,8 @@
   .msg.ok { color: #059669; }
   .stats-line { color: var(--muted); font-size: 12px; }
   a { color: var(--accent); }
+  code { font: 12px/1.4 ui-monospace, Consolas, monospace; background: #f3f4f6; padding: 0 4px; border-radius: 4px; }
+  .secret { margin-top: 8px; font: 13px/1.5 ui-monospace, Consolas, monospace; background: #ecfdf5; border: 1px solid #a7f3d0; padding: 8px 10px; border-radius: 6px; word-break: break-all; }
   .hidden { display: none; }
 </style>
 </head>
@@ -66,6 +68,8 @@
       <div>
         <label>自定义短码（可选，4-16 位字母数字_-）</label><input id="customCode" placeholder="留空随机">
         <label>过期时间（可选）</label><input id="expireAt" type="datetime-local">
+        <label>访问密码 accessPassword（可选，4-64 位；留空则公开跳转）</label>
+        <input id="accessPassword" type="password" placeholder="留空不设密码" autocomplete="new-password">
       </div>
     </div>
     <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
@@ -85,6 +89,52 @@
       第 <span id="pageNo">1</span> 页 · <button class="ghost" style="padding:3px 8px;font-size:12px" onclick="turnPage(-1)">上一页</button> <button class="ghost" style="padding:3px 8px;font-size:12px" onclick="turnPage(1)">下一页</button>
     </div>
     <div class="msg" id="listMsg"></div>
+  </section>
+
+  <section class="card hidden" id="keysCard">
+    <h2>API Key</h2>
+    <p class="stats-line">仅登录 JWT。路径：<code>POST /api/keys</code> · <code>GET /api/keys</code> · <code>DELETE /api/keys/{id}</code>。创建字段 <code>name</code>（必填）、<code>quotaPerMinute</code> / <code>quotaPerDay</code>（可选，留空用服务端默认）。明文 <code>key</code> 只在创建响应出现一次，列表只有 <code>prefix</code>。</p>
+    <div class="grid2">
+      <div>
+        <label>name</label><input id="keyName" placeholder="ci-bot" maxlength="64">
+      </div>
+      <div>
+        <label>quotaPerMinute（可选）</label><input id="keyPerMin" inputmode="numeric" placeholder="默认 120">
+        <label>quotaPerDay（可选）</label><input id="keyPerDay" inputmode="numeric" placeholder="默认 10000">
+      </div>
+    </div>
+    <div style="margin-top:12px"><button onclick="createKey()">创建 API Key</button></div>
+    <div class="secret hidden" id="keyOnce"></div>
+    <div class="msg" id="keyMsg"></div>
+    <table style="margin-top:12px">
+      <thead><tr><th>id / name</th><th>prefix / 配额</th><th>状态</th><th></th></tr></thead>
+      <tbody id="keyRows"></tbody>
+    </table>
+  </section>
+
+  <section class="card hidden" id="hookCard">
+    <h2>点击 Webhook</h2>
+    <p class="stats-line">每租户一个端点。路径不是 <code>/api/webhooks</code> 根：</p>
+    <ul class="stats-line">
+      <li><code>PUT /api/webhooks/endpoint</code> — JSON 字段 <code>url</code>（必填）、<code>enabled</code>（可选布尔）。新建时响应带一次明文 <code>secret</code>；更新 url 不轮换 secret。</li>
+      <li><code>GET /api/webhooks/endpoint</code> — 查看当前配置，secret 只有掩码 <code>secretMasked</code>。</li>
+      <li><code>POST /api/webhooks/endpoint/rotate-secret</code> — 轮换，明文只此一次。</li>
+      <li><code>DELETE /api/webhooks/endpoint</code> — 删除。</li>
+    </ul>
+    <p class="stats-line">未配置环境变量 <code>LINKFORGE_WEBHOOK_SECRET_KEY</code>（32 字节 AES 主密钥的 Base64）时，PUT 与轮换返回 503。</p>
+    <label>url</label><input id="hookUrl" placeholder="https://example.com/hooks/linkforge">
+    <label style="display:flex;align-items:center;gap:8px;margin-top:8px">
+      <input id="hookEnabled" type="checkbox" checked style="width:auto"> enabled
+    </label>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+      <button onclick="saveWebhook()">保存（PUT /api/webhooks/endpoint）</button>
+      <button class="ghost" onclick="rotateWebhook()">轮换 secret</button>
+      <button class="danger" onclick="deleteWebhook()">删除</button>
+      <button class="ghost" onclick="loadWebhook()">刷新</button>
+    </div>
+    <div class="secret hidden" id="hookOnce"></div>
+    <div class="msg" id="hookMsg"></div>
+    <div class="stats-line" id="hookView" style="margin-top:8px"></div>
   </section>
 </main>
 <script>
@@ -116,7 +166,8 @@ async function register() {
 function afterAuth(who) {
   $('who').textContent = who; $('logout').classList.remove('hidden');
   $('authCard').classList.add('hidden'); $('mainCard').classList.remove('hidden');
-  loadLinks();
+  $('keysCard').classList.remove('hidden'); $('hookCard').classList.remove('hidden');
+  loadLinks(); loadKeys(); loadWebhook();
 }
 function logout() { token = ''; location.reload(); }
 
@@ -125,10 +176,11 @@ async function createLink() {
   if ($('title').value.trim()) body.title = $('title').value.trim();
   if ($('customCode').value.trim()) body.customCode = $('customCode').value.trim();
   if ($('expireAt').value) body.expireAt = $('expireAt').value + ':00';
+  if ($('accessPassword').value) body.accessPassword = $('accessPassword').value;
   const r = await api('POST', '/api/links', body);
   if (r.error) return setMsg('createMsg', '创建失败：' + r.error + (r.code === 429 ? '（触发限流，稍后再试）' : ''), false);
   setMsg('createMsg', '已创建：' + location.origin + r.data.shortPath, true);
-  $('url').value = ''; $('customCode').value = ''; $('expireAt').value = '';
+  $('url').value = ''; $('customCode').value = ''; $('expireAt').value = ''; $('accessPassword').value = '';
   loadLinks();
 }
 
@@ -137,11 +189,13 @@ async function loadLinks() {
   if (r.error) return setMsg('listMsg', '加载失败：' + r.error, false);
   const rows = r.data.records.map(l => `<tr>
     <td><a href="/r/${l.code}" target="_blank">${l.code}</a></td>
-    <td><div>${esc(l.originalUrl)}</div><div class="stats-line">状态 ${l.status === 1 ? '启用' : '禁用'}</div><div class="stats-line" id="st-${l.code}"></div></td>
+    <td><div>${esc(l.originalUrl)}</div><div class="stats-line">状态 ${l.status === 1 ? '启用' : '禁用'}${l.passwordProtected ? ' · 密码保护' : ''}</div><div class="stats-line" id="st-${l.code}"></div></td>
     <td>${l.expireAt ? l.expireAt.replace('T', ' ') : '-'}</td>
     <td><div class="row-actions">
       <button class="ghost" onclick="copy('${l.code}')">复制</button>
       <button class="ghost" onclick="showStats('${l.code}')">统计</button>
+      <button class="ghost" onclick="setPassword('${l.code}')">设密码</button>
+      <button class="ghost" onclick="clearPassword('${l.code}')">清密码</button>
       <button class="ghost" onclick="toggle('${l.code}', ${l.status === 1})">${l.status === 1 ? '禁用' : '启用'}</button>
       <button class="danger" onclick="del('${l.code}')">删除</button>
     </div></td></tr>`).join('');
@@ -176,8 +230,119 @@ async function del(code) {
   if (r.error) return setMsg('listMsg', '删除失败：' + r.error, false);
   loadLinks();
 }
+async function setPassword(code) {
+  const pw = prompt('PATCH /api/links/' + code + '\n字段 accessPassword（4-64 位）。取消则不提交。');
+  if (pw == null || pw === '') return;
+  const r = await api('PATCH', '/api/links/' + code, { accessPassword: pw });
+  if (r.error) return setMsg('listMsg', '设密码失败：' + r.error, false);
+  setMsg('listMsg', code + ' 已设置访问密码（明文与哈希都不会回显）', true);
+  loadLinks();
+}
+async function clearPassword(code) {
+  if (!confirm('PATCH /api/links/' + code + ' ，字段 clearAccessPassword:true ？')) return;
+  const r = await api('PATCH', '/api/links/' + code, { clearAccessPassword: true });
+  if (r.error) return setMsg('listMsg', '清密码失败：' + r.error, false);
+  setMsg('listMsg', code + ' 已清除访问密码', true);
+  loadLinks();
+}
+
+function showOnce(id, text) {
+  const el = $(id);
+  el.textContent = text;
+  el.classList.remove('hidden');
+}
+function hideOnce(id) { $(id).classList.add('hidden'); $(id).textContent = ''; }
+
+async function createKey() {
+  const body = { name: $('keyName').value.trim() };
+  if (!body.name) return setMsg('keyMsg', 'name 必填', false);
+  const perMin = $('keyPerMin').value.trim();
+  const perDay = $('keyPerDay').value.trim();
+  if (perMin) {
+    const n = Number(perMin);
+    if (!Number.isInteger(n) || n < 1) return setMsg('keyMsg', 'quotaPerMinute 须为不小于 1 的整数', false);
+    body.quotaPerMinute = n;
+  }
+  if (perDay) {
+    const n = Number(perDay);
+    if (!Number.isInteger(n) || n < 1) return setMsg('keyMsg', 'quotaPerDay 须为不小于 1 的整数', false);
+    body.quotaPerDay = n;
+  }
+  hideOnce('keyOnce');
+  const r = await api('POST', '/api/keys', body);
+  if (r.error) return setMsg('keyMsg', '创建失败：' + r.error, false);
+  setMsg('keyMsg', '已创建。下面的明文只出现这一次，列表接口不会再返回。', true);
+  showOnce('keyOnce', r.data.key || '');
+  $('keyName').value = '';
+  loadKeys();
+}
+async function loadKeys() {
+  const r = await api('GET', '/api/keys');
+  if (r.error) return setMsg('keyMsg', '加载失败：' + r.error, false);
+  const rows = (r.data || []).map(k => `<tr>
+    <td>${k.id}<div class="stats-line">${esc(k.name || '')}</div></td>
+    <td><code>${esc(k.prefix || '')}</code><div class="stats-line">分 ${k.quotaPerMinute ?? '默认'} · 日 ${k.quotaPerDay ?? '默认'}</div></td>
+    <td>${k.revokedAt ? '已吊销' : '有效'}</td>
+    <td>${k.revokedAt ? '' : `<button class="danger" onclick="revokeKey(${k.id})">吊销</button>`}</td>
+  </tr>`).join('');
+  $('keyRows').innerHTML = rows || '<tr><td colspan="4" class="stats-line">还没有 API Key</td></tr>';
+}
+async function revokeKey(id) {
+  if (!confirm('DELETE /api/keys/' + id + ' ？吊销后下一请求即 401。')) return;
+  const r = await api('DELETE', '/api/keys/' + id);
+  if (r.error) return setMsg('keyMsg', '吊销失败：' + r.error, false);
+  setMsg('keyMsg', '已吊销 #' + id, true);
+  loadKeys();
+}
+
+async function loadWebhook() {
+  const r = await api('GET', '/api/webhooks/endpoint');
+  if (r.status === 404) {
+    $('hookView').textContent = '尚未配置。保存会 PUT /api/webhooks/endpoint ，JSON 字段名是 url 和 enabled。';
+    return;
+  }
+  if (r.error) return setMsg('hookMsg', '读取失败：' + r.error, false);
+  const v = r.data || {};
+  $('hookUrl').value = v.url || '';
+  $('hookEnabled').checked = v.enabled !== false;
+  $('hookView').textContent = '当前 url=' + (v.url || '') + ' · enabled=' + v.enabled
+    + ' · secretMasked=' + (v.secretMasked || '（无明文）');
+}
+async function saveWebhook() {
+  const url = $('hookUrl').value.trim();
+  if (!url) return setMsg('hookMsg', 'url 必填', false);
+  hideOnce('hookOnce');
+  const r = await api('PUT', '/api/webhooks/endpoint', { url, enabled: $('hookEnabled').checked });
+  if (r.error) return setMsg('hookMsg', '保存失败：' + r.error, false);
+  if (r.data && r.data.secret) {
+    setMsg('hookMsg', '已创建。下面的 secret 只出现这一次。', true);
+    showOnce('hookOnce', r.data.secret);
+  } else {
+    setMsg('hookMsg', '已更新 url/enabled（secret 未轮换，GET 只返回掩码）。', true);
+  }
+  loadWebhook();
+}
+async function rotateWebhook() {
+  if (!confirm('POST /api/webhooks/endpoint/rotate-secret ？旧 secret 立即失效。')) return;
+  hideOnce('hookOnce');
+  const r = await api('POST', '/api/webhooks/endpoint/rotate-secret');
+  if (r.error) return setMsg('hookMsg', '轮换失败：' + r.error, false);
+  setMsg('hookMsg', '已轮换。下面的 secret 只出现这一次。', true);
+  showOnce('hookOnce', (r.data && r.data.secret) || '');
+  loadWebhook();
+}
+async function deleteWebhook() {
+  if (!confirm('DELETE /api/webhooks/endpoint ？')) return;
+  hideOnce('hookOnce');
+  const r = await api('DELETE', '/api/webhooks/endpoint');
+  if (r.error) return setMsg('hookMsg', '删除失败：' + r.error, false);
+  setMsg('hookMsg', '已删除', true);
+  $('hookUrl').value = '';
+  loadWebhook();
+}
+
 function copy(code) { navigator.clipboard.writeText(location.origin + '/r/' + code); }
-function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
 </script>
 </body>
 </html>
