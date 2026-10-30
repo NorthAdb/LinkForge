@@ -7,7 +7,7 @@
 
 | # | 事项 | 说明 | 来源 |
 |---|------|------|------|
-| 1 | **B10：Linux 复跑 bench 并刷新数字** | 现有压测数字（health 888 QPS；关同步明细 13→276 QPS、P50 678→31ms）测于 `df904f8` 固定窗口限流时期，早于 A7–B8 与 B6 滑窗，**不能代表当前版本**；B10 在 Linux 上用 wrk 复测并更新 `docs/bench.md` 与 README 引用 | Bw345-F2；Bw2fix-N9 |
+| 1 | **B10：Linux 复跑 bench 并刷新数字** | 现有压测数字（health 888 QPS；关同步明细 13→276 QPS、P50 678→31ms）是 **Windows 历史实测**（`df904f8`，2026-10-24，固定窗口限流时期，早于 A7–B8、B6 滑窗和当前 tip），**不能代表当前版本，也不是 Linux 性能**。B10 Linux bench **仍未跑**；跑完再更新 `docs/bench.md` 与 README 引用。未跑之前不要补造数字 | Bw345-F2；Bw2fix-N9 |
 | 2 | **QR 码 + UTM 参数**（B3 备选） | 密码短链的可选配套；差异表见交接单 §1.9，运营者 t94u 拍板本轮不做 | Bw345-F1 |
 | 3 | Bloom 共享化（RedisBloom 或广播 put） | 解决多实例「实例 B 新建的码在实例 A 重启前假阴性 404」；需 Redis Stack 模块或新增广播机制 | D-A9-2/D-A9-8 |
 | 4 | Bloom 删除回收（定期全量 rebuild） | 经典 Bloom 无法回收条目；已删码永久占位数组 | D-A9-5 |
@@ -20,10 +20,15 @@
 
 | # | 事项 | 说明 | 来源 |
 |---|------|------|------|
-| 9 | Outbox SENT 行自动清理 | SENT 行当前永久保留；可按 `DELETE ... WHERE status='SENT' AND sent_at < NOW() - INTERVAL 30 DAY` 定期清理 | A7 审计 N5 |
 | 10 | Webhook SSRF 残余 | DNS rebinding（校验与连接两次解析的 TOCTOU）、端口白名单、出口代理隔离未做 | B 波 2 诚实限制 |
-| 11 | Webhook SENT 投递行归档 | 同 #9 思路，`lf_webhook_delivery` 长期运行的清理策略 | B5 运维边界 |
 | 12 | README「tests 211 green」静态徽章会腐化 | 例数增减时需手改徽章数字（或换 CI 生成/动态方案）；v2.0 发布轮跨模型复审 flag #2 | v2.0 复审 |
+
+## 已做的运维项（v2.1 抛光，仍无新版本号）
+
+| # | 事项 | 落地 |
+|---|------|------|
+| 9 | Outbox SENT 行自动清理 | `SentRowCleanup` + `LINKFORGE_SENT_RETENTION_DAYS`（默认 7，`<=0` 关闭）。只删 `status='SENT'` 且 `sent_at` 早于窗口的行；outbox 用 DB 时钟。PENDING / FAILED / 在途不删 |
+| 11 | Webhook SENT 投递行清理 | 同一任务、同一属性。webhook `sent_at` 用 JVM 时钟比较，与写入时钟一致 |
 
 ## 文档与测试残余（v2.0 发布轮处置状态）
 

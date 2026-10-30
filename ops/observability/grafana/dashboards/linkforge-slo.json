@@ -87,13 +87,14 @@
     },
     {
       "type": "row",
-      "title": "Caches (L1 / L2 / absent / Bloom)",
+      "title": "Caches (L1 and Bloom are this process only; L2 and absent are shared Redis)",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 },
       "id": 101
     },
     {
       "type": "timeseries",
-      "title": "L1 hit/miss and L2 hit/miss rates",
+      "title": "L1 hit/miss (this process) and L2 hit/miss (Redis)",
+      "description": "L1 counters are process-local Caffeine. A scrape of one instance is not a cluster-wide hit rate. L2 is shared Redis.",
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 14 },
       "id": 6,
       "datasource": { "type": "prometheus", "uid": "linkforge-prom" },
@@ -106,7 +107,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Bloom rejections and absent-cache hits",
+      "title": "Bloom rejections (this process) and absent-cache hits (Redis)",
+      "description": "The Bloom filter is process-local. Rejections on this scrape are not a cluster total. The absent cache is shared Redis.",
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 14 },
       "id": 7,
       "datasource": { "type": "prometheus", "uid": "linkforge-prom" },

@@ -117,7 +117,7 @@
 
 **选择与理由**：Transactional Outbox（事务性发件箱）。`src/main/java/com/linkforge/stats/service/ClickRecordService.java` 的 `recordClick` 加 `@Transactional`：sync 开启时 `lf_click_log` 明细行与 `lf_outbox` PENDING 行同一事务提交，热路径完全不碰 RabbitMQ。`src/main/java/com/linkforge/stats/service/ClickOutboxRelay.java` 定时（默认 2 秒）扫 PENDING 批量投递，失败按 2 的幂退避（上限 60 秒）保持 PENDING，超过最大尝试次数标 FAILED 留查。投递是否成功以 broker 确认为准：`src/main/java/com/linkforge/stats/mq/RabbitClickEventPublisher.java` 用 publisher confirm（broker 确认回执）加 mandatory returns（不可路由退回），nack、不可路由、超时都抛异常，Relay 保持 PENDING 重试。
 
-**代价**：秒级投递延迟；多一张表加一个 Relay 组件；SENT 行永久保留（自动清理挂 backlog #9）；超限 FAILED 行要人工 SQL 重放。
+**代价**：秒级投递延迟；多一张表加一个 Relay 组件；SENT 行按 `LINKFORGE_SENT_RETENTION_DAYS`（默认 7 天）清理，只删 SENT，PENDING/FAILED 仍留；超限 FAILED 行要人工 SQL 重放。
 
 **验证**：`src/test/java/com/linkforge/stats/OutboxDrillIT.java` 加 `scripts/outbox-drill.sh`：脚本自带一个 sync 关闭的 8082 实例，断 MQ 期间跳转照常 302、outbox 攒 PENDING，恢复 MQ 后聚合、明细、SENT 三者追平。深讲见 [51-rabbitmq-outbox.md](51-rabbitmq-outbox.md)。
 
@@ -309,9 +309,9 @@ fail-open 的另一半是**可见性**：每次降级都打点（`linkforge.rate
 
 **根因**：环境，不是代码。600ms 一次提交是本机存储路径特性，不是设计缺陷的证据。反过来它也量化了一个设计事实：同步明细写确实是跳转吞吐的支配项。
 
-**处置**：数字如实记录进 `docs/bench.md`，带时期注（`df904f8`，2026-10-24，固定窗口限流时期，Windows 10 加 Docker Desktop/WSL2）；复测挂 backlog B10（Linux 上用 wrk 复跑）。这条实践与 [14-algorithms.md](14-algorithms.md) 的 explain-the-number 同源：先解释数字，再相信数字。
+**处置**：数字如实记录进 `docs/bench.md`，带时期注（`df904f8`，2026-10-24，固定窗口限流时期，Windows 10 加 Docker Desktop/WSL2）。这是 **Windows 历史实测**，早于当前 tip，**不是当前 Linux 性能**。B10 Linux bench 仍未跑，未跑之前不补造数字。这条实践与 [14-algorithms.md](14-algorithms.md) 的 explain-the-number 同源：先解释数字，再相信数字。
 
-**防复发**：性能数字入库强制带「时期注加环境注」；未复测前，引用旧数字必须注明不代表当前版本。
+**防复发**：性能数字入库强制带「时期注加环境注」；B10 Linux bench 仍未跑之前，引用这些 Windows 历史数字必须注明不代表当前 tip，也不是当前 Linux 性能。
 
 ### F5 少一个 Jackson 模块，全量消息进死信
 
@@ -356,8 +356,8 @@ fail-open 的另一半是**可见性**：每次降级都打点（`linkforge.rate
 - 211 例测试构成（90 单测加 119 IT 加 2 时区 fork，v2.0.0 发布口径）。
 - Bloom fpp=1e-4；迁移 V1–V7。
 - 滑窗限流入口与 Retry-After 语义（来自真实窗口计算）。
-- 13→276 QPS、P50 678→31ms（注明：2026-10-24，固定窗口限流时期，Windows 本机 Docker Desktop，不代表 v2.0.0 现状，复测挂 backlog B10）。
-- health 基线 888.8 QPS（同一时期同一环境，用于排除框架与网络）。
+- 13→276 QPS、P50 678→31ms（**Windows 历史实测**：2026-10-24，固定窗口限流时期，Windows 本机 Docker Desktop，早于当前 tip。不是当前 Linux 性能。B10 Linux bench 仍未跑）。
+- health 基线 888.8 QPS（同一 Windows 历史环境，用于排除框架与网络，同样不是当前 tip）。
 - Redis 预热命中率 100%（压测场景内，预热后纯命中）。
 - 连接预算 256（最坏推导）对 500（容器天花板）。
 
@@ -384,7 +384,7 @@ fail-open 的另一半是**可见性**：每次降级都打点（`linkforge.rate
 5. F7 里 fail-open 为什么让 WRONGTYPE 变得更危险，而不是更安全？
    答：ZSET 命令打在 STRING 键上报 WRONGTYPE，limiter 捕获后 fail-open 放行。故障的表现不是报错而是保护静默消失。这解释了 D11 为什么要求 fail-open 必须带计数器：没有计数的降级是看不见的故障。
 6. bench 的 13→276 QPS 在简历上怎么写才不翻车？
-   答：写「同步明细写是跳转吞吐支配项，关闭后 13→276 QPS（2026-10-24 固定窗口时期，Windows Docker Desktop 本机实测，不代表 v2.0.0 现状，Linux 复测中）」。环境、时期、结论三要素齐全。
+   答：写「同步明细写是跳转吞吐支配项，关闭后 13→276 QPS（Windows 历史实测，2026-10-24 固定窗口时期，早于当前 tip；B10 Linux bench 仍未跑，不是当前 Linux 性能）」。环境、时期、结论三要素齐全，不补造新数字。
 
 ## 下一步
 
