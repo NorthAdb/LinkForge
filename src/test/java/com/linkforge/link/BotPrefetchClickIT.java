@@ -32,6 +32,12 @@ class BotPrefetchClickIT extends AbstractIntegrationTest {
     private double metricValue(String token, String name, String tag) throws Exception {
         String uri = "/actuator/metrics/" + name + (tag == null ? "" : "?" + tag);
         ResponseEntity<String> m = get(uri, token);
+        // Micrometer registers a counter on first increment. This class shares a Spring
+        // context with RedirectHeadIT, so linkforge.redirects is absent (actuator 404)
+        // until some counted redirect has run. A missing series is a count of zero.
+        if (m.getStatusCode().value() == 404) {
+            return 0.0;
+        }
         assertEquals(200, m.getStatusCode().value(), "metric " + name + " must exist: " + m.getBody());
         return body(m).path("measurements").path(0).path("value").asDouble();
     }
