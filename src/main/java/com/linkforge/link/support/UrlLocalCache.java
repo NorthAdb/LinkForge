@@ -33,7 +33,8 @@ public class UrlLocalCache {
                 .maximumSize(cfg.getMaximumSize())
                 .expireAfterWrite(Duration.ofSeconds(cfg.getTtlSeconds()))
                 .build();
-        log.info("url L1 cache built (enabled={}, maximumSize={}, ttlSeconds={})",
+        log.info("url L1 cache built (enabled={}, maximumSize={}, ttlSeconds={}); "
+                        + "process-local, not shared across instances",
                 cfg.isEnabled(), cfg.getMaximumSize(), cfg.getTtlSeconds());
     }
 

@@ -7,6 +7,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -44,6 +45,17 @@ public class GlobalExceptionHandler {
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public ApiResponse<Void> handleUnreadable(Exception ex) {
         return ApiResponse.fail(400, "malformed request body");
+    }
+
+    /**
+     * A missing required query/form parameter is client input. The catch-all below
+     * would otherwise turn it into HTTP 500 and log a stack, which is what
+     * {@code GET /stats/breakdown} without {@code dim} used to do.
+     */
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public ApiResponse<Void> handleMissingParam(MissingServletRequestParameterException ex) {
+        return ApiResponse.fail(400, ex.getParameterName() + " is required");
     }
 
     @ExceptionHandler(Exception.class)

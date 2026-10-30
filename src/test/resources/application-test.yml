@@ -46,6 +46,11 @@ linkforge:
     register-max: ${LINKFORGE_REGISTER_MAX:1000}
     register-window-seconds: 600
     key-prefix: "linkforge:rl:it-default:"
+  retention:
+    # Shared IT database must not have a cleanup tick race a SENT assertion.
+    # Rows created by tests are minutes old; the predicate is also 7 days.
+    cleanup-initial-delay-ms: 3600000
+    cleanup-interval-ms: 3600000
   webhook:
     enabled: true
     # fixed 32-byte test master key (Base64) — ITs rely on AES-GCM round-trip

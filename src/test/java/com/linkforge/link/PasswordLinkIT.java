@@ -7,6 +7,8 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+
+import java.nio.charset.StandardCharsets;
 import org.springframework.test.context.ActiveProfiles;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -71,6 +73,7 @@ class PasswordLinkIT extends AbstractIntegrationTest {
         String code = createProtected("s3cret-pass");
         var resp = get("/r/" + code, null);
         assertEquals(200, resp.getStatusCode().value(), resp.getBody());
+        assertHtmlUtf8(resp);
         assertFalse(resp.getBody().contains("example.org"), "the unlock page must not leak the target");
         assertTrue(resp.getBody().contains("password"), "the page asks for a password");
         assertNull(resp.getHeaders().getLocation(), "a locked GET must not redirect");
@@ -83,6 +86,7 @@ class PasswordLinkIT extends AbstractIntegrationTest {
         String code = createProtected("s3cret-pass");
         var resp = postForm("/r/" + code + "/unlock", "password=wrong-guess", null);
         assertEquals(401, resp.getStatusCode().value(), resp.getBody());
+        assertHtmlUtf8(resp);
         assertTrue(resp.getBody().contains("password"), "a 401 unlock retry shows the form");
     }
 
@@ -141,5 +145,13 @@ class PasswordLinkIT extends AbstractIntegrationTest {
         assertNotNull(retryAfter, "429 carries Retry-After");
         int seconds = Integer.parseInt(retryAfter.trim());
         assertTrue(seconds >= 1 && seconds <= 300, "Retry-After " + seconds + " outside [1, 300]");
+    }
+
+    private static void assertHtmlUtf8(ResponseEntity<String> resp) {
+        MediaType ct = resp.getHeaders().getContentType();
+        assertNotNull(ct, "HTML gate must declare Content-Type: " + resp.getHeaders());
+        assertEquals("text", ct.getType());
+        assertEquals("html", ct.getSubtype());
+        assertEquals(StandardCharsets.UTF_8, ct.getCharset());
     }
 }

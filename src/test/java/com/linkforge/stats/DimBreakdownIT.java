@@ -7,6 +7,8 @@ import org.springframework.test.context.ActiveProfiles;
 
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * A8 end to end: redirects carrying different User-Agent / Referer headers flow
@@ -69,9 +71,22 @@ class DimBreakdownIT extends AbstractIntegrationTest {
 
         assertEquals(404, get("/api/links/" + code + "/stats/breakdown?dim=device", tokenB)
                 .getStatusCode().value(), "breakdown must be owner-only");
-        assertEquals(400, get("/api/links/" + code + "/stats/breakdown?dim=os", tokenA)
-                .getStatusCode().value(), "unsupported dim must be a 4xx");
+        var unknown = get("/api/links/" + code + "/stats/breakdown?dim=os", tokenA);
+        assertEquals(400, unknown.getStatusCode().value(), "unsupported dim must be a 4xx");
+        assertClientDimError(unknown.getBody());
+        var missing = get("/api/links/" + code + "/stats/breakdown", tokenA);
+        assertEquals(400, missing.getStatusCode().value(), "missing dim must be 400: " + missing.getBody());
+        assertClientDimError(missing.getBody());
+        var blank = get("/api/links/" + code + "/stats/breakdown?dim=", tokenA);
+        assertEquals(400, blank.getStatusCode().value(), "blank dim must be 400: " + blank.getBody());
         assertEquals(200, get("/api/links/" + code + "/stats/breakdown?dim=device", tokenA)
                 .getStatusCode().value());
+    }
+
+    private static void assertClientDimError(String body) {
+        assertTrue(body.contains("\"code\":400"), body);
+        assertTrue(body.contains("dim"), body);
+        assertFalse(body.contains("Exception"), body);
+        assertFalse(body.contains("\tat "), body);
     }
 }

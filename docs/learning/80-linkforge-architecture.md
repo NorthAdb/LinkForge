@@ -310,7 +310,7 @@ controller got: 404
 
 ## 怎么验证它活着：测试、CI、演练
 
-- 测试 48 个类。纯 JVM 单测以 `*Test` 结尾走 Surefire；起真容器的集成测试以 `*IT` 结尾走 Failsafe（Testcontainers）。README 口径 211 例全绿（Surefire 90 + Failsafe 119 + 时区独立 fork 2）。分层策略见 [60-testing-ci.md](60-testing-ci.md)。
+- 测试类以 `*Test` 走 Surefire、以 `*IT` 走 Failsafe（Testcontainers）。v2.0.0 发布口径 211 例（Surefire 90 + Failsafe 119 + 时区独立 fork 2）。当前 tip 在此基础上多 9 个纯单测，Surefire 99，合计 220。分层策略见 [60-testing-ci.md](60-testing-ci.md)。
 - CI 是 `.github/workflows/ci.yml`：push 与 PR 触发 `mvn -B verify`，ubuntu 自带 Docker 跑 Testcontainers。
 - 本地演练五个脚本：`scripts/smoke.sh`、`scripts/mq-drill.sh`、`scripts/outbox-drill.sh`、`scripts/bench.sh`、`scripts/migrate.sh`，用法在 [22-tools.md](22-tools.md)。
 - 观测栈一键起：`docker compose --profile observability up -d`，面板细节在 [61-docker-deploy.md](61-docker-deploy.md)。
@@ -325,8 +325,8 @@ controller got: 404
 
 项目自己承认的边界（来自 `docs/backlog.md` 与 README，面试可以主动讲）：
 
-- 文档里的压测数字测于旧版限流实现时期，不能代表 v2.0.0，复测（B10）挂起。
-- Bloom 多实例有假阴性风险；L1 多实例在 TTL（默认 10 秒）内可能读到旧 URL；Webhook 防 SSRF 未覆盖 DNS rebinding。
+- 文档里的压测数字是 Windows 历史实测（固定窗口限流时期，早于当前 tip），不是当前 Linux 性能。B10 Linux bench 仍未跑。
+- Bloom 与 Caffeine L1 都是进程内结构，多实例不共享：Bloom 有假阴性 404，L1 在 TTL（默认 10 秒）内其他实例可能读到旧 URL。`linkforge.bloom.*` / `linkforge.l1.*` 只计本进程，不是集群命中率。空值缓存和 Redis L2 是共享的。本版不做 RedisBloom / 分布式 L1。Webhook 防 SSRF 未覆盖 DNS rebinding。
 - 没有告警规则、没有链路追踪、没有熔断组件、应用未容器化。
 - 明确不做：AI、PostgreSQL、微服务拆分、K8s、云部署。
 

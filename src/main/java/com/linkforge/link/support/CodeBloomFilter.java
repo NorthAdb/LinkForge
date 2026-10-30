@@ -44,7 +44,8 @@ public class CodeBloomFilter {
     @EventListener(ApplicationReadyEvent.class)
     public void load() {
         if (!properties.getBloom().isEnabled()) {
-            log.info("bloom disabled by config; redirects stay on the cache+DB path");
+            log.info("bloom disabled by config; redirects stay on the cache+DB path "
+                    + "(the filter is process-local and is not shared across instances)");
             return;
         }
         try {
@@ -62,7 +63,8 @@ public class CodeBloomFilter {
             }
             ready = true;
             meterRegistry.counter("linkforge.bloom.loaded").increment();
-            log.info("bloom seeded with {} codes (expectedInsertions={}, fpp={}, approxSize={})",
+            log.info("bloom seeded with {} codes (expectedInsertions={}, fpp={}, approxSize={}); "
+                            + "process-local, not shared across instances",
                     codes.size(), cfg.getExpectedInsertions(), cfg.getFpp(), fresh.approximateElementCount());
         } catch (Exception ex) {
             // No half-seeded filter may linger: back to the fail-open state

@@ -5,14 +5,14 @@
 ![Java](https://img.shields.io/badge/Java-17-orange)
 ![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.3.5-6DB33F)
 ![MySQL·Redis·RabbitMQ](https://img.shields.io/badge/MySQL%20%C2%B7%20Redis%20%C2%B7%20RabbitMQ-8%20%C2%B7%207%20%C2%B7%203.13-informational)
-![tests](https://img.shields.io/badge/tests-211%20green-brightgreen)
+![tests](https://img.shields.io/badge/tests-220%20%2899%2B121%29-brightgreen)
 
 多租户短链 + 访问分析后端服务。**v2.0.0**＝P0–P5 全阶段交付（v1.0.0）+ 深化 A2–A10 + B 档波 1–5（B7/B8、B4/B5、B6/B2/B9/B3/B1），多轮外部审计通过。
 
 面向 2027 春招实习简历项目：用真实路径练 **MySQL / Redis / RabbitMQ / JWT**，业务壳是短链创建与 302 跳转。
 本仓库为**自研骨架**，不是对任何开源短链项目的换皮。每个模块都写明「诚实边界」——能做到什么、明确不做什么。
 
-> 压测声明：README 与 `docs/bench.md` 中的性能数字测于旧版本（固定窗口限流时期），**不代表 v2.0.0 现状**；B10 复测挂起中（见[待办](docs/backlog.md)）。
+> 压测声明：README 与 `docs/bench.md` 中的性能数字是 **Windows 历史实测**（2026-10-24，固定窗口限流时期，早于当前 tip），**不代表当前版本，也不是 Linux 性能**。B10 Linux bench **仍未跑**（见[待办](docs/backlog.md)）。不要把这些数字写成当前 tip 的成绩。
 
 ## 目录
 
@@ -177,7 +177,7 @@ PowerShell 里通常没有 `bash`（Git 默认只把 `Git\cmd` 放进 PATH）。
 & "C:\Program Files\Git\bin\bash.exe" scripts/smoke.sh
 ```
 
-浏览器入口是 `http://localhost:8080/` 极简控制台（登录、注册、建链、列表、启停、删除、统计、CSV 导出。控制台是可选入口）。接口文档是 `http://localhost:8080/swagger-ui/index.html`（springdoc 生成，prod 下关闭）。
+浏览器入口是 `http://localhost:8080/` 极简控制台（登录、注册、建链、列表、启停、删除、统计、CSV 导出、访问密码、API Key、点击 Webhook。控制台是可选入口，走的是下面同一套 API，不另开接口）。接口文档是 `http://localhost:8080/swagger-ui/index.html`（springdoc 生成，prod 下关闭）。
 
 ### 常见坑
 
@@ -293,6 +293,8 @@ flowchart LR
 
 **先说实话**：为了强一致，跳转**每个请求都要读一次 DB 行**判禁用/过期——Redis 只省 URL 字段，不替 DB 挡流量。以下五层省的是：不存在码的 DB miss、热点码的 Redis 往返、同码并发的重复行读，以及雪崩形态。
 
+**多实例（Bloom 与 L1 是进程内的）**：本版**没有**改成 RedisBloom，也**没有**分布式 L1。Guava Bloom 和 Caffeine L1 都只活在当前 JVM 里。实例 B 新建的短码，在实例 A 重启重新播种之前，可能被 A 的 Bloom 直接 404（假阴性）。实例 A 改了目标 URL 之后，实例 B 的 L1 在 TTL（默认 10 秒）内仍可能给出旧 URL。空值缓存和 Redis L2 是共享的。指标 `linkforge.bloom.*` 与 `linkforge.l1.*` 只计**本进程**；看板里的 L1/Bloom 曲线不是集群汇总。Grafana 面板标题写了 “this process”。
+
 1. **Bloom 防穿透（A9）**：进程内 Guava `BloomFilter<String>` 只存短码。负答（`mightContain == false`）是权威否定 → 直接 404 不碰 Redis/MySQL；误判（fpp 默认 1e-4）只是多一次 DB miss 照常 404。启动 `ApplicationReadyEvent` 全量装载，创建成功即 `put`。禁用/过期/删除语义不变（Bloom 只挡「从未存在」）；已删码仍装进 Bloom（逻辑删除、码位不可复用）。装载失败自动 fail-open（`linkforge.bloom.loadfailed`）。**已知限制**：多实例各自装载不共享——实例 B 新建的码在实例 A 重启前是假阴性 404（Demo 单实例可接受；RedisBloom 后置）。
 2. **空值缓存（B7）**：只缓存「DB 行读取结果为 null」这一种负答，键 `linkforge:absent:{code}`（哨兵 `"1"`）。**禁用/过期/不可渲染绝不写入**（行还在，启用后须立即生效）；创建成功后 DEL。TTL 60s+30s 抖动；`LINKFORGE_ABSENT_TTL_SECONDS<=0` 关闭。
 3. **TTL 抖动（防同批过期雪崩）**：正缓存与空值缓存 TTL 统一 `base + uniform[0, jitter]` 只向上抖——正缓存 `3600+300`、空值 `60+30`；同一批创建的码不再同时失效。
@@ -305,7 +307,7 @@ flowchart LR
 
 **设计**：热路径不直接触碰 RabbitMQ。跳转产生点击后在**同一 DB 事务**内写：① 同步明细 `lf_click_log`（`LINKFORGE_SYNC_CLICK_ENABLED`，默认开）；② Outbox `lf_outbox`（PENDING）。`ClickOutboxRelay`（默认批量 100、2s 轮询）投递到 `linkforge.click.exchange`，成功标 SENT；失败按 2^n 秒退避（上限 60s）重试。
 
-- **投递可靠性**：publish 走 correlated confirm + mandatory returns，broker ack 后才标 SENT；nack/路由不可达/确认超时（5s）一律退避重试；超过 `LINKFORGE_MQ_RELAY_MAX_ATTEMPTS`（默认 30）标 FAILED（指标 `linkforge.outbox.failed`；手工重放：`UPDATE lf_outbox SET status='PENDING', next_attempt_at=NULL WHERE status='FAILED'`；SENT 行永久保留，自动清理见[待办](docs/backlog.md)）。多实例 at-least-once，消费端 eventId 幂等兜底（`lf_consumed_event` 唯一索引 + 按天累加 `lf_click_daily`）；消费失败进死信 `linkforge.click.dlq`
+- **投递可靠性**：publish 走 correlated confirm + mandatory returns，broker ack 后才标 SENT；nack/路由不可达/确认超时（5s）一律退避重试；超过 `LINKFORGE_MQ_RELAY_MAX_ATTEMPTS`（默认 30）标 FAILED（指标 `linkforge.outbox.failed`；手工重放：`UPDATE lf_outbox SET status='PENDING', next_attempt_at=NULL WHERE status='FAILED'`）。**SENT 行**由定时清理删除：`linkforge.retention.sent-days` / `LINKFORGE_SENT_RETENTION_DAYS`（默认 **7** 天，`<=0` 关闭）。只删 `status='SENT'` 且 `sent_at` 早于窗口的行，PENDING / FAILED / 在途行不动；任务按批 `LIMIT`，重复执行是空操作。Outbox 的 `sent_at` 用数据库时钟比较。多实例 at-least-once，消费端 eventId 幂等兜底（`lf_consumed_event` 唯一索引 + 按天累加 `lf_click_daily`）；消费失败进死信 `linkforge.click.dlq`
 - **关 sync 后明细不丢**：消费者为 UUID 事件回填 `lf_click_log`，明细/UV 最终一致；断 MQ/断 Relay 期间点击停在 outbox（跳转照常 302），恢复自动补投
 - **对账**：`ClickLogReconciler`（默认 30s）仅 sync 开启时运行（直连补聚合安全网）；sync 关闭时追平完全由 outbox 承担
 - **手工对账**（sync 开时两边应相等）：
@@ -384,7 +386,7 @@ curl -X POST -H "X-API-Key: lfk_xxxxxxxx_xxx" -H "Content-Type: application/json
 - **签名与防重放**：`X-LinkForge-Event-Id`（跨重试稳定）/ `X-LinkForge-Timestamp`（Unix 秒）/ `X-LinkForge-Signature: v1=HMAC-SHA256(secret, ts + "." + rawBody)`；接收方常量时间比较 + **±300s** 容差 + 按 event id 去重
 - **payload 最小化**：`{id, type, createdAt, data:{linkId, code, clickedAt, device, refererHost}}`——不推原始 IP / 完整 UA / 完整 Referer
 - **secret at-rest**：AES-256-GCM 密文（`v1:` + Base64(nonce‖ct‖tag)），主密钥 env `LINKFORGE_WEBHOOK_SECRET_KEY`（Base64 的 32 字节）。bash 用 `openssl rand -base64 32`。PowerShell 用 `[Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }))`。明文只在创建或轮换时返回一次，GET 只给掩码。**主密钥缺失时 endpoint 管理 503，投递意图照常落 PENDING**（不静默丢），补密钥重启后补投；主密钥丢失须对全部租户 rotate-secret 重发
-- **重试**：2xx = SENT；网络错/超时/408/429/5xx 按 `min(1h, 10s·2^attempts)` 退避（首次重试等 20s）；其它 4xx 首败即 FAILED；上限 8 次。退避在 **DB 时钟**上调度，JVM 与 MySQL 时区不一致不会拉长或杀掉退避
+- **重试**：2xx = SENT；网络错/超时/408/429/5xx 按 `min(1h, 10s·2^attempts)` 退避（首次重试等 20s）；其它 4xx 首败即 FAILED；上限 8 次。退避在 **DB 时钟**上调度，JVM 与 MySQL 时区不一致不会拉长或杀掉退避。SENT 投递行与 Outbox 共用 `LINKFORGE_SENT_RETENTION_DAYS`（默认 7）；webhook 的 `sent_at` 是 JVM 时钟写入的，清理也按 JVM 时钟比较，避免再引入时区错配。PENDING / FAILED 不删
 - **SSRF 基本防护**：保存时与每次发送前双校验——仅 http/https、拒 userinfo、解析出的所有 IP 拒环回/私网/链路本地（含 169.254.169.254）/CGNAT/ULA、不跟随重定向。**诚实限制**：DNS rebinding TOCTOU 不做、无端口白名单、无出口代理隔离；`LINKFORGE_WEBHOOK_ALLOW_PRIVATE_TARGETS` 仅测试用
 - **调度隔离**：`spring.task.scheduling.pool.size` 默认 6（`LINKFORGE_SCHEDULING_POOL_SIZE`），webhook relay 慢不拖点击 outbox 追平；纯 sync 模式（`LINKFORGE_ASYNC_CLICK_ENABLED=false`）不产生回调
 
@@ -392,7 +394,7 @@ curl -X POST -H "X-API-Key: lfk_xxxxxxxx_xxx" -H "Content-Type: application/json
 
 - **抓取端点**：`/actuator/prometheus` 由专用令牌守卫——`Authorization: Bearer {LINKFORGE_METRICS_SCRAPE_TOKEN}` 常量时间比较；**令牌未配置 = 对所有请求 401（fail-closed）**；API Key 打它 403；令牌不进仓库（`.env` 与 `ops/observability/scrape-token` 各一份，后者 gitignore；Prometheus 原生 `authorization.credentials_file`；**文件须对容器内进程可读，见「常见坑」**）
 - **一键起观测栈**：`docker compose --profile observability up -d`（默认 up 不含）。镜像 tag 写死（prom/prometheus:v2.55.1、grafana/grafana-oss:11.3.0），端口只绑 127.0.0.1。Prometheus 是 9090，Grafana 宿主机端口是 3001（容器内仍是 3000，避开本机已被占用的 3000）；Grafana 密码 `GRAFANA_ADMIN_PASSWORD`（默认值仅限本机）；看板「LinkForge SLO」自动 provision（datasource uid `linkforge-prom`），截图见 `docs/img/grafana-*.png`
-- **看板**：跳转 QPS/状态、P50/P95/P99（直方图）、SLO 达标率（≤100ms）与 5xx 率、跳过与限流拒绝、L1/L2 命中率、Bloom/absent、singleflight、fail-open、Outbox/Webhook 积压、API Key、门禁与解锁、JVM/Hikari。**SLO 阈值是 Demo 目标不是生产承诺**；`DashboardMetricsIT` 断言看板引用的每个指标都真实存在于 scrape
+- **看板**：跳转 QPS/状态、P50/P95/P99（直方图）、SLO 达标率（≤100ms）与 5xx 率、跳过与限流拒绝、L1（本进程）/ L2（Redis）命中、Bloom（本进程）/ absent、singleflight、fail-open、Outbox/Webhook 积压、API Key、门禁与解锁、JVM/Hikari。L1 与 Bloom 面板不是集群命中率。**SLO 阈值是 Demo 目标不是生产承诺**；`DashboardMetricsIT` 断言看板引用的每个指标都真实存在于 scrape
 - **tag 有界**：任何 tag 不含 code/URL/域名/IP/用户/Key id，`uri` 只出现模板值（`/r/{code}`）；`http.server.requests` 开 percentile 直方图 + SLO 桶（仅该 meter）；积压 gauge（`BacklogGauges` 每 15s 采样，不在 scrape 线程查库，失败保留上次值）
 
 ### 数据迁移（Flyway，V1–V7）
@@ -455,6 +457,7 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 | `LINKFORGE_WEBHOOK_ENABLED` / `_SECRET_KEY` / `_RELAY_FIXED_DELAY_MS` / `_MAX_ATTEMPTS` / `_ALLOW_PRIVATE_TARGETS` | true / env 必填 32 字节 / 2000 / 8 / false（仅测试） |
 | `LINKFORGE_IDEMPOTENCY_TTL_SECONDS` | 86400 |
 | `LINKFORGE_METRICS_SCRAPE_TOKEN` / `LINKFORGE_METRICS_BACKLOG_INTERVAL` | 空（=端点 fail-closed 401）/ 15000 |
+| `LINKFORGE_SENT_RETENTION_DAYS` | 7（SENT 的 outbox / webhook 投递行保留天数；`<=0` 关闭清理。可选：`LINKFORGE_SENT_CLEANUP_INTERVAL_MS` 默认 3600000、`_INITIAL_DELAY_MS` 默认 60000、`_BATCH_SIZE` 默认 1000、`_MAX_PASSES` 默认 10） |
 
 **连接与其他**：`SPRING_DATASOURCE_URL`、`SPRING_DATASOURCE_USERNAME`、`SPRING_DATA_REDIS_HOST/PORT/PASSWORD`、`SPRING_RABBITMQ_HOST/PORT/USERNAME`、`LINKFORGE_BOOTSTRAP_TENANT`（demo）、`LINKFORGE_BOOTSTRAP_USERNAME`（admin）、`GRAFANA_ADMIN_PASSWORD`。**公网部署**：设 `SPRING_PROFILES_ACTIVE=prod` 一键收紧（health 细节 `when_authorized`、springdoc 与控制台关闭、对应路径 denyAll）。
 
@@ -478,7 +481,7 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 
 ## 🧪 测试与质量
 
-- **211 例全绿**（v2.0.0）：surefire 纯单测 **90** + failsafe Testcontainers 集成 **119** + 时区 fork **2**（`WebhookRetryClockIT` 独立 fork 到 Asia/Shanghai，钉 DB 时钟退避）
+- **220 例**（v2.0.0 发布口径 211，本抛光 +9 单测）：surefire 纯单测 **99** + failsafe Testcontainers 集成 **119** + 时区 fork **2**（`WebhookRetryClockIT` 独立 fork 到 Asia/Shanghai，钉 DB 时钟退避）。静态徽章会随例数变化，以本行拆分为准
 - **红先纪律**：每个特性先提交测试（CI 红 = 证据）再提交实现（CI 绿）；B 波 3+4+5 轮 13 次分支红全部留档根因（progress.md）
 - **CI**：GitHub Actions `mvn -B verify`（ubuntu + 原生 Docker Testcontainers），push 即跑，main 恒绿
 - **连接预算口径**：集成测试共享一个 Testcontainers MySQL（`--max-connections=500` 是**配置侧天花板**）；上下文峰值 ≈ 24×10+4×4 = **256 是最坏情形推导值**（每上下文 Hikari 同时满池的纸面相加），余量 244，全绿即零 `Too many connections`
@@ -487,7 +490,7 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 
 ## 📈 性能与压测
 
-见 [docs/bench.md](docs/bench.md)。wrk 实测（测于 `df904f8` 固定窗口限流时期，早于 A7–B8 与 B6 滑窗）：health 基线 888 QPS；跳转写路径分解：关同步明细后 13→276 QPS、P50 678→31ms；缓存命中率 100%。**新数字留待 B10 Linux 复测**——v2.0.0 的新增门禁（密码、域名名单、滑窗 ZSET）都会进热路径，届时以实测为准。
+见 [docs/bench.md](docs/bench.md)。下面是 **Windows 历史数字**（`df904f8`，2026-10-24，Docker Desktop/WSL2，固定窗口限流时期，早于 A7–B8、B6 滑窗和当前 tip），**不是当前 Linux 性能**：health 基线 888 QPS；跳转写路径分解：关同步明细后 13→276 QPS、P50 678→31ms；缓存命中率 100%。**B10 Linux bench 仍未跑**，这里不补任何新数字。v2.0.0 起的门禁（密码、域名名单、滑窗 ZSET）都会进热路径，当前 tip 的吞吐以将来的 Linux 实测为准。
 
 ## 🗺️ 待办与后续
 
@@ -495,9 +498,9 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 
 | 优先 | 事项 |
 |------|------|
-| 高 | **B10：Linux 复跑 bench 刷新数字**（现数字不代表 v2.0.0） |
+| 高 | **B10：Linux 复跑 bench 刷新数字**（现有数字是 Windows 历史 / 固定窗口时期，不代表当前 tip；Linux bench 仍未跑） |
 | 中 | QR 码 + UTM（B3 备选）；Bloom 多实例共享（RedisBloom）；L1 失效广播 |
-| 低 | 维度扩展（os/browser/Geo）；Outbox/Webhook SENT 行自动清理；Webhook DNS rebinding |
+| 低 | 维度扩展（os/browser/Geo）；Webhook DNS rebinding |
 
 按范围纪律：开新轮次需运营者指令。
 
