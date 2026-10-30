@@ -11,4 +11,5 @@ public class LoginResponse {
     private Long tenantId;
     private String username;
     private String tenantName;
+    private String tenantRole;
 }

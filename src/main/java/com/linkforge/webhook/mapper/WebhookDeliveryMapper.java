@@ -47,4 +47,8 @@ public interface WebhookDeliveryMapper extends BaseMapper<WebhookDelivery> {
     @Delete("DELETE FROM lf_webhook_delivery WHERE status = 'SENT' AND sent_at IS NOT NULL "
             + "AND sent_at < #{cutoff} LIMIT #{limit}")
     int deleteSentOlderThan(@Param("cutoff") LocalDateTime cutoff, @Param("limit") int limit);
+
+    /** Newest row for the endpoint view (D-C1-34); null when nothing was enqueued yet. */
+    @Select("SELECT * FROM lf_webhook_delivery WHERE endpoint_id = #{endpointId} ORDER BY id DESC LIMIT 1")
+    WebhookDelivery selectNewestByEndpoint(@Param("endpointId") Long endpointId);
 }

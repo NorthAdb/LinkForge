@@ -98,6 +98,11 @@ linkforge:
   jwt:
     secret: ${JWT_SECRET}
     expire-hours: ${JWT_EXPIRE_HOURS:24}
+  public-base-url: ${LINKFORGE_PUBLIC_BASE_URL:http://localhost:8080}
+  qr:
+    # C1 wave B: QR share links; blank secret derives the HMAC key from the JWT secret.
+    share-secret: ${LINKFORGE_QR_SHARE_SECRET:}
+    share-ttl-seconds: 300
   short-link:
     # Redis key: linkforge:code:{code} -> originalUrl; TTL = base + uniform [0, jitter]
     cache-ttl-seconds: 3600
@@ -148,6 +153,10 @@ linkforge:
     request-timeout-ms: ${LINKFORGE_WEBHOOK_REQUEST_TIMEOUT_MS:5000}
     # SSRF guard escape hatch — IT-only, never true in prod (D-Bw2-15).
     allow-private-targets: ${LINKFORGE_WEBHOOK_ALLOW_PRIVATE_TARGETS:false}
+    # C1 wave C (D-C1-21/23): AGGREGATE mode sweep cadence and the digest part cap.
+    aggregate-sweep-fixed-delay-ms: ${LINKFORGE_WEBHOOK_AGGREGATE_SWEEP_FIXED_DELAY_MS:5000}
+    aggregate-sweep-initial-delay-ms: ${LINKFORGE_WEBHOOK_AGGREGATE_SWEEP_INITIAL_DELAY_MS:3000}
+    aggregate-max-parts: ${LINKFORGE_WEBHOOK_AGGREGATE_MAX_PARTS:10}
   mq:
     # A7: hot path writes lf_outbox (PENDING) in the click transaction; the relay
     # drains it to RabbitMQ. sync-click keeps the lf_click_log double write.

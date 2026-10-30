@@ -94,7 +94,8 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
             meterRegistry.counter("linkforge.apikey.auth", "result", "ok").increment();
             touchLastUsed(key);
 
-            AuthUser authUser = new AuthUser(key.getUserId(), key.getTenantId(), "apikey:" + key.getKeyPrefix());
+            AuthUser authUser = new AuthUser(key.getUserId(), key.getTenantId(),
+                    "apikey:" + key.getKeyPrefix(), key.getScope());
             UserContext.set(authUser);
             var authentication = new UsernamePasswordAuthenticationToken(
                     authUser, null, List.of(new SimpleGrantedAuthority("ROLE_API_KEY")));

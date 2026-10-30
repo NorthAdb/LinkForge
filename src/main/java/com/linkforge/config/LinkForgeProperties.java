@@ -12,6 +12,9 @@ import java.util.List;
 public class LinkForgeProperties {
 
     private Jwt jwt = new Jwt();
+    /** C1 wave B: origin scanners see in QR/share material; trailing slash trimmed on use. */
+    private String publicBaseUrl = "http://localhost:8080";
+    private Qr qr = new Qr();
     private ShortLink shortLink = new ShortLink();
     private Mq mq = new Mq();
     private Bootstrap bootstrap = new Bootstrap();
@@ -84,6 +87,15 @@ public class LinkForgeProperties {
     public static class Jwt {
         private String secret;
         private long expireHours = 24;
+    }
+
+    @Data
+    public static class Qr {
+        /** D-C1-1: HMAC key for share links; blank derives deterministically from
+         * HMAC-SHA256(jwtSecret, "linkforge:qr-share:v1") — no operator burden. */
+        private String shareSecret = "";
+        /** Default share-link lifetime; the request body may clamp it to [1..3600]. */
+        private int shareTtlSeconds = 300;
     }
 
     @Data
@@ -177,6 +189,8 @@ public class LinkForgeProperties {
         private int requestTimeoutMs = 5000;
         /** IT-only escape hatch; must never be true in prod (D-Bw2-15). */
         private boolean allowPrivateTargets = false;
+        /** C1 wave C (D-C1-23): hard cap on digest parts per window; overflow sets truncated. */
+        private int aggregateMaxParts = 10;
     }
 
     @Data

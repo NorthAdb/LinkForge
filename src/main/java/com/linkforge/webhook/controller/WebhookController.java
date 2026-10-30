@@ -29,13 +29,7 @@ public class WebhookController {
 
     @PutMapping("/endpoint")
     public ApiResponse<Map<String, Object>> upsert(@RequestBody Map<String, Object> request) {
-        String url = request.get("url") == null ? null : String.valueOf(request.get("url"));
-        Object enabledRaw = request.get("enabled");
-        Boolean enabled = enabledRaw == null ? null : Boolean.valueOf(String.valueOf(enabledRaw));
-        if (url == null || url.isBlank()) {
-            throw new BizException("url is required");
-        }
-        return ApiResponse.ok(webhookService.upsert(url, enabled, requireUser()));
+        return ApiResponse.ok(webhookService.upsert(request, requireUser()));
     }
 
     @GetMapping("/endpoint")

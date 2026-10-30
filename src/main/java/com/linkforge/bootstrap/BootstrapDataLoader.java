@@ -61,6 +61,7 @@ public class BootstrapDataLoader implements ApplicationRunner {
             user.setUsername(username);
             user.setPasswordHash(passwordEncoder.encode(password));
             user.setStatus(1);
+            user.setTenantRole("ADMIN");
             user.setCreatedAt(LocalDateTime.now());
             user.setUpdatedAt(LocalDateTime.now());
             userAccountMapper.insert(user);

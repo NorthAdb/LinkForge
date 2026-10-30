@@ -32,14 +32,14 @@
 | 域 | 能力 | 模块章节 |
 |------|------|------|
 | 认证 | JWT 登录 / 开放注册（按 IP 限流）/ bootstrap 演示租户 / 多租户隔离 | [认证与多租户](#认证与多租户) |
-| 短链 | CRUD、自定义短码（区分大小写）、过期/禁用、创建幂等、并发不撞码、CSV 导出 | [短链管理](#短链管理) |
+| 短链 | CRUD、自定义短码（区分大小写）、过期/禁用、创建幂等、并发不撞码、CSV 导出、QR 物料 + 短时分享链、UTM 写时合并 | [短链管理](#短链管理)、[物料与投放](#物料与投放c1qr--utm) |
 | 跳转 | 302 + HEAD 探测；五层读取防护（限流→Bloom→空值缓存→L1/L2→singleflight） | [跳转读取路径](#跳转读取路径五层防护) |
 | 限流 | Redis 滑动窗口日志（精确计数、Redis TIME 时钟、Retry-After）+ 日固定配额 | [限流体系](#限流体系b6滑动窗口) |
 | 统计 | 同事务 Outbox + Relay 投递 + 幂等消费 + 断链自动追平；精确 UV；设备/来源维度 | [点击统计管道](#点击统计管道a7-transactional-outbox)、[维度分析](#维度分析a8-预聚合) |
 | 安全 | BCrypt 密码短链（签名 cookie、先限流后校验）、本地域名名单门禁（BLOCK/WARN）、非人点击不计 | [密码短链](#密码短链b3)、[域名门禁](#目标域名名单门禁b9)、[非人点击](#非人点击b2预取与预览-bot-照常-302-但不计) |
-| 开放 | API Key（哈希存储+配额）、点击 Webhook（HMAC 签名、AES-256-GCM at-rest、SSRF 防护） | [开放能力](#开放能力b4-api-key--b5-webhook) |
+| 开放 | API Key（哈希存储+配额，USER/TENANT 双 scope、TENANT 仅 ADMIN 签发）、点击 Webhook（HMAC 签名、AES-256-GCM at-rest、SSRF 防护、逐次/聚合双模式） | [开放能力](#开放能力b4-api-key--b5-webhook) |
 | 可观测 | 令牌守卫的 `/actuator/prometheus`、Grafana 自动 provision 看板、积压 gauge | [可观测](#可观测b1-prometheus--grafana) |
-| 工程 | Flyway 版本化迁移（V1–V7）、Testcontainers 集成测试 211 例、GitHub Actions CI、prod profile 一键收紧 | [测试与质量](#-测试与质量) |
+| 工程 | Flyway 版本化迁移（V1–V9）、测试 261 例（含 Testcontainers 集成 137）、GitHub Actions CI、prod profile 一键收紧 | [测试与质量](#-测试与质量) |
 
 **明确不做**（冻结决策，详见[待办](docs/backlog.md)）：AI / PostgreSQL / Supabase / 向量库（整体延期另立方案）；Spring Cloud / Seata / 多机房；独立前端 SPA（静态控制台已够用）；云公网部署（D5=本地 Compose，prod profile 已备好收紧开关）。
 
@@ -355,6 +355,16 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 - **判定顺序（D-Bw345-51）**：B9 BLOCK 403 → 密码门 → B9 WARN → B2 → 302。受保护的恶意链不给解锁页
 - **诚实边界**：保护的是「短链入口」不是目标资源——拿到原 URL 的人可直接访问；无 ACL/一次性密码/审计日志；解锁表单无 CSRF token（CSRF 全局已关闭，SameSite=Lax + 表单只能解锁，风险低）
 
+### 物料与投放（C1：QR + UTM）
+
+给已有短链出二维码物料、给目标 URL 拼标准 UTM 参数：
+
+- **QR 图**：`GET /api/links/{code}/qr.png` → `image/png`。鉴权与链接面一致（所有者 JWT / 有权 API Key；TENANT Key 可读本租户），**无鉴权公开 PNG 路由不存在**；参数 `size` 128–1024（默认 256）、`margin` 0–4（默认 1）、`ec` L/M/Q/H（默认 M），非法即 400；响应 `Cache-Control: private, max-age=60`，不落盘不进 Redis
+- **码面内容**：永远是 `{public-base-url}/r/{code}`（`LINKFORGE_PUBLIC_BASE_URL`，默认 `http://localhost:8080`）——扫码走完整跳转/解锁/门禁/计数路径；**JWT、API Key、签名一律不进码面**；密码链出 QR 不绕过解锁
+- **短时分享链**：所有者 `POST /api/links/{code}/qr-share`（可选 `ttlSeconds`，钳制 1–3600，默认 300）→ `{base}/api/links/{code}/qr.png?exp=&sig=`。`sig = HMAC-SHA256(code|exp)`（密钥 `LINKFORGE_QR_SHARE_SECRET`，留空则由 `JWT_SECRET` 域分离派生，无需配置）；持签请求免登录下图，过期/改签 → 401；分享响应 `private, no-store`。实现：`QrShareAuthFilter` 只在验签通过时授予 `ROLE_QR_SHARE`——**没有 permitAll 路由**
+- **UTM 写入（write-time merge）**：建链/改链带 `utmSource/utmMedium/utmCampaign/utmTerm/utmContent`（各 ≤64，字符限 `[A-Za-z0-9._-]`），**合并进 `original_url` 存库**——跳转路径零改动、目标站分析可见；URL 上已有同名参数**不覆盖**；请求体出现其它 `utm*` 或已知投放 id（gclid/fbclid 等 9 个）→ 400；合并后超 2048 列宽 → 400。**本服务统计口径不变**（仍 device + referer_host，无 utm 维度桶）
+- **依赖**：QR 渲染用 ZXing `core`+`javase`，版本钉死 `3.5.3`（`zxing.version` property，升级需过 CVE 与解码回归）
+
 ### 开放能力（B4 API Key + B5 Webhook）
 
 #### B4 API Key（哈希存储 + 配额）
@@ -363,7 +373,8 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 
 - 明文 `lfk_{8位前缀}_{32位Base62}` 只在**创建响应里出现一次**；库里只有 `key_hash = SHA-256(明文)`（唯一索引点查）+ 展示用 `key_prefix`
 - 请求头 `X-API-Key: lfk_...`（不能放 `Authorization: Bearer`——混发两样返回 400）；Key 以**创建者用户**身份调用（`ROLE_API_KEY`），租户隔离/限流/幂等语义与 JWT 一致
-- **权限白名单**：可调 `/api/links/**`（含 stats/breakdown/clicks/export）；不可调 `/api/keys/**`、`/api/webhooks/**`、`/actuator/**` → 403（防泄露后横向扩权）
+- **scope（C1）**：`USER`（默认）| `TENANT`。TENANT Key 仍以创建者身份**写**（建链 `created_by` = Key 创建者），但**读/改/删/导出/统计按同租户可见**——一把钥匙操作租户内所有人的链接；跨租户仍 404；USER Key 与 JWT 的归属判定一字未变。**TENANT Key 仅租户 ADMIN 的 JWT 可签发**（`lf_user.tenant_role`，注册创办人即 ADMIN，bootstrap 用户 ADMIN；MEMBER 尝试 → 403）。两种 scope 都**不可调** `/api/keys/**`、`/api/webhooks/**`（403 不变）；列表/详情暴露 `scope` / `createdBy` / `lastUsedAt`
+- **权限白名单**：可调 `/api/links/**`（含 stats/breakdown/clicks/export/qr）；不可调 `/api/keys/**`、`/api/webhooks/**`、`/actuator/**` → 403（防泄露后横向扩权）
 - **吊销即时**：每请求按 hash 点查一次库，删除后下一请求即 401（不做认证缓存）
 - **配额**：分钟滑窗 + 日固定窗两道闸（见[限流体系](#限流体系b6滑动窗口)），超限 429 + `Retry-After`；默认 120/分钟、10000/日，创建时可覆盖；每用户活跃上限 10
 - 管理 API（仅 JWT）：`POST /api/keys` / `GET /api/keys` / `DELETE /api/keys/{id}`
@@ -389,6 +400,7 @@ curl -X POST -H "X-API-Key: lfk_xxxxxxxx_xxx" -H "Content-Type: application/json
 - **重试**：2xx = SENT；网络错/超时/408/429/5xx 按 `min(1h, 10s·2^attempts)` 退避（首次重试等 20s）；其它 4xx 首败即 FAILED；上限 8 次。退避在 **DB 时钟**上调度，JVM 与 MySQL 时区不一致不会拉长或杀掉退避。SENT 投递行与 Outbox 共用 `LINKFORGE_SENT_RETENTION_DAYS`（默认 7）；webhook 的 `sent_at` 是 JVM 时钟写入的，清理也按 JVM 时钟比较，避免再引入时区错配。PENDING / FAILED 不删
 - **SSRF 基本防护**：保存时与每次发送前双校验——仅 http/https、拒 userinfo、解析出的所有 IP 拒环回/私网/链路本地（含 169.254.169.254）/CGNAT/ULA、不跟随重定向。**诚实限制**：DNS rebinding TOCTOU 不做、无端口白名单、无出口代理隔离；`LINKFORGE_WEBHOOK_ALLOW_PRIVATE_TARGETS` 仅测试用
 - **调度隔离**：`spring.task.scheduling.pool.size` 默认 6（`LINKFORGE_SCHEDULING_POOL_SIZE`），webhook relay 慢不拖点击 outbox 追平；纯 sync 模式（`LINKFORGE_ASYNC_CLICK_ENABLED=false`）不产生回调
+- **聚合模式（C1，`deliveryMode`）**：`PER_CLICK`（默认，逐次推送，行为与上完全一致）| `AGGREGATE`——点击进 `lf_webhook_agg_buffer` 的（endpoint， 窗口， 链接）桶，**双触发**封窗冲刷：窗口到期（默认 60s，可配 15–300）或窗内累计点击达 `aggregateMaxEvents`（默认 100）；冲刷在同一事务内落 `lf_webhook_delivery`（`event_type=link.clicks.digest`，`event_id=digest-{endpointId}-{windowStart}[-partN]`）并删缓冲，**签名/SSRF/重试/relay 全部复用逐次链路**。每 digest 最多 500 个 link 桶，超出同窗开 `-partN` 续篇（不静默丢；配置硬上限超出才置 `truncated:true`）；已封窗的迟到点击并入下一开放窗并带 `late:true`，不回补历史。**投递语义 at-least-once**——接收方按 `X-LinkForge-Event-Id` 去重；digest payload 同样无原始 IP/完整 UA、每 link 至多 1 条 sample。切换模式不换 secret；AGGREGATE→PER_CLICK 先冲刷缓冲；删除带缓冲的 endpoint 时缓冲以 **FAILED digest 行留痕**（不静默丢，不发送）
 
 ### 可观测（B1 Prometheus + Grafana）
 
@@ -397,7 +409,7 @@ curl -X POST -H "X-API-Key: lfk_xxxxxxxx_xxx" -H "Content-Type: application/json
 - **看板**：跳转 QPS/状态、P50/P95/P99（直方图）、SLO 达标率（≤100ms）与 5xx 率、跳过与限流拒绝、L1（本进程）/ L2（Redis）命中、Bloom（本进程）/ absent、singleflight、fail-open、Outbox/Webhook 积压、API Key、门禁与解锁、JVM/Hikari。L1 与 Bloom 面板不是集群命中率。**SLO 阈值是 Demo 目标不是生产承诺**；`DashboardMetricsIT` 断言看板引用的每个指标都真实存在于 scrape
 - **tag 有界**：任何 tag 不含 code/URL/域名/IP/用户/Key id，`uri` 只出现模板值（`/r/{code}`）；`http.server.requests` 开 percentile 直方图 + SLO 桶（仅该 meter）；积压 gauge（`BacklogGauges` 每 15s 采样，不在 scrape 线程查库，失败保留上次值）
 
-### 数据迁移（Flyway，V1–V7）
+### 数据迁移（Flyway，V1–V9）
 
 schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移（`baseline-on-migrate=true`）：
 
@@ -405,7 +417,7 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 - **已到 v1.0.0 schema 的存量卷**（表齐、无 `flyway_schema_history`）：自动记 baseline（version 1）跳过 V1，无需删卷，幂等可重复跑；`scripts/migrate.sh` 可对存量库单独驱动
 - **更老的卷**（缺 `lf_click_daily`/`lf_consumed_event`）：先按 `db/schema.sql` 里的 `CREATE TABLE IF NOT EXISTS` 补表（幂等）再启动
 
-`db/schema.sql` 仅作历史参考，不再被执行；新增 DDL 一律写 `db/migration` 新版本（V7 = `access_password_hash`）。
+`db/schema.sql` 仅作历史参考，不再被执行；新增 DDL 一律写 `db/migration` 新版本（V7 = `access_password_hash`；V8 = API Key `scope` + 用户 `tenant_role`；V9 = webhook 聚合三列 + `lf_webhook_agg_buffer`）。
 
 ## ⚙️ 配置参考
 
@@ -455,6 +467,9 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 | `LINKFORGE_LINK_ACCESS_TTL_SECONDS` / `_UNLOCK_IP_MAX` / `_UNLOCK_CODE_MAX` / `_UNLOCK_WINDOW_SECONDS` | 3600 / 5 / 50 / 300 |
 | `LINKFORGE_APIKEY_QUOTA_PER_MINUTE` / `_PER_DAY` / `_MAX_ACTIVE` | 120 / 10000 / 10 |
 | `LINKFORGE_WEBHOOK_ENABLED` / `_SECRET_KEY` / `_RELAY_FIXED_DELAY_MS` / `_MAX_ATTEMPTS` / `_ALLOW_PRIVATE_TARGETS` | true / env 必填 32 字节 / 2000 / 8 / false（仅测试） |
+| `LINKFORGE_WEBHOOK_AGGREGATE_MAX_PARTS` / `_AGGREGATE_SWEEP_FIXED_DELAY_MS` / `_AGGREGATE_SWEEP_INITIAL_DELAY_MS` | 10 / 5000 / 3000（C1 聚合 digest：part 硬上限与扫窗节奏；窗口/阈值按租户在 endpoint 上配置） |
+| `LINKFORGE_PUBLIC_BASE_URL` | http://localhost:8080（QR 码面与分享链的对外 origin） |
+| `LINKFORGE_QR_SHARE_SECRET` | 空（=由 `JWT_SECRET` 域分离派生分享签名密钥） |
 | `LINKFORGE_IDEMPOTENCY_TTL_SECONDS` | 86400 |
 | `LINKFORGE_METRICS_SCRAPE_TOKEN` / `LINKFORGE_METRICS_BACKLOG_INTERVAL` | 空（=端点 fail-closed 401）/ 15000 |
 | `LINKFORGE_SENT_RETENTION_DAYS` | 7（SENT 的 outbox / webhook 投递行保留天数；`<=0` 关闭清理。可选：`LINKFORGE_SENT_CLEANUP_INTERVAL_MS` 默认 3600000、`_INITIAL_DELAY_MS` 默认 60000、`_BATCH_SIZE` 默认 1000、`_MAX_PASSES` 默认 10） |
@@ -475,18 +490,18 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 | 门禁 | `linkforge.phishing.gate{action,stage}`、`.continue`、`.reload{result}`、gauge `.rules{level}` |
 | 密码短链 | `linkforge.link.unlock{result=ok\|bad_password\|rate_limited}`、`linkforge.link.locked` |
 | API Key | `linkforge.apikey.auth{result=ok\|invalid\|revoked\|ambiguous}`、`.quota.rejected{window}` |
-| Webhook | `linkforge.webhook.delivery{result}`、`.enqueued`、`.blocked`、`.enqueue.failed{reason}`、`.relay.skipped{reason}` |
+| Webhook | `linkforge.webhook.delivery{result}`、`.enqueued`、`.blocked`、`.enqueue.failed{reason}`、`.relay.skipped{reason}`、`.aggregate.flush{result=ok\|partial\|error}`（C1 聚合冲刷） |
 | Outbox | `linkforge.outbox.sent`、`.failed`、gauge `.pending`；gauge `linkforge.webhook.pending` / `.failed` |
 | HTTP/JVM | `http.server.requests`（percentile 直方图 + SLO 桶）、Hikari、JVM（Boot 自带） |
 
 ## 🧪 测试与质量
 
-- **220 例**（v2.0.0 发布口径 211，本抛光 +9 单测）：surefire 纯单测 **99** + failsafe Testcontainers 集成 **119** + 时区 fork **2**（`WebhookRetryClockIT` 独立 fork 到 Asia/Shanghai，钉 DB 时钟退避）。静态徽章会随例数变化，以本行拆分为准
+- **261 例**（v2.0.0 发布口径 211 → v2.1 抛光 220 → C1 +41）：surefire 纯单测 **122** + failsafe Testcontainers 集成 **137** + 时区 fork **2**（`WebhookRetryClockIT` 独立 fork 到 Asia/Shanghai，钉 DB 时钟退避）。静态徽章会随例数变化，以本行拆分为准
 - **红先纪律**：每个特性先提交测试（CI 红 = 证据）再提交实现（CI 绿）；B 波 3+4+5 轮 13 次分支红全部留档根因（progress.md）
 - **CI**：GitHub Actions `mvn -B verify`（ubuntu + 原生 Docker Testcontainers），push 即跑，main 恒绿
-- **连接预算口径**：集成测试共享一个 Testcontainers MySQL（`--max-connections=500` 是**配置侧天花板**）；上下文峰值 ≈ 24×10+4×4 = **256 是最坏情形推导值**（每上下文 Hikari 同时满池的纸面相加），余量 244，全绿即零 `Too many connections`
+- **连接预算口径**：集成测试共享一个 Testcontainers MySQL（`--max-connections=500` 是**配置侧天花板**）；上下文峰值 ≈ 26×10+8×4 = **292 是最坏情形推导值**（每上下文 Hikari 同时满池的纸面相加；C1 新增 3 个 IT 上下文均显式 4），余量 208，全绿即零 `Too many connections`
 - **对账演练**：`scripts/mq-drill.sh` / `scripts/outbox-drill.sh` 断 MQ 追平，回归皆绿
-- 审计证据与逐轮记录：[docs/progress.md](docs/progress.md)（1112+ 行，每阶段验收、决策、红绿史）
+- 审计证据与逐轮记录：[docs/progress.md](docs/progress.md)（1221 行，每阶段验收、决策、红绿史）
 
 ## 📈 性能与压测
 
@@ -499,7 +514,7 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 | 优先 | 事项 |
 |------|------|
 | 高 | **B10：Linux 复跑 bench 刷新数字**（现有数字是 Windows 历史 / 固定窗口时期，不代表当前 tip；Linux bench 仍未跑） |
-| 中 | QR 码 + UTM（B3 备选）；Bloom 多实例共享（RedisBloom）；L1 失效广播 |
+| 中 | Bloom 多实例共享（RedisBloom）；L1 失效广播（QR+UTM、租户级 API Key、Webhook 聚合已于 C1 关闭） |
 | 低 | 维度扩展（os/browser/Geo）；Webhook DNS rebinding |
 
 按范围纪律：开新轮次需运营者指令。
@@ -508,6 +523,7 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 
 | 版本 | 日期 | 内容 |
 |------|------|------|
+| **C1（未发版）** | 2026-10-31 | 深化 C1：QR 物料 + 短时签名分享链（ZXing 3.5.3）+ UTM 写时合并；API Key 双 scope（TENANT 仅租户 ADMIN 签发，租户级可见性）；Webhook 聚合推送（双触发 digest、at-least-once、part 续篇、late 标记）；V8/V9 迁移；测试 220→261；红先三轮 CI 留档 |
 | **v2.0.0** | 2026-10-25 | 深化 A2–A10（保留字/HEAD 探测/Flyway/Outbox/维度/Bloom/singleflight）+ B 档波 1–5：B7 空值缓存+TTL 抖动、B8 L1、B4 API Key、B5 Webhook、B6 滑动窗口限流、B2 非人点击不计、B9 域名名单门禁、B3 密码短链、B1 Prometheus+Grafana；测试 155→211；多轮审计（含两次修复轮）通过；tag `v2.0.0` |
 | v1.0.0 | 2026-10-24 | P0–P5 完整交付：Compose 三件套、认证、短链 CRUD、缓存跳转（写穿+双删）、MQ 异步聚合（幂等/对账/断链追平）、创建幂等、并发不撞码、限流、Testcontainers CI、bench、prod profile；tag `v1.0.0` |
 

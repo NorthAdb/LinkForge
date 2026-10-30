@@ -16,6 +16,8 @@ public class ApiKey {
     private Long tenantId;
     /** Creator; key-authenticated requests act as this user (D-Bw2-3). */
     private Long userId;
+    /** USER|TENANT; TENANT sees every link in its tenant (D-C1-12). */
+    private String scope;
     private String name;
     /** Display-only prefix (lfk_xxxxxxxx); the full key is never stored. */
     private String keyPrefix;

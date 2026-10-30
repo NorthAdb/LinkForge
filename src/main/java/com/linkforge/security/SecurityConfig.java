@@ -23,6 +23,7 @@ public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
     private final ApiKeyAuthFilter apiKeyAuthFilter;
+    private final QrShareAuthFilter qrShareAuthFilter;
     private final MetricsScrapeTokenFilter metricsScrapeTokenFilter;
 
     /** false in prod: docs are denied at the filter chain before reaching springdoc. */
@@ -55,6 +56,10 @@ public class SecurityConfig {
                     // B-wave2 B4 explicit capability whitelist: API keys may use the
                     // link/stats surface only; key and webhook management plus actuator
                     // stay JWT-only, and everything else defaults to JWT-only as well.
+                    // C1-2: signed share material opens exactly this method+pattern with
+                    // ROLE_QR_SHARE (minted by QrShareAuthFilter); no permitAll QR route.
+                    auth.requestMatchers(HttpMethod.GET, "/api/links/{code}/qr.png")
+                            .hasAnyRole("USER", "API_KEY", "QR_SHARE");
                     auth.requestMatchers("/api/links/**").hasAnyRole("USER", "API_KEY")
                             .requestMatchers("/api/keys/**", "/api/webhooks/**").hasRole("USER")
                             // B1: the scrape endpoint answers only to ROLE_METRICS
@@ -80,9 +85,11 @@ public class SecurityConfig {
                 // in front of it (it must see the raw Bearer before the JWT filter), and
                 // the X-API-Key filter sits after — either of the latter two may establish
                 // the SecurityContext. Both together is a 400 from the key filter.
+                // QrShareAuthFilter runs last on signed material requests only.
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(metricsScrapeTokenFilter, JwtAuthFilter.class)
-                .addFilterAfter(apiKeyAuthFilter, JwtAuthFilter.class);
+                .addFilterAfter(apiKeyAuthFilter, JwtAuthFilter.class)
+                .addFilterAfter(qrShareAuthFilter, ApiKeyAuthFilter.class);
         return http.build();
     }
 

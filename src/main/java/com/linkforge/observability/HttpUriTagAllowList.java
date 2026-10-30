@@ -24,6 +24,8 @@ public class HttpUriTagAllowList {
             "/api/links", "/api/links/{code}", "/api/links/{code}/stats",
             "/api/links/{code}/stats/breakdown", "/api/links/{code}/clicks",
             "/api/links/export",
+            // C1 wave B: qr.png and qr-share must not collapse into UNKNOWN (javadoc above)
+            "/api/links/{code}/qr.png", "/api/links/{code}/qr-share",
             "/api/auth/login", "/api/auth/register",
             "/api/keys", "/api/keys/{id}",
             "/api/webhooks/endpoint", "/api/webhooks/endpoint/{id}",

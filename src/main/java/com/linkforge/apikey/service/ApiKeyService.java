@@ -7,6 +7,8 @@ import com.linkforge.apikey.mapper.ApiKeyMapper;
 import com.linkforge.common.exception.BizException;
 import com.linkforge.config.LinkForgeProperties;
 import com.linkforge.security.AuthUser;
+import com.linkforge.user.entity.UserAccount;
+import com.linkforge.user.mapper.UserAccountMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -26,6 +28,7 @@ public class ApiKeyService {
     private static final String BASE62 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
     private final ApiKeyMapper apiKeyMapper;
+    private final UserAccountMapper userAccountMapper;
     private final LinkForgeProperties properties;
     private final SecureRandom random = new SecureRandom();
 
@@ -34,6 +37,18 @@ public class ApiKeyService {
      * stored. The plaintext is returned once in the response and never logged.
      */
     public ApiKeyDtos.Created create(ApiKeyDtos.CreateRequest request, AuthUser user) {
+        String scope = request.getScope() == null || request.getScope().isBlank()
+                ? "USER" : request.getScope().trim().toUpperCase();
+        if (!"USER".equals(scope) && !"TENANT".equals(scope)) {
+            throw new BizException(400, "scope must be USER or TENANT");
+        }
+        if ("TENANT".equals(scope)) {
+            UserAccount creator = userAccountMapper.selectById(user.getUserId());
+            // pre-V8 rows have a null role, which reads as MEMBER
+            if (creator == null || !"ADMIN".equals(creator.getTenantRole())) {
+                throw new BizException(403, "only a tenant ADMIN can mint a TENANT-scope api key");
+            }
+        }
         long active = apiKeyMapper.selectCount(new LambdaQueryWrapper<ApiKey>()
                 .eq(ApiKey::getUserId, user.getUserId())
                 .isNull(ApiKey::getRevokedAt));
@@ -56,6 +71,7 @@ public class ApiKeyService {
         ApiKey key = new ApiKey();
         key.setTenantId(user.getTenantId());
         key.setUserId(user.getUserId());
+        key.setScope(scope);
         key.setName(request.getName());
         key.setKeyPrefix(KEY_PREFIX_TAG + prefix);
         key.setKeyHash(sha256Hex(plaintext));
@@ -69,6 +85,8 @@ public class ApiKeyService {
         created.setName(key.getName());
         created.setPrefix(key.getKeyPrefix());
         created.setKey(plaintext);
+        created.setScope(scope);
+        created.setCreatedBy(key.getUserId());
         created.setQuotaPerMinute(key.getQuotaPerMinute());
         created.setQuotaPerDay(key.getQuotaPerDay());
         created.setCreatedAt(key.getCreatedAt());
@@ -113,6 +131,8 @@ public class ApiKeyService {
         view.setId(key.getId());
         view.setName(key.getName());
         view.setPrefix(key.getKeyPrefix());
+        view.setScope(key.getScope());
+        view.setCreatedBy(key.getUserId());
         view.setQuotaPerMinute(key.getQuotaPerMinute());
         view.setQuotaPerDay(key.getQuotaPerDay());
         view.setLastUsedAt(key.getLastUsedAt());
