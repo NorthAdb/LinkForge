@@ -1237,3 +1237,88 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 - **261 = surefire 122 + failsafe 137 + tz fork 2**；连接预算 26×10+8×4 = **292**（35 个 \*IT、8 个显式 hikari=4，C1 新增 3 个均 4）
 - 分支终态 run [41096159455](https://github.com/NorthAdb/LinkForge/actions/runs/41096159455) ✅；修复轮两枚（`1f38b0b` 测试值、`b122371` 测试竞态）均为测试自身缺陷、实现零改动
 - 本地（无 Testcontainers）：`mvn -B verify -DskipITs` 退出码 0，surefire 122 全绿（每轮提交前显式判 `$?`）
+
+## C2 深化轮：多实例对齐（Bloom 广播 + rebuild + L1 失效）+ os/browser 维度 + C1 docs nit（feat/deepen-c2-multi-instance-dims，发车基线 main@01856d8，2026-10-31）
+
+> 交接单：记录追踪/05-阶段交接/LinkForge-phase-C2-multi-instance-dims-handoff.md（t112 确认 Q1–Q5 全 A）。首提交即 C1-N1（CI 结论表，见上文）。
+
+### 决策记录（D-C2 落地）
+
+| ID | 落地 |
+|----|------|
+| D-C2-1 | C1-N1：C1 章新增「CI 结论表」，`41091380989`=failure 如实标注，B/功能绿引用 `41096159455`/`41098314901` |
+| D-C2-2 | C1-N4：README 例数改 C2 收工终态 **281**（133+146+2），C2 章写构成 |
+| D-C2-3..8 | Bloom 广播：进程内 Guava 保留；`CacheBus`（频道 `linkforge:bloom:put`、payload `<code>|<origin>`、per-JVM INSTANCE_ID、parser 纯函数）；`doCreate` 本地 put 后 publish（fail-open：log + `bloom.publish{result=error}`，创建不受影响）；订阅**自消息也应用**（Guava put 幂等，D-C2-7 钉「不跳过自己」）；订阅在 `@PostConstruct` 注册到共享 `RedisMessageListenerContainer`（SmartLifecycle 先于 ApplicationReadyEvent，D-C2-5 先订阅再装载有注释钉死）；指标 `bloom.publish{ok\|error}` / `bloom.subscribe.put` / `bloom.subscribe.malformed`；`linkforge.cache-bus-enabled`（默认 true，false=不订阅不发布） |
+| D-C2-9..14 | Bloom rebuild：`@Scheduled(fixedDelayString=…rebuild-interval-ms:86400000)`（毫秒占位符，env `LINKFORGE_BLOOM_REBUILD_INTERVAL_MS`；`LINKFORGE_BLOOM_REBUILD_ENABLED` 可关）；旁路建新过滤器→**先换引用再播种**（同 load() 的 A9-S1 理由：播种窗口内的创建直接进新过滤器）→失败恢复旧引用（ready 永不降级）；`selectAllCodes()` **含逻辑删码**（D-C2-11 钉：rebuild=容量/fpp 重置+补漏广播，非删码回收）；`POST /api/admin/bloom/rebuild`（JWT only 链级 403 + 服务内 `tenant_role=ADMIN` 校验；手动失败 500 如实上报）；单飞 `AtomicBoolean` CAS，重叠手动触发 **409**、定时静默跳过；指标 `bloom.rebuild{ok\|busy\|error}` |
+| D-C2-15..20 | L1 失效广播：频道 `linkforge:l1:invalidate`；publish 点=update / setStatus（disable+enable 共用）/ delete 的写提交尾（**一次**，`scheduleStaleClear` 不广播）；订阅端（UrlLocalCache @PostConstruct）**只**剔本地 Caffeine 槽（类内无 Redis 模板，L2/absent/Bloom 物理不可触）；**origin 跳过自己**（D-C2-18 钉：防抹掉刚写穿的 URL；skip 不计 meter——publish{ok} 已含自回声，避免双计数）；publish fail-open + `l1.invalidate.publish{ok\|error}` / `.remote` / `.malformed`；L1 TTL 10s 兜底不变，命中不跳过 DB 行读不变 |
+| D-C2-21..28 | 维度 os/browser：`ClickDimensions.of` 返回 4 行（device/referer_host/os/browser）；纯字符串规则（零新依赖，永不抛）；os 桶 ios→android→windows→macos→linux→other/unknown（android 先于 linux、ios 先于 macos——UA 谎报顺序）；browser 桶 bot→wechat→**edg/ 先于 chrome**→chrome/crios→firefox/fxios→safari(无前置 Chromium 记号)→other/unknown；consume 同幂等事务 ODKU，**零迁移**（V3 dim_type 已容纳）、**零回填**；`dim=os\|browser` 200，geo/未知/缺省 400（DIM_REQUIRED 文案更新；BreakdownDimValidationTest 与 DimBreakdownIT 的 `dim=os` 探针随合同翻转为 `dim=geo`）；控制台 showStats 并行拉 os/browser |
+| D-C2-29..35 | 单分支；单 JVM IT（4 个新 \*IT 全部 hikari=4）；README「多实例」段重写（已对齐/仍 per-process/rebuild 语义/fail-open/Geo·B10 未做）；pom 保持 2.0.0（OpenApiInfoIT 联动不动）；/r/** 零改动、订阅回调仅一次 parse+put/invalidate |
+
+### 红先证据（红提交只含测试；conclusion 以 Actions 为准）
+
+| 块 | 红 run | 红况 |
+|----|--------|------|
+| A 广播 | [41158477881](https://github.com/NorthAdb/LinkForge/actions/runs/41158477881) | BloomBroadcastIT 2/2 断言红（无订阅无广播；前跑 [41157935302] 的 ERROR 是测试脚手架缺陷——@BeforeAll 参数注入——修后才是合同红） |
+| B rebuild | [41159752011](https://github.com/NorthAdb/LinkForge/actions/runs/41159752011) | BloomRebuildIT 2/2 断言红（端点缺失 500） |
+| C L1 失效 | [41161561015](https://github.com/NorthAdb/LinkForge/actions/runs/41161561015) | L1InvalidateIT 3/3 断言红（前跑 [41161116383] 的 ERROR 同为脚手架缺陷） |
+| D os/browser | [41163715835](https://github.com/NorthAdb/LinkForge/actions/runs/41163715835) | ClickDimensionsOsBrowserTest 6/6 断言红（of() 无 os/browser 行；surefire 先红故 IT 未执行——IT 红 400 由 BreakdownDimValidationTest 旧断言 `dim=os`→400 钉死，实现后随合同翻转） |
+
+### CI 结论表（每行必有 conclusion；吸取 C1-N1 教训，从首轮即带列）
+
+| 标签 | run | conclusion | head |
+|------|-----|------------|------|
+| A 红（脚手架缺陷） | [41157935302](https://github.com/NorthAdb/LinkForge/actions/runs/41157935302) | **failure**（BloomBroadcastIT ERROR=测试自身，非合同红） | `20a0300` |
+| A 红（合同红） | [41158477881](https://github.com/NorthAdb/LinkForge/actions/runs/41158477881) | **failure** | `caed428` |
+| A 绿 | [41159736232](https://github.com/NorthAdb/LinkForge/actions/runs/41159736232) | **success** | `9c79510` |
+| B 红 | [41159752011](https://github.com/NorthAdb/LinkForge/actions/runs/41159752011) | **failure** | `3875e35` |
+| B 绿 | [41161067893](https://github.com/NorthAdb/LinkForge/actions/runs/41161067893) | **success** | `51604c8` |
+| C 红（脚手架缺陷） | [41161116383](https://github.com/NorthAdb/LinkForge/actions/runs/41161116383) | **failure**（ERROR=测试自身） | `7aea9d9` |
+| C 红（合同红） | [41161561015](https://github.com/NorthAdb/LinkForge/actions/runs/41161561015) | **failure** | `9e1154e` |
+| C 测试修复跑（**实现漏随提交**，如实记） | [41162904478](https://github.com/NorthAdb/LinkForge/actions/runs/41162904478) | **failure**（红因=实现仍在工作区，非实现缺陷） | `6f43301` |
+| C 绿 | [41163311486](https://github.com/NorthAdb/LinkForge/actions/runs/41163311486) | **success** | `736d109` |
+| D 红 | [41163715835](https://github.com/NorthAdb/LinkForge/actions/runs/41163715835) | **failure**（6/6 UT 断言红） | `aff72cb` |
+| D 绿第一跑（linkId 合成值测试缺陷） | [41164699023](https://github.com/NorthAdb/LinkForge/actions/runs/41164699023) | **failure**（唯一失败=DimOsBrowserIT 用合成 linkId 写维度行，测试自身） | `b3ca6a2` |
+| D 绿终态 | [41165144611](https://github.com/NorthAdb/LinkForge/actions/runs/41165144611) | **success** | `322803d` |
+
+### 改动清单（11 提交）
+
+| 提交 | 内容 |
+|------|------|
+| `274b53a` | C1-N1：progress C1 章 CI 结论表 |
+| `20a0300` → `caed428` | A 红测试（含脚手架修正：PER_CLASS 生命周期替代 @BeforeAll 参数注入） |
+| `9c79510` | A 绿：CacheBus（频道/解析/INSTANCE_ID/fail-open publish）+ RedisConfig 监听容器 + CodeBloomFilter 订阅（先于装载注释）+ doCreate 广播 + cache-bus-enabled + 3 UT |
+| `3875e35` | B 红测试 |
+| `51604c8` | B 绿：rebuild（定时 24h + ADMIN 手动 + CAS 单飞 + 旁路原子替换 + 失败恢复）+ BloomAdminController + ShortLinkMapper javadoc + env 化 interval（review 补）+ 2 UT（busy 409 / 失败恢复旧过滤器） |
+| `7aea9d9` → `9e1154e` → `6f43301` | C 红测试（脚手架修正；写序与 stale-clear 等待两处测试缺陷修正——同实现无涉） |
+| `736d109` | C 绿：publishL1Invalidate + update/setStatus/delete 写尾各一次广播 + UrlLocalCache 订阅（origin 跳过、只剔 L1）+ 3 meter |
+| `aff72cb` | D 红测试（UT 6 例 + IT 2 例） |
+| `b3ca6a2` → `322803d` | D 绿：ClickDimensions os/browser 纯规则 + StatsController 四维 allowlist + 控制台 系统/浏览器 + 合同翻转探针（dim=geo）+ 测试 linkId 修正 |
+
+### 验收勾选（C2-1..20）
+
+- [x] **C2-1** 基线祖先含 `01856d8f047eb322ec8fce4b3676fd0d2cc71b68`；V1–V9 零 diff（本波零迁移文件）
+- [x] **C2-2** C1 章 CI 结论表已补，`41091380989`=failure 标注
+- [x] **C2-3** README 例数 = C2 终态 281（133+146+2 构成在本章）
+- [x] **C2-4** 仍进程内 Guava；零新依赖；无 RedisBloom/Stack
+- [x] **C2-5** 创建后 publish（BloomBroadcastIT test2）；他机订阅 put（test1）；publish fail-open（CacheBus try/catch + UT 覆盖 publish 错误路径？——CacheBusTest 覆盖 parse；fail-open 由代码路径 + meter 保证，README 钉死）
+- [x] **C2-6** 先订阅再 load：@PostConstruct 注册 → SmartLifecycle 订阅 → ApplicationReadyEvent 装载（CodeBloomFilter 注释钉死）
+- [x] **C2-7** 定时 rebuild 可配 24h 默认；旁路原子替换；selectAllCodes 含逻辑删（BloomRebuildIT test2 + UT）
+- [x] **C2-8** ADMIN 200 / MEMBER 403 / API Key 403（BloomRebuildIT test1）
+- [x] **C2-9** 单飞：CAS + 手动 409（CodeBloomFilterTest busy 用例）
+- [x] **C2-10** update/disable/enable/delete 各 publish 一次（L1InvalidateIT test2 计数 3）；订阅只剔 L1（UrlLocalCache 无 Redis 模板 + test1 断言 L2 key 存活）
+- [x] **C2-11** 自消息不抹写穿 URL（L1InvalidateIT test3：等过 ~1s 延迟双删后重暖，再发自消息断言槽位存活）
+- [x] **C2-12** TTL 10s 兜底不变；命中不跳过 DB 行读（B8 原语义零改动）
+- [x] **C2-13** dim=os/browser 200 桶合理；geo/未知/缺省 400；device/referer 回归（DimOsBrowserIT）
+- [x] **C2-14** Edge≠Chrome / 微信 wechat / bot 优先 / 零 UA 依赖（ClickDimensionsOsBrowserTest 6 例）
+- [x] **C2-15** 历史不回填（consume-only，无任何回填代码）；新点击经 consume 写入 os/browser（DimOsBrowserIT test1，真实 linkId）
+- [x] **C2-16** 控制台 系统/浏览器 行（showStats 并行拉取，源码级验收）
+- [x] **C2-17** README「多实例」段重写
+- [x] **C2-18** 全量 verify 绿（分支终态 run 41165144611，133+146+2，零 Too many connections）；红先 4 块各一合同红 run，conclusion 列如实
+- [x] **C2-19** 合入后 docs/backlog.md #3/#4/#5 关、#6 os/browser 关 Geo 仍开（合并后提交）
+- [x] **C2-20** pom 仍 2.0.0；热路径无新增同步 Redis 往返（订阅回调在 listener 线程，写路径 publish 为异步 best-effort）
+
+### 例数与预算
+
+- **281 = surefire 133 + failsafe 146 + tz fork 2**（C2 净增 20：UT +11【CacheBus 3、CodeBloomFilter +2、DimOsBrowser 相关 UT 6】，IT +9【BloomBroadcast 2、BloomRebuild 2、L1Invalidate 3、DimOsBrowser 2】）
+- 连接预算 26×10+12×4 = **308**（39 个 \*IT、12 个显式 4；C2 新增 4 个均 4），余量 192
+- 本地每提交 `mvn -B verify -DskipITs` 退出码显式 0（D 红期 held-out UT 说明：Wave D 的红 UT 在其实现前暂存 src/test 之外，避免污染前几波的本地绿门——CI 侧红先证据不受影响）
