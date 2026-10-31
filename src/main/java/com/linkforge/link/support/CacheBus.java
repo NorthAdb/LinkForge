@@ -50,6 +50,24 @@ public class CacheBus {
     }
 
     /**
+     * Broadcasts that a resolution-changing write committed for the code (wave C,
+     * D-C2-16); peers drop their local L1 slot. Same fail-open contract as
+     * publishBloomPut: a lost publish leaves peers stale up to their 10s L1 TTL.
+     */
+    public void publishL1Invalidate(String code) {
+        if (!properties.isCacheBusEnabled()) {
+            return;
+        }
+        try {
+            redis.convertAndSend(L1_INVALIDATE_CHANNEL, code + "|" + INSTANCE_ID);
+            meterRegistry.counter("linkforge.l1.invalidate.publish", "result", "ok").increment();
+        } catch (Exception ex) {
+            meterRegistry.counter("linkforge.l1.invalidate.publish", "result", "error").increment();
+            log.warn("l1 invalidate publish failed; peers stay stale up to their L1 TTL: {}", ex.getMessage());
+        }
+    }
+
+    /**
      * Parses the {@code <code>|<origin>} payload; null when malformed. Callers count
      * and drop nulls — a bad payload must never throw on the listener thread.
      */
