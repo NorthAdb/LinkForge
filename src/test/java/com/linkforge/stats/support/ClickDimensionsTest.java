@@ -57,12 +57,16 @@ class ClickDimensionsTest {
     }
 
     @Test
-    void ofProducesBothDimensions() {
+    void ofProducesAllFourDimensions() {
         var dims = ClickDimensions.of("curl/8.4.0", "https://www.example.com/x");
-        assertEquals(2, dims.size());
+        assertEquals(4, dims.size());
         assertEquals("device", dims.get(0).type());
         assertEquals("bot", dims.get(0).value());
         assertEquals("referer_host", dims.get(1).type());
         assertEquals("example.com", dims.get(1).value());
+        assertEquals("os", dims.get(2).type());
+        assertEquals("other", dims.get(2).value());
+        assertEquals("browser", dims.get(3).type());
+        assertEquals("bot", dims.get(3).value());
     }
 }
