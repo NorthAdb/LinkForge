@@ -10,6 +10,11 @@ spring:
       # sampler (D-Bw345-54: 4 → 6).
       pool:
         size: ${LINKFORGE_SCHEDULING_POOL_SIZE:6}
+  servlet:
+    multipart:
+      # D-C3-25: only the CSV import accepts uploads (256 KiB file / 512 KiB request)
+      max-file-size: 256KB
+      max-request-size: 512KB
   flyway:
     # Versioned migrations for every profile; empty DBs get V1, legacy volumes
     # (tables already present, no history) are baselined at 1 and skip V1.
@@ -188,6 +193,10 @@ linkforge:
     register-window-seconds: ${LINKFORGE_REGISTER_WINDOW_SECONDS:600}
     create-max: ${LINKFORGE_CREATE_RATE_MAX:30}
     create-window-seconds: ${LINKFORGE_CREATE_RATE_WINDOW_SECONDS:60}
+    # D-C3-22: dedicated import bucket (whole request, never per row) so a 100-row
+    # import cannot trip the create window
+    import-max: ${LINKFORGE_IMPORT_RATE_MAX:5}
+    import-window-seconds: ${LINKFORGE_IMPORT_RATE_WINDOW_SECONDS:60}
     redirect-max: ${LINKFORGE_REDIRECT_RATE_MAX:300}
     redirect-window-seconds: ${LINKFORGE_REDIRECT_RATE_WINDOW_SECONDS:60}
     idempotency-ttl-seconds: ${LINKFORGE_IDEMPOTENCY_TTL_SECONDS:86400}

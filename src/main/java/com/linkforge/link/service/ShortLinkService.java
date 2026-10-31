@@ -13,6 +13,7 @@ import com.linkforge.common.util.ClientIps;
 import com.linkforge.config.LinkForgeProperties;
 import com.linkforge.link.dto.CreateShortLinkRequest;
 import com.linkforge.link.dto.CreateShortLinkResponse;
+import com.linkforge.link.dto.ImportResponse;
 import com.linkforge.link.dto.ShortLinkDetail;
 import com.linkforge.link.dto.UpdateShortLinkRequest;
 import com.linkforge.link.dto.VariantSpec;
@@ -24,6 +25,7 @@ import com.linkforge.link.support.CacheBus;
 import com.linkforge.link.support.CodeBloomFilter;
 import com.linkforge.link.support.ClickFilter;
 import com.linkforge.link.support.CsvFormat;
+import com.linkforge.link.support.CsvImportParser;
 import com.linkforge.link.support.LinkAccessTokens;
 import com.linkforge.link.support.LinkValidations;
 import com.linkforge.link.support.PhishingPolicy;
@@ -42,15 +44,21 @@ import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -58,6 +66,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.regex.Pattern;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
@@ -82,6 +91,10 @@ public class ShortLinkService {
             "gclid", "fbclid", "msclkid", "ttclid", "yclid", "dclid", "igshid", "wbraid", "gbraid");
     /** D-C3-7: hard cap on variants per link. */
     private static final int MAX_VARIANTS = 10;
+    /** D-C3-25/16: 256 KiB per import file, 100 data rows per import. */
+    private static final int MAX_IMPORT_BYTES = 256 * 1024;
+    private static final int MAX_IMPORT_ROWS = 100;
+    private static final String COLUMN_ORIGINAL_URL = "original_url";
 
     private final ShortLinkMapper shortLinkMapper;
     private final LinkVariantMapper variantMapper;
@@ -281,6 +294,120 @@ public class ShortLinkService {
                 CsvFormat.escape(l.getStatus() == null ? "" : String.valueOf(l.getStatus())),
                 CsvFormat.escape(l.getExpireAt() == null ? "" : l.getExpireAt().toString()),
                 CsvFormat.escape(l.getCreatedAt() == null ? "" : l.getCreatedAt().toString())) + "\n";
+    }
+
+    /**
+     * D-C3-14..25: synchronous CSV import. One import:user sliding-window token per
+     * request (D-C3-22, never the create:user window); structural rejects fire before
+     * ANY write; then each record runs {@link #doCreate} independently so one bad row
+     * is a report entry while its neighbours stay committed (D-C3-19/20/21 — Bloom,
+     * broadcast and cache warm come from doCreate's tail, no divergent validation).
+     */
+    public ImportResponse importCsv(MultipartFile file) {
+        AuthUser user = requireUser();
+        LinkForgeProperties.RateLimit rl = properties.getRateLimit();
+        RateLimitDecision decision = rateLimiter.acquire(
+                RateLimitKeys.sw(rl.getKeyPrefix(), "import:user:" + user.getUserId()),
+                rl.getImportMax(), rl.getImportWindowSeconds());
+        if (!decision.allowed()) {
+            meterRegistry.counter("linkforge.ratelimit.rejected", "entry", "import").increment();
+            throw new RateLimitedException(decision.retryAfterSeconds());
+        }
+        if (file == null || file.isEmpty()) {
+            throw new BizException("file is required");
+        }
+        if (file.getSize() > MAX_IMPORT_BYTES) {
+            throw new BizException("file must be at most 256 KiB");
+        }
+        String text;
+        try {
+            text = new String(file.getBytes(), StandardCharsets.UTF_8);
+        } catch (IOException ex) {
+            throw new BizException("failed to read uploaded file");
+        }
+
+        CsvImportParser.ParsedCsv parsed = CsvImportParser.parse(text);
+        if (!parsed.header().contains(COLUMN_ORIGINAL_URL)) {
+            throw new BizException("missing required column " + COLUMN_ORIGINAL_URL);
+        }
+        if (parsed.rows().size() > MAX_IMPORT_ROWS) {
+            throw new BizException("at most " + MAX_IMPORT_ROWS + " data rows per import");
+        }
+        Map<String, Integer> columns = new HashMap<>();
+        for (int i = 0; i < parsed.header().size(); i++) {
+            columns.putIfAbsent(parsed.header().get(i), i);
+        }
+        List<ImportResponse.RowSuccess> successes = new ArrayList<>();
+        List<ImportResponse.RowFailure> failures = new ArrayList<>();
+        for (CsvImportParser.CsvRow row : parsed.rows()) {
+            if (row.cells().stream().allMatch(c -> c == null || c.isBlank())) {
+                continue;
+            }
+            try {
+                CreateShortLinkResponse created = doCreate(importRowRequest(row, columns), user, null);
+                successes.add(new ImportResponse.RowSuccess(row.fileLine(), created.getCode()));
+            } catch (BizException | DataIntegrityViolationException ex) {
+                failures.add(new ImportResponse.RowFailure(row.fileLine(), rowReason(ex)));
+            }
+        }
+        return new ImportResponse(successes.size(), failures.size(), successes, failures);
+    }
+
+    /** Maps one parsed record onto the create contract. Rejects are BizExceptions so a
+     * bad cell becomes a failure ROW, never a 500. Values are never logged (the
+     * access_password column especially, D-C3-25). */
+    private static CreateShortLinkRequest importRowRequest(CsvImportParser.CsvRow row,
+                                                           Map<String, Integer> columns) {
+        CreateShortLinkRequest request = new CreateShortLinkRequest();
+        String url = cell(row, columns, COLUMN_ORIGINAL_URL);
+        if (url == null || url.isBlank()) {
+            throw new BizException("original_url required");
+        }
+        request.setOriginalUrl(url.trim());
+        setIfPresent(request, row, columns, "title", CreateShortLinkRequest::setTitle);
+        setIfPresent(request, row, columns, "custom_code", CreateShortLinkRequest::setCustomCode);
+        setIfPresent(request, row, columns, "access_password", CreateShortLinkRequest::setAccessPassword);
+        setIfPresent(request, row, columns, "utm_source", CreateShortLinkRequest::setUtmSource);
+        setIfPresent(request, row, columns, "utm_medium", CreateShortLinkRequest::setUtmMedium);
+        setIfPresent(request, row, columns, "utm_campaign", CreateShortLinkRequest::setUtmCampaign);
+        setIfPresent(request, row, columns, "utm_term", CreateShortLinkRequest::setUtmTerm);
+        setIfPresent(request, row, columns, "utm_content", CreateShortLinkRequest::setUtmContent);
+        String expireAt = cell(row, columns, "expire_at");
+        if (expireAt != null && !expireAt.isBlank()) {
+            try {
+                request.setExpireAt(LocalDateTime.parse(expireAt.trim()));
+            } catch (DateTimeParseException ex) {
+                throw new BizException("expire_at must be ISO-8601 like 2027-01-01T00:00:00");
+            }
+        }
+        return request;
+    }
+
+    private static void setIfPresent(CreateShortLinkRequest request, CsvImportParser.CsvRow row,
+                                     Map<String, Integer> columns, String column,
+                                     BiConsumer<CreateShortLinkRequest, String> setter) {
+        String value = cell(row, columns, column);
+        if (value != null && !value.isBlank()) {
+            setter.accept(request, value.trim());
+        }
+    }
+
+    /** null = the header has no such column (or this record is shorter than the header). */
+    private static String cell(CsvImportParser.CsvRow row, Map<String, Integer> columns, String name) {
+        Integer index = columns.get(name);
+        if (index == null || index >= row.cells().size()) {
+            return null;
+        }
+        return row.cells().get(index);
+    }
+
+    /** Spring constraint messages leak SQL/DDL detail; the BizException messages are
+     * already the short 400-style strings (and never echo the blocked domain). */
+    private static String rowReason(Exception ex) {
+        if (ex instanceof DataIntegrityViolationException) {
+            return "row violates a database constraint";
+        }
+        return ex.getMessage();
     }
 
     public ShortLinkDetail detail(String code) {

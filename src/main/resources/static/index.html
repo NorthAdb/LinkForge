@@ -26,7 +26,7 @@
   .row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
   .row-actions button { padding: 3px 8px; font-size: 12px; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
-  .msg { margin-top: 10px; font-size: 13px; }
+  .msg { margin-top: 10px; font-size: 13px; white-space: pre-line; }
   .msg.err { color: #dc2626; }
   .msg.ok { color: #059669; }
   .stats-line { color: var(--muted); font-size: 12px; }
@@ -87,6 +87,8 @@
     <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
       <button onclick="createLink()">创建</button>
       <a href="#" id="exportLink" onclick="this.href='/api/links/export';return true;">导出 CSV</a>
+      <input type="file" id="importFile" accept=".csv,text/csv" style="width:auto">
+      <button class="ghost" onclick="importCsv()">导入 CSV</button>
       <span class="stats-line">幂等：同 Idempotency-Key 重复提交会返回同一短码</span>
     </div>
     <div class="msg" id="createMsg"></div>
@@ -213,6 +215,22 @@ async function createLink() {
   $('url').value = ''; $('customCode').value = ''; $('expireAt').value = ''; $('accessPassword').value = '';
   for (const id of utmIds) $(id).value = '';
   setMsg('utmMsg', '');
+  loadLinks();
+}
+
+async function importCsv() {
+  const file = $('importFile').files[0];
+  if (!file) return setMsg('createMsg', '导入失败：请先选择 CSV 文件', false);
+  const form = new FormData();
+  form.append('file', file);
+  const resp = await fetch('/api/links/import', { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: form });
+  let json = {}; try { json = await resp.json(); } catch (e) {}
+  if (!resp.ok || json.code !== 0) return setMsg('createMsg', '导入失败：' + (json.message || ('HTTP ' + resp.status)), false);
+  const d = json.data;
+  // setMsg writes textContent, so failure reasons need no esc() (and would double-escape).
+  const lines = ['成功 ' + d.successCount + ' 行，失败 ' + d.failureCount + ' 行'];
+  for (const f of (d.failures || [])) lines.push('第' + f.row + '行：' + f.reason);
+  setMsg('createMsg', lines.join('\n'), d.failureCount === 0);
   loadLinks();
 }
 
