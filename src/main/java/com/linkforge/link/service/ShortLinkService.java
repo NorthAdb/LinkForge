@@ -143,9 +143,21 @@ public class ShortLinkService {
             if (replayed != null) {
                 return replayed;
             }
-            Boolean acquired = stringRedisTemplate.opsForValue()
-                    .setIfAbsent(idemKey, "pending", Duration.ofSeconds(5));
-            if (Boolean.TRUE.equals(acquired)) {
+            /**
+             * D-C4-16 fail-open: with Redis down the pending lease cannot be taken, so
+             * the acquire is treated as won — two concurrent same-key creates can both
+             * run during an outage, which beats hard-failing every link write.
+             */
+            boolean acquired;
+            try {
+                acquired = Boolean.TRUE.equals(stringRedisTemplate.opsForValue()
+                        .setIfAbsent(idemKey, "pending", Duration.ofSeconds(5)));
+            } catch (Exception ex) {
+                log.warn("idempotency acquire failed for {}: {}", idemKey, ex.getMessage());
+                meterRegistry.counter("linkforge.cache.failopen", "op", "idem_acquire").increment();
+                acquired = true;
+            }
+            if (acquired) {
                 return doCreate(request, user, idemKey);
             }
             for (int i = 0; i < 10; i++) {
@@ -167,7 +179,15 @@ public class ShortLinkService {
      * holds no settled code. A code owned by a different user is treated as a miss.
      */
     private CreateShortLinkResponse replayIdempotentCreate(String idemKey, AuthUser user) {
-        String code = stringRedisTemplate.opsForValue().get(idemKey);
+        String code;
+        try {
+            code = stringRedisTemplate.opsForValue().get(idemKey);
+        } catch (Exception ex) {
+            // fail-open (D-C4-16): an unreadable key replays nothing, so the create proceeds
+            log.warn("idempotency replay read failed for {}: {}", idemKey, ex.getMessage());
+            meterRegistry.counter("linkforge.cache.failopen", "op", "idem_get").increment();
+            return null;
+        }
         if (code == null || code.isBlank() || "pending".equals(code)) {
             return null;
         }
@@ -248,8 +268,15 @@ public class ShortLinkService {
         cacheUrl(link.getCode(), url);
         meterRegistry.counter("linkforge.links.created").increment();
         if (idemKey != null) {
-            stringRedisTemplate.opsForValue().set(idemKey, link.getCode(),
-                    Duration.ofSeconds(properties.getRateLimit().getIdempotencyTtlSeconds()));
+            try {
+                stringRedisTemplate.opsForValue().set(idemKey, link.getCode(),
+                        Duration.ofSeconds(properties.getRateLimit().getIdempotencyTtlSeconds()));
+            } catch (Exception ex) {
+                // fail-open (D-C4-16): the link is already committed; the key keeps its
+                // pending lease until TTL, so a same-key retry during the outage re-creates
+                log.warn("idempotency settle failed for {}: {}", idemKey, ex.getMessage());
+                meterRegistry.counter("linkforge.cache.failopen", "op", "idem_settle").increment();
+            }
         }
         return new CreateShortLinkResponse(link.getId(), link.getCode(), url, "/r/" + link.getCode());
     }
@@ -595,7 +622,13 @@ public class ShortLinkService {
         String cached = urlLocalCache.getIfPresent(code);
         boolean servedFromLocal = cached != null && !cached.isBlank();
         if (!servedFromLocal) {
-            cached = stringRedisTemplate.opsForValue().get(cacheKey);
+            try {
+                cached = stringRedisTemplate.opsForValue().get(cacheKey);
+            } catch (Exception ex) {
+                // fail-open (D-C4-15): an outage degrades to the singleflight row read below, never a 500
+                log.warn("l2 read failed for {}: {}", code, ex.getMessage());
+                meterRegistry.counter("linkforge.cache.failopen", "op", "l2_get").increment();
+            }
             // B1: the Redis L2 round-trip had no metric — dashboards need the hit rate
             meterRegistry.counter("linkforge.cache.l2", "result",
                     cached != null && !cached.isBlank() ? "hit" : "miss").increment();
@@ -923,12 +956,25 @@ public class ShortLinkService {
         long ttl = jitteredTtlSeconds(properties.getShortLink().getCacheTtlSeconds(),
                 properties.getShortLink().getCacheTtlJitterSeconds());
         urlLocalCache.put(code, url);
-        stringRedisTemplate.opsForValue().set(CACHE_KEY_PREFIX + code, url, ttl, TimeUnit.SECONDS);
+        try {
+            stringRedisTemplate.opsForValue().set(CACHE_KEY_PREFIX + code, url, ttl, TimeUnit.SECONDS);
+        } catch (Exception ex) {
+            // fail-open (D-C4-15): L1 already holds the value; Redis warm-up waits for the next read
+            log.warn("l2 write failed for {}: {}", code, ex.getMessage());
+            meterRegistry.counter("linkforge.cache.failopen", "op", "l2_set").increment();
+        }
     }
 
     private void evictCache(String code) {
         urlLocalCache.invalidate(code);
-        stringRedisTemplate.delete(CACHE_KEY_PREFIX + code);
+        try {
+            stringRedisTemplate.delete(CACHE_KEY_PREFIX + code);
+        } catch (Exception ex) {
+            // fail-open (D-C4-15): a stale L2 entry ages out at its TTL — the missed delete
+            // must not fail the update/disable/delete the caller is committing
+            log.warn("l2 evict failed for {}: {}", code, ex.getMessage());
+            meterRegistry.counter("linkforge.cache.failopen", "op", "l2_delete").increment();
+        }
     }
 
     private void scheduleStaleClear(String code) {
