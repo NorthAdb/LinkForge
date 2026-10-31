@@ -123,7 +123,11 @@ class QrMaterialIT extends AbstractIntegrationTest {
         assertEquals("image/png", String.valueOf(anonymous.getHeaders().getContentType()));
         assertEquals(256, pngWidth(anonymous));
 
-        String tamperedSig = localPath.replaceAll("(sig=)[0-9a-fA-F]", "$10");
+        // Collapsing the whole sig to "0" is deterministic-invalid: swapping only the
+        // first hex char is a no-op 1/16 of the time (when it is already "0") and the
+        // "tampered" URL would keep validating (200) — the flake one docs-only CI run
+        // hit on 2026-10-31 (run 41209655123).
+        String tamperedSig = localPath.replaceAll("(sig=)[0-9a-fA-F]+", "$10");
         assertEquals(401, qrPng(tamperedSig, null).getStatusCode().value(), "tampered sig must be a 401");
         String tamperedExp = localPath.replaceAll("(exp=)\\d+", "$10");
         assertEquals(401, qrPng(tamperedExp, null).getStatusCode().value(), "tampered exp must be a 401");
