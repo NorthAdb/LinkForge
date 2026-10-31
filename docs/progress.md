@@ -1279,6 +1279,8 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | D 红 | [41163715835](https://github.com/NorthAdb/LinkForge/actions/runs/41163715835) | **failure**（6/6 UT 断言红） | `aff72cb` |
 | D 绿第一跑（linkId 合成值测试缺陷） | [41164699023](https://github.com/NorthAdb/LinkForge/actions/runs/41164699023) | **failure**（唯一失败=DimOsBrowserIT 用合成 linkId 写维度行，测试自身） | `b3ca6a2` |
 | D 绿终态 | [41165144611](https://github.com/NorthAdb/LinkForge/actions/runs/41165144611) | **success** | `322803d` |
+| docs 跑暴露潜在 flake（tie 序无 tiebreaker） | [41165691642](https://github.com/NorthAdb/LinkForge/actions/runs/41165691642) | **failure**（唯一失败=DimBreakdownIT 平手桶顺序翻转——`ORDER BY clicks DESC` 无次序键，C2 维度行翻倍后暴露；根因修为 `clicks DESC, dim_value ASC`） | `a6ad50b` |
+| 分支终态（tiebreaker 修后） | [41166167988](https://github.com/NorthAdb/LinkForge/actions/runs/41166167988) | **success** | `45ffdfc` |
 
 ### 改动清单（11 提交）
 
@@ -1293,6 +1295,8 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | `736d109` | C 绿：publishL1Invalidate + update/setStatus/delete 写尾各一次广播 + UrlLocalCache 订阅（origin 跳过、只剔 L1）+ 3 meter |
 | `aff72cb` | D 红测试（UT 6 例 + IT 2 例） |
 | `b3ca6a2` → `322803d` | D 绿：ClickDimensions os/browser 纯规则 + StatsController 四维 allowlist + 控制台 系统/浏览器 + 合同翻转探针（dim=geo）+ 测试 linkId 修正 |
+| `a6ad50b` | docs：README 多实例段 + 例数 281 + 本章 |
+| `45ffdfc` | fix(stats)：breakdown 平手桶次序键（根因修：docs-only 跑暴露的潜在 flake，非 C2 语义变更） |
 
 ### 验收勾选（C2-1..20）
 
@@ -1313,7 +1317,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 - [x] **C2-15** 历史不回填（consume-only，无任何回填代码）；新点击经 consume 写入 os/browser（DimOsBrowserIT test1，真实 linkId）
 - [x] **C2-16** 控制台 系统/浏览器 行（showStats 并行拉取，源码级验收）
 - [x] **C2-17** README「多实例」段重写
-- [x] **C2-18** 全量 verify 绿（分支终态 run 41165144611，133+146+2，零 Too many connections）；红先 4 块各一合同红 run，conclusion 列如实
+- [x] **C2-18** 全量 verify 绿（分支终态 run 41166167988，133+146+2，零 Too many connections）；红先 4 块各一合同红 run，conclusion 列如实
 - [x] **C2-19** 合入后 docs/backlog.md #3/#4/#5 关、#6 os/browser 关 Geo 仍开（合并后提交）
 - [x] **C2-20** pom 仍 2.0.0；热路径无新增同步 Redis 往返（订阅回调在 listener 线程，写路径 publish 为异步 best-effort）
 
