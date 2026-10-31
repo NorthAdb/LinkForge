@@ -1417,3 +1417,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 - **307 = surefire 144 + failsafe 161 + tz fork 2**（C3 净增 +26：UT +11【VariantPicker 4、CsvImportParser 7】，IT +15【AbSplitIT 8、BulkImportIT 7】）
 - 连接预算 27×10+14×4 = **326**（41 个 \*IT、14 个显式 `hikari.maximum-pool-size=4`；C3 新增 AbSplitIT、BulkImportIT 均钉 4），天花板 = 共享容器 `--max-connections=500`，余量 174
 - 本地每提交 `mvn -B verify -DskipITs` 退出码显式 0
+
+## 深化 C4 SSRF DNS rebinding 钉死 + 故障演练 + C3 修复并入（feat/deepen-c4-ssrf-rebinding-drills，发车基线 main@c0e00a0，2026-10-31）
+
+> 交接单：`记录追踪/05-阶段交接/LinkForge-phase-C4-ssrf-rebinding-drills-handoff.md`。开放问题 Q1–Q6 **已全部确认 A**（t119u，2026-10-31）；C3-S1/N1/N2/N3 并入本波；本章随开发推进补全。
