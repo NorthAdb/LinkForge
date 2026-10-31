@@ -20,6 +20,9 @@ public class ClickLog {
     private String userAgent;
     private String referer;
     private LocalDateTime clickedAt;
+    /** C3: the drawn A/B variant key; null on single-target links. Persisted so the
+     * reconciler's replay can rebuild the variant bucket (V10 column). */
+    private String variant;
     /** NULL = hot-path sync row (implicit "log-{id}" eventId); set on consumer backfill. */
     private String eventId;
 }

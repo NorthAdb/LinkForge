@@ -15,7 +15,10 @@ import com.linkforge.link.dto.CreateShortLinkRequest;
 import com.linkforge.link.dto.CreateShortLinkResponse;
 import com.linkforge.link.dto.ShortLinkDetail;
 import com.linkforge.link.dto.UpdateShortLinkRequest;
+import com.linkforge.link.dto.VariantSpec;
+import com.linkforge.link.entity.LinkVariant;
 import com.linkforge.link.entity.ShortLink;
+import com.linkforge.link.mapper.LinkVariantMapper;
 import com.linkforge.link.mapper.ShortLinkMapper;
 import com.linkforge.link.support.CacheBus;
 import com.linkforge.link.support.CodeBloomFilter;
@@ -30,6 +33,7 @@ import com.linkforge.link.support.SingleFlight;
 import com.linkforge.link.support.TargetPolicy;
 import com.linkforge.link.support.UrlLocalCache;
 import com.linkforge.link.support.UtmMerger;
+import com.linkforge.link.support.VariantPicker;
 import com.linkforge.security.AuthUser;
 import com.linkforge.security.UserContext;
 import com.linkforge.stats.service.ClickRecordService;
@@ -41,10 +45,13 @@ import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -73,8 +80,11 @@ public class ShortLinkService {
     private static final Pattern UTM_PREFIX = Pattern.compile("^utm", Pattern.CASE_INSENSITIVE);
     private static final Set<String> CLICK_ATTRIBUTION_IDS = Set.of(
             "gclid", "fbclid", "msclkid", "ttclid", "yclid", "dclid", "igshid", "wbraid", "gbraid");
+    /** D-C3-7: hard cap on variants per link. */
+    private static final int MAX_VARIANTS = 10;
 
     private final ShortLinkMapper shortLinkMapper;
+    private final LinkVariantMapper variantMapper;
     private final StringRedisTemplate stringRedisTemplate;
     private final LinkForgeProperties properties;
     private final ClickRecordService clickRecordService;
@@ -88,6 +98,7 @@ public class ShortLinkService {
     private final ClickFilter clickFilter;
     private final PhishingPolicy phishingPolicy;
     private final LinkAccessTokens linkAccessTokens;
+    private final TransactionTemplate transactionTemplate;
     private final org.springframework.security.crypto.password.PasswordEncoder passwordEncoder;
 
     private final ScheduledExecutorService evictor = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -163,6 +174,9 @@ public class ShortLinkService {
         if (request.getExpireAt() != null && !request.getExpireAt().isAfter(LocalDateTime.now())) {
             throw new BizException("expireAt must be in the future");
         }
+        // D-C3-7: validate before ANY write so a bad variant cannot leave a minted link.
+        List<LinkVariant> variants = request.getVariants() == null
+                ? List.of() : validateVariants(request.getVariants());
         String customCode = request.getCustomCode() == null ? null : request.getCustomCode().trim();
         if (customCode != null && !customCode.isEmpty()) {
             LinkValidations.requireValidCustomCode(customCode);
@@ -204,6 +218,10 @@ public class ShortLinkService {
         }
         if (!inserted) {
             throw new BizException("failed to allocate short code");
+        }
+        if (!variants.isEmpty()) {
+            // D-C3-2: all rows or none — the code must never resolve with a half-written set.
+            transactionTemplate.executeWithoutResult(status -> insertVariants(link, variants));
         }
 
         codeBloom.put(link.getCode());
@@ -266,7 +284,13 @@ public class ShortLinkService {
     }
 
     public ShortLinkDetail detail(String code) {
-        return toDetail(getOwnedLink(code));
+        ShortLink link = getOwnedLink(code);
+        ShortLinkDetail detail = toDetail(link);
+        List<LinkVariant> variants = variantMapper.selectByLinkId(link.getId());
+        if (!variants.isEmpty()) {
+            detail.setVariants(toViews(variants));
+        }
+        return detail;
     }
 
     public ShortLinkDetail update(String code, UpdateShortLinkRequest request) {
@@ -277,7 +301,7 @@ public class ShortLinkService {
         Map<String, String> utm = UtmMerger.canonical(request.getUtmSource(), request.getUtmMedium(),
                 request.getUtmCampaign(), request.getUtmTerm(), request.getUtmContent());
         if (!hasUrl && request.getTitle() == null && request.getExpireAt() == null
-                && !clearPassword && !setPassword && utm.isEmpty()) {
+                && !clearPassword && !setPassword && utm.isEmpty() && request.getVariants() == null) {
             throw new BizException("nothing to update");
         }
         if (clearPassword && setPassword) {
@@ -286,6 +310,10 @@ public class ShortLinkService {
         if (request.getExpireAt() != null && !request.getExpireAt().isAfter(LocalDateTime.now())) {
             throw new BizException("expireAt must be in the future");
         }
+        // D-C3-7: validate the replacement set before ANY write (whole-set semantics,
+        // D-C3-6: null = untouched, [] = clear back to single-target).
+        List<LinkVariant> replacement = request.getVariants() == null
+                ? null : validateVariants(request.getVariants());
         ShortLink link = getOwnedLink(code);
         String effectiveUrl = link.getOriginalUrl();
         // D-C1-6: utm fields alone are a valid update; merge into the provided or the
@@ -320,6 +348,13 @@ public class ShortLinkService {
             link.setAccessPasswordHash(null);
         }
         shortLinkMapper.updateById(link);
+        if (replacement != null) {
+            transactionTemplate.executeWithoutResult(status -> {
+                variantMapper.delete(new LambdaQueryWrapper<LinkVariant>()
+                        .eq(LinkVariant::getLinkId, link.getId()));
+                insertVariants(link, replacement);
+            });
+        }
         singleFlight.forget(code, priorFlight);
         // Write-through now, then a delayed delete clears any stale write-back a racing
         // reader may have cached from the pre-commit row. Final consistency window ~1s.
@@ -375,7 +410,7 @@ public class ShortLinkService {
                 meterRegistry.counter("linkforge.click.skipped", "reason", skip.get().tag()).increment();
                 return redirect;
             }
-            clickRecordService.recordClick(redirect.link(), request);
+            clickRecordService.recordClick(redirect.link(), request, redirect.variantKey());
             meterRegistry.counter("linkforge.redirects").increment();
         }
         return outcome;
@@ -493,7 +528,22 @@ public class ShortLinkService {
                         TargetPolicy.asciiHost(link.getOriginalUrl()));
             }
         }
-        return new RedirectOutcome.Redirect(link, originalUrl);
+        // D-C3-8/10: the draw happens only after every gate passed, and a non-empty
+        // variant set always wins over the cached originalUrl (the cache stays a
+        // single-URL hint, never the Location truth for a split link).
+        LinkVariant picked = pickVariant(link.getId());
+        return new RedirectOutcome.Redirect(link,
+                picked != null ? picked.getTargetUrl() : originalUrl,
+                picked != null ? picked.getVariantKey() : null);
+    }
+
+    /** D-C3-8: weighted draw over the link's variants; null = single-target link. */
+    private LinkVariant pickVariant(Long linkId) {
+        List<LinkVariant> variants = variantMapper.selectByLinkId(linkId);
+        if (variants.isEmpty()) {
+            return null;
+        }
+        return VariantPicker.pick(variants, ThreadLocalRandom.current()::nextDouble);
     }
 
     /** B3: the unlock cookie for this code, or null when the request carries none. */
@@ -592,6 +642,47 @@ public class ShortLinkService {
             throw new BizException("accessPassword must be 4-64 characters");
         }
         return passwordEncoder.encode(trimmed);
+    }
+
+    /** D-C3-7: same URL rules as create, plus the per-link caps; tenantId/linkId are
+     * filled at insert time. */
+    private List<LinkVariant> validateVariants(List<VariantSpec> specs) {
+        if (specs.size() > MAX_VARIANTS) {
+            throw new BizException("at most " + MAX_VARIANTS + " variants per link");
+        }
+        Set<String> keys = new HashSet<>();
+        List<LinkVariant> rows = new ArrayList<>(specs.size());
+        for (VariantSpec spec : specs) {
+            if (!keys.add(spec.getKey())) {
+                throw new BizException("variant keys must be unique within a link");
+            }
+            String url = spec.getUrl().trim();
+            LinkValidations.requireHttpUrl(url);
+            rejectBlockedTarget(url);
+            LinkVariant row = new LinkVariant();
+            row.setVariantKey(spec.getKey());
+            row.setTargetUrl(url);
+            row.setWeight(spec.getWeight());
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    private void insertVariants(ShortLink link, List<LinkVariant> variants) {
+        LocalDateTime now = LocalDateTime.now();
+        for (LinkVariant variant : variants) {
+            variant.setTenantId(link.getTenantId());
+            variant.setLinkId(link.getId());
+            variant.setCreatedAt(now);
+            variant.setUpdatedAt(now);
+            variantMapper.insert(variant);
+        }
+    }
+
+    private static List<ShortLinkDetail.VariantView> toViews(List<LinkVariant> variants) {
+        return variants.stream()
+                .map(v -> new ShortLinkDetail.VariantView(v.getVariantKey(), v.getTargetUrl(), v.getWeight()))
+                .toList();
     }
 
     /** D-C1-6/7: write-time merge; a merge past the 2048 column cap is a 400, never a DB error. */
@@ -726,9 +817,10 @@ public class ShortLinkService {
         }
     }
 
+    /** List/table rows keep variants null (populated only by {@link #detail(String)}). */
     private static ShortLinkDetail toDetail(ShortLink link) {
         return new ShortLinkDetail(link.getId(), link.getCode(), link.getOriginalUrl(), link.getTitle(),
                 link.getStatus(), link.getExpireAt(), link.getCreatedAt(), link.getUpdatedAt(),
-                link.getAccessPasswordHash() != null);
+                link.getAccessPasswordHash() != null, null);
     }
 }

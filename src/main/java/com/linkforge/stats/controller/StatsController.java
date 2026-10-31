@@ -25,7 +25,7 @@ public class StatsController {
 
     private static final Set<String> DIM_TYPES = Set.of(
             ClickDimensions.TYPE_DEVICE, ClickDimensions.TYPE_REFERER_HOST,
-            ClickDimensions.TYPE_OS, ClickDimensions.TYPE_BROWSER);
+            ClickDimensions.TYPE_OS, ClickDimensions.TYPE_BROWSER, ClickDimensions.TYPE_VARIANT);
 
     private final ShortLinkService shortLinkService;
     private final ClickStatsService clickStatsService;
@@ -39,7 +39,7 @@ public class StatsController {
     }
 
     public static final String DIM_REQUIRED =
-            "dim is required and must be one of device, referer_host, os, browser";
+            "dim is required and must be one of device, referer_host, os, browser, variant";
 
     /** A8: per-bucket click counts (device / referer_host / os / browser). Dimension clicks are not UV. */
     @GetMapping("/api/links/{code}/stats/breakdown")

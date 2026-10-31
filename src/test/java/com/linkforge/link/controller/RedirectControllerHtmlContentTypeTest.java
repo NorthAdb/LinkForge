@@ -76,7 +76,7 @@ class RedirectControllerHtmlContentTypeTest {
         when(shortLinkService.resolveForProbe(eq("locked"), any()))
                 .thenReturn(new RedirectOutcome.Locked(null));
         when(shortLinkService.resolveForGet(eq("open"), any()))
-                .thenReturn(new RedirectOutcome.Redirect(null, "https://example.com/ok"));
+                .thenReturn(new RedirectOutcome.Redirect(null, "https://example.com/ok", null));
 
         ResponseEntity<String> head = controller.probe("locked", new MockHttpServletRequest());
         assertEquals(401, head.getStatusCode().value());

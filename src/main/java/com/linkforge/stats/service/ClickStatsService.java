@@ -85,6 +85,7 @@ public class ClickStatsService {
                 detail.setUserAgent(event.getUserAgent());
                 detail.setReferer(event.getReferer());
                 detail.setClickedAt(event.getClickedAt() != null ? event.getClickedAt() : LocalDateTime.now());
+                detail.setVariant(event.getVariant());
                 // marker: this row is already counted under the UUID eventId, so the
                 // reconciler (which replays implicit log-{id} rows) must skip it
                 detail.setEventId(event.getEventId());
@@ -96,6 +97,11 @@ public class ClickStatsService {
             for (ClickDimensions.Dimension dim : ClickDimensions.of(event.getUserAgent(), event.getReferer())) {
                 clickDimDailyMapper.incrementClick(event.getTenantId(), event.getLinkId(),
                         date, dim.type(), dim.value());
+            }
+            // C3 (D-C3-11): the drawn A/B bucket is its own dimension; no variant, no row.
+            if (event.getVariant() != null) {
+                clickDimDailyMapper.incrementClick(event.getTenantId(), event.getLinkId(),
+                        date, ClickDimensions.TYPE_VARIANT, event.getVariant());
             }
             // B-wave2 B5: a click that won the dedup insert leaves one PENDING webhook
             // delivery in the SAME transaction — replayed events early-return above,

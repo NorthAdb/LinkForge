@@ -8,8 +8,9 @@ import com.linkforge.link.entity.ShortLink;
  */
 public sealed interface RedirectOutcome {
 
-    /** Jump: B2 classification and click recording happen on this branch only. */
-    record Redirect(ShortLink link, String url) implements RedirectOutcome {
+    /** Jump: B2 classification and click recording happen on this branch only.
+     * variantKey is the drawn A/B bucket (D-C3-11), null on single-target links. */
+    record Redirect(ShortLink link, String url, String variantKey) implements RedirectOutcome {
     }
 
     /** B9 hard block: 403 interstitial, no Location, no target echo. */

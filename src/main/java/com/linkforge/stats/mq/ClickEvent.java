@@ -24,4 +24,6 @@ public class ClickEvent {
     private String userAgent;
     private String referer;
     private LocalDateTime clickedAt;
+    /** C3 (D-C3-11): the drawn A/B variant key; null when the link has no variants. */
+    private String variant;
 }

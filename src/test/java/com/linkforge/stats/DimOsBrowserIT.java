@@ -44,7 +44,7 @@ class DimOsBrowserIT extends AbstractIntegrationTest {
         // dim rows key on link_id: consume must use the REAL id, not a synthetic one
         Long linkId = jdbc.queryForObject("SELECT id FROM lf_short_link WHERE code = ?", Long.class, code);
         ClickEvent event = new ClickEvent("dim-os-" + UUID.randomUUID(), tenantIdOf(token), linkId, code, 1L,
-                "203.0.113.9", EDGE_UA, "https://news.example.com/", LocalDateTime.now());
+                "203.0.113.9", EDGE_UA, "https://news.example.com/", LocalDateTime.now(), null);
         assertTrue(clickStatsService.consume(event), "first consume must win");
 
         ResponseEntity<String> os = get("/api/links/" + code + "/stats/breakdown?dim=os", token);

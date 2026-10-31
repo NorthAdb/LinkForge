@@ -101,11 +101,11 @@ class StatsApiIT extends AbstractIntegrationTest {
         String stamp = String.valueOf(System.currentTimeMillis());
 
         clickStatsService.consume(new ClickEvent("st-a" + stamp, tenantId, linkId, code,
-                null, null, null, null, LocalDateTime.now()));
+                null, null, null, null, LocalDateTime.now(), null));
         clickStatsService.consume(new ClickEvent("st-b" + stamp, tenantId, linkId, code,
-                null, null, null, null, LocalDateTime.now()));
+                null, null, null, null, LocalDateTime.now(), null));
         clickStatsService.consume(new ClickEvent("st-c" + stamp, tenantId, linkId, code,
-                null, null, null, null, LocalDateTime.now().minusDays(1)));
+                null, null, null, null, LocalDateTime.now().minusDays(1), null));
         syntheticEventIds.add("st-a" + stamp);
         syntheticEventIds.add("st-b" + stamp);
         syntheticEventIds.add("st-c" + stamp);

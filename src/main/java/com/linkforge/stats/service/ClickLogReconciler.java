@@ -39,7 +39,8 @@ public class ClickLogReconciler {
                 try {
                     clickStatsService.consume(new ClickEvent(
                             "log-" + row.getId(), row.getTenantId(), row.getLinkId(), row.getCode(),
-                            null, row.getIp(), row.getUserAgent(), row.getReferer(), row.getClickedAt()));
+                            null, row.getIp(), row.getUserAgent(), row.getReferer(), row.getClickedAt(),
+                            row.getVariant()));
                 } catch (Exception ex) {
                     log.warn("reconcile failed for click log {}: {}", row.getId(), ex.getMessage());
                 }

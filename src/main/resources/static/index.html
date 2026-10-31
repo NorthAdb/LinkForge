@@ -241,12 +241,13 @@ function turnPage(d) { page = Math.max(1, page + d); loadLinks(); }
 async function showStats(code) {
   const el = $('st-' + code);
   el.textContent = '统计加载中…';
-  const [r, dev, ref, os, browser] = await Promise.all([
+  const [r, dev, ref, os, browser, variant] = await Promise.all([
     api('GET', `/api/links/${code}/stats?days=7`),
     api('GET', `/api/links/${code}/stats/breakdown?dim=device&days=7`),
     api('GET', `/api/links/${code}/stats/breakdown?dim=referer_host&days=7`),
     api('GET', `/api/links/${code}/stats/breakdown?dim=os&days=7`),
-    api('GET', `/api/links/${code}/stats/breakdown?dim=browser&days=7`)
+    api('GET', `/api/links/${code}/stats/breakdown?dim=browser&days=7`),
+    api('GET', `/api/links/${code}/stats/breakdown?dim=variant&days=7`)
   ]);
   if (r.error) { el.textContent = '统计加载失败'; return; }
   const days = r.data.daily.slice(-7).map(d => `${d.date.slice(5)}:${d.clicks}/UV${d.uv}`).join('  ');
@@ -255,7 +256,8 @@ async function showStats(code) {
     + `<br>设备：${fmt(dev)}`
     + `<br>来源：${fmt(ref)}`
     + `<br>系统：${fmt(os)}`
-    + `<br>浏览器：${fmt(browser)}`;
+    + `<br>浏览器：${fmt(browser)}`
+    + `<br>分流：${fmt(variant)}`;
 }
 async function toggle(code, isActive) {
   const r = await api('POST', `/api/links/${code}/${isActive ? 'disable' : 'enable'}`);
