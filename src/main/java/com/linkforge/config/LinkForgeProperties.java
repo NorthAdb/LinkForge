@@ -143,6 +143,10 @@ public class LinkForgeProperties {
         private int expectedInsertions = 100_000;
         /** Desired false-positive probability; false positives just fall through to cache+DB. */
         private double fpp = 0.0001;
+        /** C2 wave B (D-C2-9): scheduled full rebuild switch; false = the job returns immediately. */
+        private boolean rebuildEnabled = true;
+        /** @Scheduled reads millis (its placeholder parsing knows no Boot duration style). */
+        private long rebuildIntervalMs = 86_400_000L;
     }
 
     @Data

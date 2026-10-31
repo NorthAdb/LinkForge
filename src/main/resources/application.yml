@@ -118,6 +118,12 @@ linkforge:
     enabled: ${LINKFORGE_BLOOM_ENABLED:true}
     expected-insertions: ${LINKFORGE_BLOOM_EXPECTED_INSERTIONS:100000}
     fpp: ${LINKFORGE_BLOOM_FPP:0.0001}
+    # C2 wave B (D-C2-9): scheduled full rebuild (bypass-then-swap, reseeds from the
+    # DB). A rebuild is a capacity/fpp reset and missed-broadcast healer, NOT
+    # deleted-code retraction (classic Bloom cannot retract).
+    rebuild-enabled: ${LINKFORGE_BLOOM_REBUILD_ENABLED:true}
+    # @Scheduled's placeholder reads millis only (no Boot duration style); default 24h.
+    rebuild-interval-ms: ${LINKFORGE_BLOOM_REBUILD_INTERVAL_MS:86400000}
   # C2 wave A (D-C2-3..8): Redis pub/sub cache bus — Bloom put broadcast now, L1
   # invalidate broadcast in wave C. false = no subscriptions, no publishes.
   cache-bus-enabled: ${LINKFORGE_CACHE_BUS_ENABLED:true}
