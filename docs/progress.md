@@ -1332,5 +1332,86 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 
 ## 深化 C3 A/B 权重分流 + 批量导入（feat/deepen-c3-ab-split-bulk-import，发车基线 main@ab57869，2026-10-31）
 
-> 交接单：`记录追踪/05-阶段交接/LinkForge-phase-C3-ab-split-bulk-import-handoff.md`。开放问题 Q1–Q6 **已全部确认 A**（t116u/t117u，2026-10-31），按 §1.1 D-C3-1…34 执行；本章随开发推进补全（红先证据、CI conclusion 表、例数与连接预算收口时补）。
-> **A/B 权重分流（A 块）红先进行中**：`AbSplitIT` 合同红六项——`lf_link_variant` 建表、创建带 variants+详情回显、60 样本 302 Location 抽签分布（Location ∈ {urlA,urlB} 且两侧都出现）、密码链解锁 cookie 后 302 抽中 variant、PATCH 整表替换+空数组清空、`dim=variant` 统计分桶（geo 仍 400）。批量导入（B 块）由另一执行者负责，本章不记其红先。
+> 交接单：`记录追踪/05-阶段交接/LinkForge-phase-C3-ab-split-bulk-import-handoff.md`。开放问题 Q1–Q6 **已全部确认 A**（t116u/t117u，2026-10-31），按 §1.1 D-C3-1…34 执行；本章已随收口 docs 提交补全（红先证据、CI conclusion 表、改动清单、验收勾选、例数与连接预算）。
+> **红先完成（A/B 两块收口）**：A 块 `AbSplitIT` 红提交 `6867f14` → run 41205576502 **8 例中 7 红**（建表断言、创建+详情回显、60 样本抽签、密码链、PATCH 整表替换、`dim=variant` 分桶，L1 广播守卫因 "nothing to update" 400 连带红；唯一绿是无 variants 回归守卫），实现 `70a0f22` 翻绿；B 块 `BulkImportIT` 红提交 `598bc8a` → run 41206479196 **7/7 红**（端点未实现期 404），实现 `d23a7c2` 翻绿。run/conclusion 全景见下表。
+
+### 决策记录（D-C3 落地）
+
+| ID | 落地 |
+|----|------|
+| D-C3-1/5/13 | 一码多目标：同码 0..N 条 variant，N=0 行为与旧链逐字一致；请求体 `originalUrl` 仍必填（列表/QR/门禁/详情展示面不变）；`ShortLinkDetail` 带 `variants`，CSV 导出保持旧 6 列不破脚本 |
+| D-C3-2 | `V10__link_variant.sql`（本轮唯一新迁移，V1–V9 零字节改动）：建 `lf_link_variant`（`uk_link_variant (link_id, variant_key)`；`variant_key` 内联 `utf8mb4_0900_bin`——大小写敏感、服务层 HashSet 校验同口径；无 tenant 索引——无 tenant 维查询路径）**＋** `ALTER TABLE lf_click_log ADD COLUMN variant VARCHAR(32) NULL`。后者是 Q2「click_log 不强制加列」的可选路径启用：`ClickLogReconciler` 从 click_log 行重建 ClickEvent 再 consume（`ClickLogReconciler.java:40-42`），不落列则重建时 variant 分桶全部塌回 default——统计正确性要求，不只是明细可查 |
+| D-C3-3/4/7 | key `[A-Za-z0-9_-]{1,32}` 同链唯一（区分大小写）；weight 1..10000 正整数、按相对权重抽不必和为 100；每链 ≤10；缺 key/weight/url → 400；variant URL 与 create 同款 `requireHttpUrl` + `rejectBlockedTarget`，全部校验在**任何写之前** |
+| D-C3-6 | 写路径整表替换语义（null=不动、[]=清空），单条 PATCH variant 不做；插入/替换 delete+insert 走 `TransactionTemplate` 原子 |
+| D-C3-8/9/33 | 抽签纯函数 `VariantPicker`（权重累积 + ThreadLocalRandom）；插入点在 `resolveTarget` 全部门禁（B9 BLOCK → B3 密码 → WARN 放行）通过后、构造 `Redirect` 前，`RedirectOutcome.Redirect` 加第三组件 `variantKey`；BLOCK/Locked/WARN 路径不查 variants；每成功 302 一次 `selectByLinkId`（indexed，O(≤10)）；variants 查询不在 Bloom 前 |
+| D-C3-10 | L1/L2 仍缓存 `original_url` 作提示，**有 variants 时最终 Location 以抽签为准**；variants 变更走既有 `publishL1Invalidate`（update 写尾，C2 链路），订阅只剔本地 L1 |
+| D-C3-11 | 统计：`ClickEvent` 加可空 `variant`（旧 outbox JSON 反序列化为 null 不炸）；`recordClick(link, request, variantKey)` 三参；consume 在四 UA/referer 维后**仅当 variant 非 null** 写 `dim_type=variant`（无 variant 不写该维）；`DIM_TYPES` allowlist + 文案加 variant；`dim=geo` 等非法仍 400 |
+| D-C3-12/34 | 范围外未做：B10；Geo；C4 SSRF/演练；按设备/地区/OS 分流；实验框架/显著性；异步导入；RedisBloom；改 V1–V9；改 Outbox/Webhook/QR 语义 |
+| D-C3-14/16/17 | `POST /api/links/import`（multipart 字段 `file`，鉴权同 `/api/links/**`）；数据行 ≤100、超出整单 400 零写入；表头最小必填列 `original_url`，可选 `title`/`custom_code`/`expire_at`/`access_password`/`utm_*`（小写蛇形、未知列忽略），缺必填列 400 |
+| D-C3-15/25 | **同步**处理整文件一次返回（非异步任务/队列/进度查询）；文件上限 256 KiB（`spring.servlet.multipart.max-file-size=256KB` / `max-request-size=512KB`，`MaxUploadSizeExceededException` 专用 handler → 400，否则兜底 500）；空文件拒；密码列不打日志、失败 reason 固定短串**永不回显** |
+| D-C3-18/19 | 部分失败：行级 try/catch `BizException \| DataIntegrityViolationException`（DuplicateKey 是后者子类，不能同列 multi-catch），失败行 `{row, reason}`，**row=文件行号**（header=1，首个数据行=2），成功行保留；响应 `{successCount, failureCount, successes:[{row,code}], failures:[{row,reason}]}`；逐行独立事务 |
+| D-C3-20/21 | 每条成功行走 `doCreate(request, user, null)`（幂等 settle 块本就 null-guarded）：Bloom put + 广播 + absent 清除 + cache 写穿全部来自 doCreate 尾声，零复制校验防漂移；全空行（每个 cell 都空白的未加引号记录）跳过、不计成功也不计失败 |
+| D-C3-22 | 专用滑窗 `import:user:{userId}`（默认 5/60s，`LINKFORGE_IMPORT_RATE_MAX`/`_WINDOW_SECONDS`）**整次 HTTP 计一次**，从不碰 `create:user`（100 行不会在创建滑窗第 31 行 429）；API Key 一次 HTTP = 一次现成配额 |
+| D-C3-23 | Idempotency-Key 刻意不生效（响应本身逐行回报） |
+| D-C3-24 | 控制台 `static/index.html`：统计卡 6 路 breakdown（新增 分流 行）；创建区加 `导入 CSV`（FormData 直 POST，不走 api() 的 JSON 封装）；失败原因用 `textContent` 渲染故不 esc()（双转义反错）；`.msg` 加 `white-space: pre-line` |
+| D-C3-26..29 | docs 收口：resume post-C3（A/B + 导入 bullet + 例数 307，bench 纪律与 B10 行保留）；README 徽章/功能总览/限流与配置行/C3 节/版本历史；本章；backlog 闭环备注（B10/Geo/#10 SSRF 仍开） |
+| D-C3-30..32 | 单分支 `feat/deepen-c3-ab-split-bulk-import`；合 main → push 不开 PR（沿 C1/C2，coordinator 收尾）；pom 保持 2.0.0 |
+
+### 红先证据（红提交只含测试；conclusion 以 Actions 为准）
+
+| 块 | 红 run | 红况 |
+|----|--------|------|
+| A（A/B 权重分流） | [41205576502](https://github.com/NorthAdb/LinkForge/actions/runs/41205576502) | AbSplitIT 8 例中 7 红（建表断言、创建带 variants+详情回显、60 样本抽签分布、密码链解锁后抽签、PATCH 整表替换+清空、`dim=variant` 分桶；L1 广播守卫因 "nothing to update" 400 连带红）；唯一绿是无 variants 回归守卫 |
+| B（批量 CSV 导入） | [41206479196](https://github.com/NorthAdb/LinkForge/actions/runs/41206479196) | BulkImportIT 7/7 红（端点未实现期 404） |
+
+### CI 结论表（每行必有 conclusion；吸取 C1-N1 教训，从首轮即带列）
+
+| 标签 | run | conclusion | head |
+|------|-----|------------|------|
+| A 红（AbSplitIT 红先提交） | [41205576502](https://github.com/NorthAdb/LinkForge/actions/runs/41205576502) | **failure**（8 例中 7 红，唯一绿=无 variants 回归守卫） | `6867f14` |
+| A 绿（V10 + 抽签 + dim=variant） | [41205604839](https://github.com/NorthAdb/LinkForge/actions/runs/41205604839) | **success**（surefire 137 + failsafe 154 + tz 2 = 293） | `70a0f22` |
+| B 红（BulkImportIT 红先提交） | [41206479196](https://github.com/NorthAdb/LinkForge/actions/runs/41206479196) | **failure**（7/7 红，端点未实现期 404） | `598bc8a` |
+| B 绿（sync multipart CSV import） | [41206485400](https://github.com/NorthAdb/LinkForge/actions/runs/41206485400) | **success**（surefire 144 + failsafe 161 + tz fork 2 = 307） | `d23a7c2` |
+| 分支终态（本提交） | 待 | **待回填** | 待 |
+| main 合并 | 待 | **待回填** | 待 |
+
+**口径**：功能绿以 B 绿 `41206485400`（307 全量）为准；「分支终态 / main 合并」两行待 run 落地后由收尾 docs 提交回填（C1/C2 先例，cf. 文档 nit `4435517`）。
+
+### 改动清单（4 提交 + 本 docs 提交）
+
+| 提交 | 内容 |
+|------|------|
+| `6867f14` | test(ab)：A 红测试（AbSplitIT 8 例：建表断言、创建带 variants+详情回显、60 样本抽签分布、密码链解锁后抽签、PATCH 整表替换+清空、`dim=variant` 分桶、L1 广播守卫、无 variants 回归守卫） |
+| `70a0f22` | feat(ab)：V10__link_variant.sql + VariantSpec/LinkVariant/VariantPicker + 写路径整表替换（TransactionTemplate）+ resolveTarget 抽签与 `RedirectOutcome.variantKey` + `ClickEvent.variant` / consume `dim_type=variant` + `DIM_TYPES` allowlist + 详情 variants + 控制台分流行 |
+| `598bc8a` | test(import)：B 红测试（BulkImportIT 7 例） |
+| `d23a7c2` | feat(import)：`POST /api/links/import` 同步 multipart + `CsvImportParser`（零新依赖）+ `import:user` 专用滑窗 + 结构性拒绝先于写 + 行级 doCreate 部分成功 + `MaxUploadSizeExceededException` 400 + 控制台「导入 CSV」+ 配置（`import-max`/`window-seconds`、multipart 上限） |
+| 本 docs 提交（收口） | README（徽章 307、功能总览、限流/配置行、C3 节、版本历史）+ resume post-C3 收口 + 本章 + backlog 闭环备注 |
+
+### 验收勾选（C3-1..20）
+
+- [x] **C3-1** 基线祖先含 `ab57869c9ba27eb590757de8029efaa23637b6df`；V1–V9 零字节改动（本轮唯一新迁移 `V10__link_variant.sql`）
+- [x] **C3-2** V10 建 `lf_link_variant` 带 `uk_link_variant (link_id, variant_key)`；weight 1..10000 由 `VariantSpec` @Min/@Max 应用层强制
+- [x] **C3-3** 无 variants 旧链回归一致（AbSplitIT 无 variants 回归守卫例——红先期即绿；A 绿 run 41205604839 全量绿）
+- [x] **C3-4** 创建带 variants 成功 + 详情回显、PATCH 整表替换、空数组清空（AbSplitIT；红先 run 41205576502 于 `70a0f22` 翻绿）
+- [x] **C3-5** 60 样本抽签 `Location` ∈ {urlA, urlB} 且两侧都出现（AbSplitIT 抽签分布例）
+- [x] **C3-6** 密码链无 cookie → Locked；`unlock` 303 回 `/r/{code}`，解锁后 GET 再抽签（AbSplitIT 密码链例）；门禁 BLOCK 基于 `original_url`（链层）
+- [x] **C3-7** UTM 仍只合并进链层 `original_url`（UtmMerger 未触碰，variants 不做强制 UTM 合并）
+- [x] **C3-8** `dim=variant` breakdown 可见所抽 key；`dim=geo`/未知仍 400（AbSplitIT 分桶例 + `DIM_TYPES` 五维 allowlist）
+- [x] **C3-9** variants 变更 `publishL1Invalidate`（update 写尾既有广播覆盖；AbSplitIT L1 广播守卫例——红先期因 "nothing to update" 400 连带红，实现后翻绿）
+- [x] **C3-10** 合法 ≤100 行部分成功；>100 → 400 零写入（BulkImportIT）
+- [x] **C3-11** 失败行 `{row, reason}`（row=文件行号，表头=1）；成功行 DB 可见 + Bloom mightContain + publish 路径覆盖（BulkImportIT，单 JVM）
+- [x] **C3-12** 导入复用 URL/门禁/密码校验（行级 `doCreate` 同路径；BLOCK URL 行失败、合法行成功）
+- [x] **C3-13** 不因 `create:user` 30/min 第 31 行 429；专用 `import:user:{userId}` 滑窗（默认 5/60s）可测
+- [x] **C3-14** 控制台创建区 `导入 CSV`（FormData 直 POST，不走 api() 的 JSON 封装）
+- [x] **C3-15** README 功能总览加 A/B + 导入两行、徽章 307（144+161+2）、诚实边界（非 Geo/设备分流、导入同步非异步、B10/Geo/C4 未做）——本轮 README 改动
+- [x] **C3-16** resume post-C3 收口：A/B + 批量导入 bullet、例数 307；Windows bench 历史纪律与「B10 未跑」保留——本轮 resume 改动
+- [x] **C3-17** 本章含 D-C3 决策表、红先证据、CI conclusion 列、改动清单、例数构成、连接预算
+- [x] **C3-18** 全量 verify 绿 = B 绿 run [41206485400](https://github.com/NorthAdb/LinkForge/actions/runs/41206485400)（surefire 144 + failsafe 161 + tz 2 = 307）；分支终态 / main 合并行**待跑**（见 CI 结论表）
+- [x] **C3-19** pom 仍 2.0.0；合 main → push 待 coordinator 收尾（不开 PR，沿 C1/C2），tip 全 SHA 随收尾自报
+- [x] **C3-20** 范围外未做：B10 / Geo / C4 / 按设备·地区分流 / 异步导入 / 改 V1–V9
+
+### 例数与预算
+
+- **307 = surefire 144 + failsafe 161 + tz fork 2**（C3 净增 +26：UT +11【VariantPicker 4、CsvImportParser 7】，IT +15【AbSplitIT 8、BulkImportIT 7】）
+- 连接预算 27×10+14×4 = **326**（41 个 \*IT、14 个显式 `hikari.maximum-pool-size=4`；C3 新增 AbSplitIT、BulkImportIT 均钉 4），天花板 = 共享容器 `--max-connections=500`，余量 174
+- 本地每提交 `mvn -B verify -DskipITs` 退出码显式 0
