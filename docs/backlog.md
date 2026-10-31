@@ -9,10 +9,10 @@
 |---|------|------|------|
 | 1 | **B10：Linux 复跑 bench 并刷新数字** | 现有压测数字（health 888 QPS；关同步明细 13→276 QPS、P50 678→31ms）是 **Windows 历史实测**（`df904f8`，2026-10-24，固定窗口限流时期，早于 A7–B8、B6 滑窗和当前 tip），**不能代表当前版本，也不是 Linux 性能**。B10 Linux bench **仍未跑**；跑完再更新 `docs/bench.md` 与 README 引用。未跑之前不要补造数字 | Bw345-F2；Bw2fix-N9 |
 | ~~2~~ | ~~**QR 码 + UTM 参数**（B3 备选）~~ | **已闭环（C1，merge `190e1f1`，2026-10-31）**：QR 物料+短时分享链+UTM 写时合并，见 README「物料与投放」；B10（上栏）仍开放 | Bw345-F1 |
-| 3 | Bloom 共享化（RedisBloom 或广播 put） | 解决多实例「实例 B 新建的码在实例 A 重启前假阴性 404」；需 Redis Stack 模块或新增广播机制 | D-A9-2/D-A9-8 |
-| 4 | Bloom 删除回收（定期全量 rebuild） | 经典 Bloom 无法回收条目；已删码永久占位数组 | D-A9-5 |
-| 5 | L1 多实例失效广播（pub/sub） | 实例 A 改 URL 后实例 B 在 L1 TTL（≤10s）内可能跳旧值；可加 Redis pub/sub 广播失效 | B8 诚实口径 |
-| 6 | 维度扩展：os / browser 维度、Geo | 首版维度只有 device + referer_host | D-A8-1 / D-A8-5 |
+| ~~3~~ | ~~Bloom 共享化（RedisBloom 或广播 put）~~ | **已闭环（C2，merge `744ad67`，2026-10-31）**：保留 Guava + Redis pub/sub 广播 put（`linkforge:bloom:put`），RedisBloom 未做（明确不做） | D-A9-2/D-A9-8 |
+| ~~4~~ | ~~Bloom 删除回收（定期全量 rebuild）~~ | **已闭环（C2）**：定时 24h + ADMIN 手动 rebuild（旁路原子替换）。诚实口径：rebuild 是容量/fpp 重置与补漏广播，**不是**删码回收——已删码仍占位（经典 Bloom 做不到），DB 层 404 不变 | D-A9-5 |
+| ~~5~~ | ~~L1 多实例失效广播（pub/sub）~~ | **已闭环（C2）**：update/disable/enable/delete 广播失效（origin 跳过自己、只剔本地 L1）；TTL 兜底不变 | B8 诚实口径 |
+| 6 | 维度扩展：**Geo**（os / browser 已于 C2 闭环，merge `744ad67`） | os/browser 已上线（轻量 UA 规则）；Geo 明确不做于 C2，仍开放 | D-A8-1 / D-A8-5 |
 | 7 | AI / PostgreSQL / Supabase / 向量库 | 整体延期，将来另立方案 | 冻结决策「边界与不做」 |
 | 8 | 云公网部署 | prod profile 已备好收紧开关；D5=本地 Compose | D5 |
 
