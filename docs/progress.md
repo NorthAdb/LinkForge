@@ -1280,7 +1280,8 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | D 绿第一跑（linkId 合成值测试缺陷） | [41164699023](https://github.com/NorthAdb/LinkForge/actions/runs/41164699023) | **failure**（唯一失败=DimOsBrowserIT 用合成 linkId 写维度行，测试自身） | `b3ca6a2` |
 | D 绿终态 | [41165144611](https://github.com/NorthAdb/LinkForge/actions/runs/41165144611) | **success** | `322803d` |
 | docs 跑暴露潜在 flake（tie 序无 tiebreaker） | [41165691642](https://github.com/NorthAdb/LinkForge/actions/runs/41165691642) | **failure**（唯一失败=DimBreakdownIT 平手桶顺序翻转——`ORDER BY clicks DESC` 无次序键，C2 维度行翻倍后暴露；根因修为 `clicks DESC, dim_value ASC`） | `a6ad50b` |
-| 分支终态（tiebreaker 修后） | [41166167988](https://github.com/NorthAdb/LinkForge/actions/runs/41166167988) | **success** | `45ffdfc` |
+| tiebreaker 修复绿（**非分支终态**——head 在分支中段） | [41166167988](https://github.com/NorthAdb/LinkForge/actions/runs/41166167988) | **success** | `45ffdfc` |
+| 分支终态（docs 补 CI 表后） | [41166521108](https://github.com/NorthAdb/LinkForge/actions/runs/41166521108) | **success** | `8041852` |
 
 ### 改动清单（11 提交）
 

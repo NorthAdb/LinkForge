@@ -32,8 +32,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * MySQL. {@code true} includes Guava's configured-fpp false positives, which
  * simply fall through to the normal cache+DB resolution — correctness unaffected.
  * Deleted codes stay positive (classic Bloom cannot retract): they cost one DB
- * miss and 404 as before. Multi-instance deployments each load their own copy
- * (demo posture); RedisBloom is the shared-filter follow-up.
+ * miss and 404 as before. Still a process-local filter across instances (no
+ * RedisBloom): peer alignment is the CacheBus put broadcast plus the scheduled /
+ * ADMIN-triggered rebuild, with the README recording the residual gap honestly.
  */
 @Slf4j
 @Component
