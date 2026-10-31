@@ -209,33 +209,38 @@ public class ShortLinkService {
 
         // uk_code is the concurrency backstop. A taken custom code is a 409; random
         // codes regenerate on collision instead of failing the request.
-        boolean inserted = false;
-        if (customCode != null && !customCode.isEmpty()) {
-            link.setCode(customCode);
-            try {
-                shortLinkMapper.insert(link);
-                inserted = true;
-            } catch (DuplicateKeyException ex) {
-                throw new BizException(409, "code already exists");
-            }
-        } else {
-            for (int attempt = 0; attempt < CODE_ATTEMPTS && !inserted; attempt++) {
-                link.setCode(ShortCodes.randomCode(properties.getShortLink().getCodeLength()));
+        // C3-S1: the link row and its variants commit atomically — a variants failure
+        // rolls the link back too, and the Bloom/cache/idem tail below only runs after
+        // the commit. The DuplicateKeyException catch is safe inside the transaction:
+        // InnoDB rolls back only the failed statement, so the retry loop can continue.
+        transactionTemplate.executeWithoutResult(status -> {
+            boolean inserted = false;
+            if (customCode != null && !customCode.isEmpty()) {
+                link.setCode(customCode);
                 try {
                     shortLinkMapper.insert(link);
                     inserted = true;
                 } catch (DuplicateKeyException ex) {
-                    log.info("short code collision on {}, retrying (attempt {})", link.getCode(), attempt + 1);
+                    throw new BizException(409, "code already exists");
+                }
+            } else {
+                for (int attempt = 0; attempt < CODE_ATTEMPTS && !inserted; attempt++) {
+                    link.setCode(ShortCodes.randomCode(properties.getShortLink().getCodeLength()));
+                    try {
+                        shortLinkMapper.insert(link);
+                        inserted = true;
+                    } catch (DuplicateKeyException ex) {
+                        log.info("short code collision on {}, retrying (attempt {})", link.getCode(), attempt + 1);
+                    }
                 }
             }
-        }
-        if (!inserted) {
-            throw new BizException("failed to allocate short code");
-        }
-        if (!variants.isEmpty()) {
-            // D-C3-2: all rows or none — the code must never resolve with a half-written set.
-            transactionTemplate.executeWithoutResult(status -> insertVariants(link, variants));
-        }
+            if (!inserted) {
+                throw new BizException("failed to allocate short code");
+            }
+            if (!variants.isEmpty()) {
+                insertVariants(link, variants);
+            }
+        });
 
         codeBloom.put(link.getCode());
         cacheBus.publishBloomPut(link.getCode());
@@ -411,13 +416,7 @@ public class ShortLinkService {
     }
 
     public ShortLinkDetail detail(String code) {
-        ShortLink link = getOwnedLink(code);
-        ShortLinkDetail detail = toDetail(link);
-        List<LinkVariant> variants = variantMapper.selectByLinkId(link.getId());
-        if (!variants.isEmpty()) {
-            detail.setVariants(toViews(variants));
-        }
-        return detail;
+        return toDetailWithVariants(getOwnedLink(code));
     }
 
     public ShortLinkDetail update(String code, UpdateShortLinkRequest request) {
@@ -490,7 +489,7 @@ public class ShortLinkService {
         // D-C2-16: one broadcast per resolution-changing write, at the write itself —
         // never from scheduleStaleClear's delayed pass (that would publish twice).
         cacheBus.publishL1Invalidate(code);
-        return toDetail(link);
+        return toDetailWithVariants(link);
     }
 
     public void disable(String code) {
@@ -513,11 +512,17 @@ public class ShortLinkService {
         cacheBus.publishL1Invalidate(code);
     }
 
-    /** Logical delete: the code stays reserved (uk_code) and cannot be reused. */
+    /** Logical delete: the code stays reserved (uk_code) and cannot be reused.
+     * C3-N3: variants are hard rows (no logical-delete column) — they must not outlive
+     * the link, so both deletes commit as one unit; cache evictions stay outside. */
     public void delete(String code) {
         ShortLink link = getOwnedLink(code);
         CompletableFuture<ShortLink> priorFlight = singleFlight.peek(code);
-        shortLinkMapper.deleteById(link.getId());
+        transactionTemplate.executeWithoutResult(status -> {
+            shortLinkMapper.deleteById(link.getId());
+            variantMapper.delete(new LambdaQueryWrapper<LinkVariant>()
+                    .eq(LinkVariant::getLinkId, link.getId()));
+        });
         singleFlight.forget(code, priorFlight);
         evictCache(code);
         scheduleStaleClear(code);
@@ -944,7 +949,17 @@ public class ShortLinkService {
         }
     }
 
-    /** List/table rows keep variants null (populated only by {@link #detail(String)}). */
+    /** Single-link read views (detail and the update response) fill variants; list/table rows keep them null. */
+    private ShortLinkDetail toDetailWithVariants(ShortLink link) {
+        ShortLinkDetail detail = toDetail(link);
+        List<LinkVariant> variants = variantMapper.selectByLinkId(link.getId());
+        if (!variants.isEmpty()) {
+            detail.setVariants(toViews(variants));
+        }
+        return detail;
+    }
+
+    /** List/table rows keep variants null; single-link views go through {@link #toDetailWithVariants(ShortLink)}. */
     private static ShortLinkDetail toDetail(ShortLink link) {
         return new ShortLinkDetail(link.getId(), link.getCode(), link.getOriginalUrl(), link.getTitle(),
                 link.getStatus(), link.getExpireAt(), link.getCreatedAt(), link.getUpdatedAt(),
