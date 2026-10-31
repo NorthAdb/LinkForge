@@ -20,6 +20,8 @@ public class LinkForgeProperties {
     private Bootstrap bootstrap = new Bootstrap();
     private RateLimit rateLimit = new RateLimit();
     private Bloom bloom = new Bloom();
+    /** C2 wave A (D-C2-3..8): Redis pub/sub cache bus — Bloom put broadcast now, L1 invalidate in wave C; false = silent no-op. */
+    private boolean cacheBusEnabled = true;
     private SingleFlight singleFlight = new SingleFlight();
     private L1 l1 = new L1();
     private ApiKey apiKey = new ApiKey();

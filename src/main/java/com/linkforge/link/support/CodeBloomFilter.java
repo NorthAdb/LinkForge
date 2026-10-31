@@ -5,10 +5,14 @@ import com.google.common.hash.Funnels;
 import com.linkforge.config.LinkForgeProperties;
 import com.linkforge.link.mapper.ShortLinkMapper;
 import io.micrometer.core.instrument.MeterRegistry;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.data.redis.connection.Message;
+import org.springframework.data.redis.listener.ChannelTopic;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -36,9 +40,34 @@ public class CodeBloomFilter {
     private final ShortLinkMapper shortLinkMapper;
     private final LinkForgeProperties properties;
     private final MeterRegistry meterRegistry;
+    private final RedisMessageListenerContainer container;
 
     private volatile BloomFilter<String> filter;
     private volatile boolean ready;
+
+    /** C2 wave A (D-C2-5): peer puts teach this filter; own messages are applied too. */
+    @PostConstruct
+    void subscribe() {
+        if (!properties.isCacheBusEnabled()) {
+            return;
+        }
+        // Registered pre-load (D-C2-5): the container is a SmartLifecycle that subscribes at context start, strictly before the ApplicationReadyEvent load, so no put can land between load and subscribe (that gap would stay invisible until rebuild).
+        container.addMessageListener((message, pattern) -> applyRemotePut(message),
+                new ChannelTopic(CacheBus.BLOOM_PUT_CHANNEL));
+        log.info("bloom put broadcast subscriber registered on {}", CacheBus.BLOOM_PUT_CHANNEL);
+    }
+
+    /** Listener-thread work only: one parse + one idempotent put, no executor hop. */
+    private void applyRemotePut(Message message) {
+        CacheBus.Put put = CacheBus.parsePut(new String(message.getBody(), StandardCharsets.UTF_8));
+        if (put == null) {
+            meterRegistry.counter("linkforge.bloom.subscribe.malformed").increment();
+            return;
+        }
+        // Own messages are applied too (D-C2-7): Guava put is idempotent and an origin skip only adds a way to lose a put.
+        put(put.code());
+        meterRegistry.counter("linkforge.bloom.subscribe.put").increment();
+    }
 
     /** Full seed from the DB once the app is up; a failed load must never take redirects down. */
     @EventListener(ApplicationReadyEvent.class)

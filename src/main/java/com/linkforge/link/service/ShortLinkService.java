@@ -17,6 +17,7 @@ import com.linkforge.link.dto.ShortLinkDetail;
 import com.linkforge.link.dto.UpdateShortLinkRequest;
 import com.linkforge.link.entity.ShortLink;
 import com.linkforge.link.mapper.ShortLinkMapper;
+import com.linkforge.link.support.CacheBus;
 import com.linkforge.link.support.CodeBloomFilter;
 import com.linkforge.link.support.ClickFilter;
 import com.linkforge.link.support.CsvFormat;
@@ -80,6 +81,7 @@ public class ShortLinkService {
     private final RedisRateLimiter rateLimiter;
     private final MeterRegistry meterRegistry;
     private final CodeBloomFilter codeBloom;
+    private final CacheBus cacheBus;
     private final SingleFlight<String, ShortLink> singleFlight;
     private final ShortLinkRowLoader rowLoader;
     private final UrlLocalCache urlLocalCache;
@@ -205,6 +207,7 @@ public class ShortLinkService {
         }
 
         codeBloom.put(link.getCode());
+        cacheBus.publishBloomPut(link.getCode());
         clearAbsent(link.getCode());
         cacheUrl(link.getCode(), url);
         meterRegistry.counter("linkforge.links.created").increment();

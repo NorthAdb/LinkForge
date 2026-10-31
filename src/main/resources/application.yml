@@ -118,6 +118,9 @@ linkforge:
     enabled: ${LINKFORGE_BLOOM_ENABLED:true}
     expected-insertions: ${LINKFORGE_BLOOM_EXPECTED_INSERTIONS:100000}
     fpp: ${LINKFORGE_BLOOM_FPP:0.0001}
+  # C2 wave A (D-C2-3..8): Redis pub/sub cache bus — Bloom put broadcast now, L1
+  # invalidate broadcast in wave C. false = no subscriptions, no publishes.
+  cache-bus-enabled: ${LINKFORGE_CACHE_BUS_ENABLED:true}
   singleflight:
     # A10: merge concurrent same-code hot-path row reads into one in-flight DB read;
     # followers past wait-timeout do their own read (fail-open).

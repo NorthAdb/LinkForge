@@ -4,6 +4,7 @@ import com.linkforge.config.LinkForgeProperties;
 import com.linkforge.link.mapper.ShortLinkMapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 
 import java.util.List;
 import java.util.stream.IntStream;
@@ -21,7 +22,8 @@ class CodeBloomFilterTest {
     private final ShortLinkMapper mapper = mock(ShortLinkMapper.class);
     private final LinkForgeProperties properties = new LinkForgeProperties();
     private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
-    private final CodeBloomFilter bloom = new CodeBloomFilter(mapper, properties, meters);
+    private final CodeBloomFilter bloom = new CodeBloomFilter(mapper, properties, meters,
+            mock(RedisMessageListenerContainer.class));
 
     @Test
     void seededCodesArePositiveAndUnseenCodesNegative() {
