@@ -1,6 +1,6 @@
-# LinkForge 简历条目（post-C3 口径 · tip `d23a7c2`，2026-10-31）
+# LinkForge 简历条目（post-C4 口径 · tip `cc3fabc`，2026-11-01）
 
-> 数字纪律：压测数字引用 `docs/bench.md` 的 **Windows 历史实测**（2026-10-24，固定窗口限流时期，早于 A7–B8、B6 滑窗与 C1–C3）。**不是当前 Linux 性能；B10 Linux bench 仍未跑**，本文不发明新数字。限流如实写「Redis ZSET + Lua 滑动窗口日志」；不写未实测的词（令牌桶/漏桶/万级 QPS）；不接任何信誉服务的边界照实讲。每条 bullet 都有测试/演练/指标兜底，面试可展开。
+> 数字纪律：压测数字引用 `docs/bench.md` 的 **Windows 历史实测**（2026-10-24，固定窗口限流时期，早于 A7–B8、B6 滑窗与 C1–C4）。**不是当前 Linux 性能；B10 Linux bench 仍未跑**，本文不发明新数字。限流如实写「Redis ZSET + Lua 滑动窗口日志」；不写未实测的词（令牌桶/漏桶/万级 QPS）；不接任何信誉服务的边界照实讲。每条 bullet 都有测试/演练/指标兜底，面试可展开。
 
 - **多租户短链服务**（Spring Boot 3 / MyBatis-Plus / MySQL 8 / Redis 7 / RabbitMQ 3.13）：JWT 鉴权 + 租户级数据隔离（跨用户访问一律 404，集成测试钉住）；注册创办人与 bootstrap 用户为租户 **ADMIN**（`lf_user.tenant_role`）。分钟级限流为 **Redis ZSET + Lua 滑动窗口日志**——Redis `TIME` 时钟免疫多实例时钟漂移、只有放行的请求占名额、429 全带 `Retry-After`、Redis 故障 fail-open 且有指标可见；短码唯一索引兜底并发创建零重复，短码区分大小写、保留字防 `ADMIN` 绕过
 
@@ -12,10 +12,12 @@
 
 - **A/B 权重分流 + 批量导入（C3）**：**一码多目标**（每链 ≤10 条加权 variant，V10 `lf_link_variant`，key 区分大小写）——**门禁/密码/UTM 全部留在链层**，跳转在全部门禁通过后按权重抽签，**有 variants 时 `Location` 以抽签为准**（无 variants 行为逐字不变）；点击按所抽 variant 进 `dim=variant` 分桶（统计可拆桶，无 variant 不写该维）。批量 CSV 导入 `POST /api/links/import` **同步 multipart** ≤100 行、**部分成功**（失败行返回文件行号+原因，成功行保留）——**专用 import 限流**整次一次、不占创建配额，成功行走单链创建同路径，**Bloom put + L1 广播对齐多实例**；自写 RFC4180 解析器零新依赖，结构性拒绝先于任何写入
 
-- **安全边界（诚实讲）**：BCrypt 密码短链（**先两级限流后 BCrypt** 防 CPU 打满、HMAC cookie 绑密码版本）；本地域名名单门禁（BLOCK/WARN，跳转行级复查即时热生效——「开放重定向 + 本地名单」）；Webhook SSRF 拦私网/元数据，**DNS rebinding 仍是诚实缺口**（未做解析钉死/二次比对，后置加深）
+- **SSRF 解析钉死 + 故障演练（C4）**：Webhook 投递侧把「校验通过后 DNS 再改」的 TOCTOU 关死——**投递时一次解析 → 对全部解析地址校验 → 只向已校验地址建连**（httpclient5 + 自定义 DnsResolver；Host/TLS SNI/证书校验保原 hostname，连接 IP ⊆ 当次校验集合），重定向继续不跟随；端口白名单/出口代理仍后置（诚实边界）。故障演练 `scripts/fault-drill.sh` 三段实证——**Redis 停服**（跳转仍 302、创建幂等降级可观测、恢复后自愈含 L2 写回）、**webhook 目标 5xx/超时**（重试退避、最终 FAILED、不堵主链路跳转）、**MySQL 只读**（写 API 失败、HEAD 探针可用、恢复写回）；C3 审计修复并入——建链 + variants 同一事务整单回滚、update 返回带 variants、delete 清 variant 行
+
+- **安全边界（诚实讲）**：BCrypt 密码短链（**先两级限流后 BCrypt** 防 CPU 打满、HMAC cookie 绑密码版本）；本地域名名单门禁（BLOCK/WARN，跳转行级复查即时热生效——「开放重定向 + 本地名单」）；Webhook SSRF 拦私网/元数据，**DNS rebinding 已钉死**（投递侧一次解析→全 IP 校验→只连已校验地址，Host/SNI 保原 hostname）；端口白名单/出口代理仍后置
 
 - **压测定位与量化**（wrk 写路径分解；**Windows 历史 / 固定窗口时期，早于当前 tip，B10 Linux bench 仍未跑，不是当前 Linux 性能**）：定位同步明细提交为吞吐支配项——关闭后跳转 **13→276 QPS、P50 678→31ms（约 21 倍）**；缓存预热后命中率 100%、零回源；全链路错误率 0
 
-- **工程化**：v2.0.0 发布 **211** 例；当前 tip（C3 后）**307** 例——纯单测 **144** + Testcontainers 集成 **161** + 时区 fork **2**（Asia/Shanghai 钉死 Webhook 退避时钟）。Flyway V1–V10；令牌守卫的 `/actuator/prometheus`（fail-closed）+ Grafana 自动 provision（P50/95/99 + Outbox/Webhook 积压；L1/Bloom 面板标明本进程）；prod profile 一键收敛暴露面
+- **工程化**：v2.0.0 发布 **211** 例；当前 tip（C4 后）**315** 例——纯单测 **147** + Testcontainers 集成 **166** + 时区 fork **2**（Asia/Shanghai 钉死 Webhook 退避时钟）。Flyway V1–V10；令牌守卫的 `/actuator/prometheus`（fail-closed）+ Grafana 自动 provision（P50/95/99 + Outbox/Webhook 积压；L1/Bloom 面板标明本进程）；prod profile 一键收敛暴露面
 
-> 面试防线：跳转判定链（限流→Bloom→absent→L1/L2→行读→404/410→BLOCK→密码门→WARN→非人跳过→302）能默画；「为什么滑窗不是令牌桶」「Outbox vs 双写」「Bloom 假阴/假阳与广播补齐」「L1 origin-skip」「TENANT Key 谁能签发」「聚合 digest late/truncated」「UTM 为何写时合并」「密码链为何限流先于 BCrypt」「SSRF 还缺什么」「为何不做 ES / Geo / B10」「一码多目标怎么按权重抽签且统计可拆桶」「批量导入怎么在专用限流与 Bloom 广播下部分成功」——每题有书面取舍（README「诚实边界」+ `docs/progress.md` 决策表 + 轮 P 面试包）。
+> 面试防线：跳转判定链（限流→Bloom→absent→L1/L2→行读→404/410→BLOCK→密码门→WARN→非人跳过→302）能默画；「为什么滑窗不是令牌桶」「Outbox vs 双写」「Bloom 假阴/假阳与广播补齐」「L1 origin-skip」「TENANT Key 谁能签发」「聚合 digest late/truncated」「UTM 为何写时合并」「密码链为何限流先于 BCrypt」「SSRF rebinding 怎么用一次解析+钉死关掉、还缺什么」「为何不做 ES / Geo / B10」「一码多目标怎么按权重抽签且统计可拆桶」「批量导入怎么在专用限流与 Bloom 广播下部分成功」——每题有书面取舍（README「诚实边界」+ `docs/progress.md` 决策表 + 轮 P 面试包）。

@@ -1374,6 +1374,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | B 绿（sync multipart CSV import） | [41206485400](https://github.com/NorthAdb/LinkForge/actions/runs/41206485400) | **success**（surefire 144 + failsafe 161 + tz fork 2 = 307） | `d23a7c2` |
 | 分支终态（docs 收口提交） | [41208814615](https://github.com/NorthAdb/LinkForge/actions/runs/41208814615) | **success** | `e5c89a8` |
 | main 合并 | [41209223513](https://github.com/NorthAdb/LinkForge/actions/runs/41209223513) | **success** | `c0cc48e` |
+| main tip 记账 | [41210621379](https://github.com/NorthAdb/LinkForge/actions/runs/41210621379) | **success** | `c0e00a0` |
 | 终态回填（docs-only，暴露 pre-existing flake） | [41209655123](https://github.com/NorthAdb/LinkForge/actions/runs/41209655123) | **failure**（QrMaterialIT tampered-sig：首字符为 `0` 时 1/16 概率 tamper 无操作 → 200；C1 期测试自身缺陷，非 C3 回归——同树 merge run 绿） | `aa69da4` |
 | flake 修复（sig 整串塌 `0`，确定性 401） | [41210212501](https://github.com/NorthAdb/LinkForge/actions/runs/41210212501) | **success** | `3b1516d` |
 
@@ -1420,4 +1421,121 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 
 ## 深化 C4 SSRF DNS rebinding 钉死 + 故障演练 + C3 修复并入（feat/deepen-c4-ssrf-rebinding-drills，发车基线 main@c0e00a0，2026-10-31）
 
-> 交接单：`记录追踪/05-阶段交接/LinkForge-phase-C4-ssrf-rebinding-drills-handoff.md`。开放问题 Q1–Q6 **已全部确认 A**（t119u，2026-10-31）；C3-S1/N1/N2/N3 并入本波；本章随开发推进补全。
+> 交接单：`记录追踪/05-阶段交接/LinkForge-phase-C4-ssrf-rebinding-drills-handoff.md`。开放问题 Q1–Q6 **已全部确认 A**（t119u，2026-10-31）；C3-S1/N1/N2/N3 并入本波；本章已随收口 docs 提交补全（红先证据、CI conclusion 表、改动清单、验收勾选、例数与连接预算）。
+> **红先完成（C/A/B 三块收口）**：C 块（C3 修复）红提交 `644dc99` → run 41218922009 **三例红**（S1 variants 失败整单回滚、N2 update 响应体缺 variants、N3 delete 后 variant 行残留；AbSplitIT 其余例绿），实现 `cc0fd99` 翻绿（309 = 144+163+2）；A 块 `WebhookRebindingIT` 红提交 `418f978` → run 41222900953 **toctou 用例红**（今日 send 二次解析连到 stub），实现 `2a73ef9` 翻绿；B 块 `ShortLinkServiceRedisFailopenTest` 红提交 `81aa5c0` → run 41223869541 **预期红**（RedisConnectionFailureException 裸传播），实现 `2e188eb` 翻绿。轮内中间 failure（staging 漏提交、跨上下文 relay 竞态、包名笔误）全部记账进 CI 表，最终 `41225181075` **315 全量绿**为 A/B 共同证据。run/conclusion 全景见下表。
+
+### 决策记录（D-C4 落地）
+
+| ID | 落地 |
+|----|------|
+| D-C4-1/2 | 威胁模型与钉死算法：关闭 webhook 出站 resolve-then-connect TOCTOU——投递时**一次**解析 host → 对**全部**解析地址跑 `violationOf`（任一带毒 FAILED/blocked，与今日口径一致）→ **仅**向通过校验的地址建连；HTTP 栈不再有第二次未校验解析 |
+| D-C4-3 | Host / TLS SNI / 证书校验全保**原 hostname**：HC5 保留原 URI，Host 头、SNI、证书校验自然成立，连接只到已校验地址（无「连 IP 字面量再补 Host」的手工拼装） |
+| D-C4-4 | 选型钉死 = **httpclient5（Boot BOM 管版本，无显式 version）+ 自定义 DnsResolver**。理由：JDK HttpClient 不能覆盖 Host（受限头清单），也无法在连 IP 字面量时按原 hostname 做证书校验；HC5 保留原 URI，三者自然成立。**每次投递新建 client**（钉死地址集住在 connection manager 里；relay 低频 + 秒级退避，不为省一个对象引入跨线程共享钉死状态） |
+| D-C4-5 | 解析可注入：guard 新增 `resolveForSend(url)` 返回 one-of-two `ResolvedAddresses(violationReason, pinned)`；IT 注入「保存时公网、投递时内网」 |
+| D-C4-6 | 重定向继续 NEVER：HC5 显式 `setRedirectsEnabled(false)`，javadoc 写明若未来跟随必须**整段重跑** resolve+validate+pin |
+| D-C4-7 | 保存路径仍 `targetGuard.check`（当时解析，不要求保存时钉连接）；rebinding 防护点 = **每次 send**：`PinnedHttpSender.send(url, pinnedAddresses, body, headers, connect, request)` 返回 sealed `Result`（Responded/Failed） |
+| D-C4-8 | 指标/日志：钉死拒绝沿用 `linkforge.webhook.blocked` + `linkforge.webhook.delivery{result=failed}`（不新增 rebinding meter）；log.warn 只带 delivery/endpoint/event id，**不回显解析地址**（沿 Bw2-N6 文案纪律） |
+| D-C4-9 | 多 IP：全部地址须过校验；投递时只解析一次，任一通过集合之外的地址都不得被连接（WebhookRebindingIT 以 spy stub 钉住「sender 只能连 stub 返回的地址」） |
+| D-C4-10 | `allow-private-targets=true`（仅 IT）仍走钉死路径、只跳过公网判定（escape hatch 语义与今日一致） |
+| D-C4-11 | Bw2-N6 地址段**已在 tip**：本波只回归 UT，不重写「补漏」故事；`WebhookTargetGuardTest` 随 `isBlocked` 删除迁移到 `violationOf`（migrate-then-delete） |
+| D-C4-12 | 长链目标不适用服务端 SSRF 钉死（302 由浏览器访问目标、服务端不出站抓取）；B9 域名名单语义零改动 |
+| D-C4-13 | 聚合 digest 走同一 relay → 自动覆盖钉死发送路径，无第二客户端漏钉 |
+| D-C4-14 | 演练入口钉死 `scripts/fault-drill.sh`（单脚本分段 redis / webhook / mysql-ro；风格对齐 outbox-drill：每段 `PASS …`、失败 exit 1、全文终行 `FAULT DRILL OK`） |
+| D-C4-15/16 | Redis 不可达：热路径**六个站点各自 try/catch** fail-open（L2 get/set/delete + 幂等 get/acquire/settle），单 counter `linkforge.cache.failopen{op=l2_get\|l2_set\|l2_delete\|idem_get\|idem_acquire\|idem_settle}`；Redis 宕时幂等语义降级为不设防（并发同 key 建链可能重复，javadoc 注明），Redis 健康时 pending-lease/重放契约不变；恢复自愈靠既有 TTL/写穿 |
+| D-C4-17 | webhook 5xx/超时：桩 5xx + request timeout → retry/backoff → 耗尽 FAILED；重试期 `/r/{code}` 仍 302（脚本段 + WebhookRebindingIT request timeout 例：超时→retry→FAILED(max 3)） |
+| D-C4-18 | mysql-ro 段：`read_only=1` 下写 API 失败、HEAD `/r` 302 + detail/stats 200、`read_only=0` 后写恢复；无 `MYSQL_ROOT_PASSWORD` 时诚实 SKIP |
+| D-C4-19 | 输出风格同 outbox-drill（`PASS …` / `FAULT DRILL OK`）；webhook 段 5xx 桩用 PowerShell HttpListener，无 powershell 时诚实 SKIP |
+| D-C4-20 | IT 兜底三件：① `WebhookRebindingIT`（toctou / pinned block / request timeout）② `ShortLinkServiceRedisFailopenTest`（UT 3 例）③ `WebhookDeliveryIT` 既有覆盖引用（500→retry→SENT、400 立即 FAILED、maxAttempts(8)→FAILED、dedup、master-key skip、redirect never） |
+| D-C4-21 | 不做：Chaos Mesh / 整机混沌平台 / 多实例同时杀 Redis 的必验 |
+| D-C4-22/23 | C3-S1：`insert(link)` + `insertVariants` 并入**同一** `TransactionTemplate`（`DuplicateKeyException` 捕获在事务内安全：InnoDB 语句级回滚，重试循环可继续——注释已写）；Bloom/广播/缓存尾巴仍在**提交后**；导入仍逐行 `doCreate`（BulkImportIT 回归绿，未并成整包大事务） |
+| D-C4-24/25 | C3-N2：update 返回带 variants（`toDetailWithVariants` 统一 detail/update）；C3-N3：delete 同事务清 `lf_link_variant` |
+| D-C4-26 | C3-N1：C3 章 CI 表补 `main tip 记账` 行（`41210621379`@`c0e00a0` success，插在 main 合并行之后）；本波 CI 表首轮即带 conclusion 列 |
+| D-C4-27/28/29 | docs 收口：resume post-C4（删「DNS rebinding 仍是诚实缺口」→「已钉死，端口白名单/出口代理仍后置」）；README 徽章 315 + SSRF 诚实口径 + fault-drill 入口；本章补全 |
+| D-C4-30 | backlog #10 拆分：rebinding ✅ 随 C4 闭环；端口白名单/出口代理仍开 |
+| D-C4-31/32/33 | 单分支 `feat/deepen-c4-ssrf-rebinding-drills` @`c0e00a0`；合 main → push 不开 PR（沿 C1/C2/C3，coordinator 收尾）；pom 保持 2.0.0 |
+| D-C4-34 | Flyway 不改 V1–V10；本波**零新 migration**（最高仍 V10） |
+| D-C4-35 | 范围外未做：B10 / Geo / 自定义域名 / ES·CDC·云 / RedisBloom / 端口白名单产品化 / 出口代理 / 改 Outbox 核心语义 / 改 V1–V10 |
+
+**实现注记**（钉死选型理由 / 竞态根因 / 产品行为注记）：
+
+1. **钉死选型**（D-C4-4）：JDK HttpClient 的受限头清单挡掉覆盖 Host 的路径，且连接 IP 字面量时证书校验无从按原 hostname 进行；HC5 保留原 URI，Host/SNI/证书校验自然成立、连接只到已校验地址。每次投递新建 client，钉死地址集不跨线程共享。
+2. **发送/解析形状**：`PinnedHttpSender.send(url, pinnedAddresses, body, headers, connect, request)` 返回 sealed `Result`（Responded/Failed）；guard `resolveForSend` one-of-two；**投递时只解析一次**；blocked 臂保持在**解密之前**（与今日次序一致，避免不可解密 + 被锁目标烧完重试）；`isBlocked` 删除（migrate-then-delete，UT 同步迁移 `violationOf`）；重定向 HC5 显式禁用 + javadoc 注明未来跟随必须整段重跑 resolve+validate+pin。
+3. **可观测口径**：钉死拒绝沿用 `linkforge.webhook.blocked` + `linkforge.webhook.delivery{result=failed}`；log.warn 只带 delivery/endpoint/event id，不回显解析地址。
+4. **fail-open 语义**：六站点各自 try/catch，单 counter `linkforge.cache.failopen{op=…}`；Redis 宕时幂等降级为不设防（并发同 key 建链可能重复，javadoc 注明），Redis 健康时 pending-lease/重放契约不变。
+5. **C3-S1 事务细节**：`DuplicateKeyException` 捕获在事务内安全（InnoDB 语句级回滚，重试循环可继续，注释已写）；Bloom/广播/缓存尾巴仍在提交后；导入仍逐行 doCreate（BulkImportIT 回归绿）。
+6. **C3-N2/N3**：`toDetailWithVariants` 统一 detail/update 返回面；delete 同事务清 `lf_link_variant`。
+7. **跨上下文 relay 竞态（本轮发现并修复的测试基建缺陷，C2 flake 先例）**：三个 relay-enabled IT（WebhookAggregateIT/WebhookDeliveryIT/WebhookRebindingIT）共享同一 Testcontainers 投递表，Spring 缓存上下文的 `@Scheduled` relay 跨类存活——后跑类 `max-attempts=3` 的 relay 把先跑类（DeliveryIT）的行第 3 次就标 FAILED（run 41223431052 的 maxAttemptsEndsInFailed 90s 超时即此根因）。修复 = 三类钉 `@DirtiesContext(AFTER_CLASS)`，任意时刻至多一个 relay 存活；连带 `@DirtiesContext` 包名笔误（在 `org.springframework.test.annotation` 不在 `test.context`）共两次 failure 全记账进 CI 表。
+8. **Bw2-N6**：UT 回归绿，未重写「补漏」故事；`WebhookTargetGuardTest` 迁移到 `violationOf`（`isBlocked` 删除连带）。
+9. **产品行为注记（本波实测确认，progress 记录、不改代码）**：MySQL `read_only=1` 下 GET `/r` 返回 500——302 前 `recordClick` 要写 `lf_click_log`/`lf_outbox`；**HEAD 才是只读安全探针**（302 + detail/stats 200）。
+
+### 红先证据（红提交只含测试；conclusion 以 Actions 为准）
+
+| 块 | 红 run | 红况 |
+|----|--------|------|
+| C（C3 修复 S1/N2/N3） | [41218922009](https://github.com/NorthAdb/LinkForge/actions/runs/41218922009) | 三例红：S1 variants 失败整单回滚（当时 insert 与 insertVariants 分事务，库中残留链）、N2 update 响应体缺 variants、N3 delete 后 `lf_link_variant` 行残留；AbSplitIT 其余例绿 |
+| A（SSRF rebinding 钉死） | [41222900953](https://github.com/NorthAdb/LinkForge/actions/runs/41222900953) | WebhookRebindingIT toctou 用例红：今日 send 二次解析连到 stub（校验通过后 DNS 切到内网仍连出） |
+| B（L2/幂等 fail-open） | [41223869541](https://github.com/NorthAdb/LinkForge/actions/runs/41223869541) | ShortLinkServiceRedisFailopenTest 预期红：RedisConnectionFailureException 裸传播（热路径未 catch） |
+
+### CI 结论表（每行必有 conclusion；吸取 C1-N1 教训，从首轮即带列）
+
+| 标签 | run | conclusion | head |
+|------|-----|------------|------|
+| C 红（S1/N2/N3 红先提交） | [41218922009](https://github.com/NorthAdb/LinkForge/actions/runs/41218922009) | **failure**（S1 回滚、N2 PATCH 体、N3 清孤儿三例红，AbSplitIT 其余例绿） | `644dc99` |
+| C 绿（S1/N2/N3 修复） | [41218891371](https://github.com/NorthAdb/LinkForge/actions/runs/41218891371) | **success**（surefire 144 + failsafe 163 + tz 2 = 309） | `cc0fd99` |
+| A 红（RebindingIT 红先提交） | [41222900953](https://github.com/NorthAdb/LinkForge/actions/runs/41222900953) | **failure**（toctou 用例红：今日 send 二次解析连到 stub） | `418f978` |
+| A 绿首推（PinnedHttpSender） | [41222907515](https://github.com/NorthAdb/LinkForge/actions/runs/41222907515) | **failure**（28 秒编译败——提交漏了随 `isBlocked` 删除而迁移的 WebhookTargetGuardTest，staging 失误，coordinator 记账） | `2a73ef9` |
+| 补迁移 | [41223431052](https://github.com/NorthAdb/LinkForge/actions/runs/41223431052) | **failure**（maxAttemptsEndsInFailed 90s 超时——跨上下文 relay 竞态根因，见上实现注记 7） | `5ade27a` |
+| B 红（fail-open UT 红先提交） | [41223869541](https://github.com/NorthAdb/LinkForge/actions/runs/41223869541) | **failure**（预期红：RedisConnectionFailureException 裸传播） | `81aa5c0` |
+| B 绿（fail-open 实现） | [41223877773](https://github.com/NorthAdb/LinkForge/actions/runs/41223877773) | **failure**（同 relay 竞态，166 例中仅 1 error = maxAttempts；B 的 UT 全绿） | `2e188eb` |
+| 竞态修复 v1 | [41224568503](https://github.com/NorthAdb/LinkForge/actions/runs/41224568503) | **failure**（24 秒编译败——`@DirtiesContext` import 写错包：在 `org.springframework.test.annotation` 不在 `test.context`） | `2d655cd` |
+| 竞态修复 v2（最终） | [41225181075](https://github.com/NorthAdb/LinkForge/actions/runs/41225181075) | **success**（surefire 147 + failsafe 166 + tz fork 2 = **315**；同时是 A 绿与 B 绿的最终证据） | `350c788` |
+| 分支终态（docs 收口提交） | 待回填 | 待回填 | 待回填 |
+| main 合并 | 待回填 | 待回填 | 待回填 |
+
+**口径**：功能绿以竞态修复 v2 `41225181075`（315 全量）为准；「分支终态 / main 合并」两行由收尾 docs 提交回填（C2/C3 先例）。**轮内中间 failure 皆为诚实记账链**：41222907515（A 绿首推漏提交迁移后的测试类，staging 失误）、41223431052 与 41223877773（同一跨上下文 relay 竞态，根因见实现注记 7）、41224568503（包名笔误）；四次记账后 `41225181075` 收敛绿，同时充当 A 块与 B 块的最终绿证据。
+
+### 改动清单（10 提交 + 本 docs 提交）
+
+| 提交 | 内容 |
+|------|------|
+| `644dc99` | test(c3)：C3 修复红先（AbSplitIT 增 S1 variants 失败整单回滚、delete 清 variant 两例 + update 响应体加 variants 断言）+ progress 开章 stub |
+| `cc0fd99` | fix(c3)：S1 `insert(link)`+`insertVariants` 并入同一 `TransactionTemplate`（Bloom/广播/缓存尾巴仍在提交后）+ N2 update 返回带 variants（`toDetailWithVariants` 统一 detail/update）+ N3 delete 同事务清 `lf_link_variant` |
+| `418f978` | test(ssrf)：A 红测试（WebhookRebindingIT toctou 例：注入 resolver「保存时公网、投递时内网」——今日 send 二次解析连到 stub） |
+| `2a73ef9` | feat(ssrf)：PinnedHttpSender（httpclient5 + 自定义 DnsResolver）——投递时一次解析、全 IP 校验、只连已校验地址（Host/SNI 保原 hostname）；guard 增 `resolveForSend`、删 `isBlocked`（migrate-then-delete）；重定向 HC5 显式禁用 |
+| `5ade27a` | fix(test)：补上 A 绿首推漏提交的 WebhookTargetGuardTest `violationOf` 迁移（staging 失误，run 41222907515 编译败记账） |
+| `81aa5c0` | test(redis)：B 红测试（ShortLinkServiceRedisFailopenTest——L2/幂等六站点裸调用，RedisConnectionFailureException 裸传播） |
+| `2e188eb` | fix(redis)：L2 get/set/delete + 幂等 get/acquire/settle fail-open（单 counter `linkforge.cache.failopen{op=…}`；Redis 宕时幂等语义降级为不设防，javadoc 注明） |
+| `2d655cd` | fix(test)：三个 relay-enabled webhook IT 钉 `@DirtiesContext(AFTER_CLASS)`——缓存上下文的 `@Scheduled` relay 跨类存活、把后跑类的投递行按错误 max-attempts 结案（run 41223431052 竞态根因） |
+| `350c788` | fix(test)：`@DirtiesContext` 包名修正（`org.springframework.test.annotation`，run 41224568503 编译败记账） |
+| `cc3fabc` | feat(scripts)：fault-drill.sh——redis 停服 / webhook 5xx 桩 / mysql 只读三段，PASS/SKIP 语义、终行 `FAULT DRILL OK` |
+| 本 docs 提交（收口） | README（徽章 315、SSRF 诚实口径、fault-drill 入口、配置核实零新键）+ resume post-C4 收口 + 本章 + backlog #10/#12 备注 |
+
+### 验收勾选（C4-1..21）
+
+- [x] **C4-1** 基线祖先含 `c0e00a0daeb0ab6023dfc8c79b4e7569105dd483`；V1–V10 零字节改动（本波零新 migration，最高仍 V10）
+- [x] **C4-2** 投递路径连接目标 IP ⊆ 当次校验通过集合（PinnedHttpSender 的 DnsResolver 只返回已校验地址集，HC5 不再二次解析；代码审 + WebhookRebindingIT）
+- [x] **C4-3** 注入 resolver 模拟「校验/保存时公网、投递时内网」→ 投递拒绝（FAILED/blocked）+ 指标/日志（WebhookRebindingIT toctou + pinned block 例；log.warn 只带 delivery/endpoint/event id，内网 IP 不进对外 body）
+- [x] **C4-4** followRedirects 仍 NEVER（HC5 `setRedirectsEnabled(false)`，javadoc 写明未来跟随必须整段重跑 resolve+validate+pin）；Host/SNI/证书校验保原 hostname（HC5 保留原 URI）
+- [x] **C4-5** 聚合 digest 与逐次点击共用同一 relay → 同一 PinnedHttpSender（无第二客户端漏钉）
+- [x] **C4-6** 长链/B9 未被误改成服务端 IP SSRF 校验（302 由浏览器访问目标、服务端不出站抓取；`rejectBlockedTarget`/PhishingPolicy 域名名单语义未动，回归绿）
+- [x] **C4-7** Bw2-N6 地址段 UT 回归绿（`WebhookTargetGuardTest` 随 `isBlocked` 删除迁移到 `violationOf`；未把已合入前缀当「本波新发明」写进 resume）
+- [x] **C4-8** Redis L2 get/set/delete + 幂等 get/acquire/settle fail-open（单 counter `linkforge.cache.failopen{op=…}`；ShortLinkServiceRedisFailopenTest 红先 `81aa5c0` → `2e188eb` 翻绿；热路径 Redis 宕不 500——fault-drill redis 段 GET 302）
+- [x] **C4-9** `scripts/fault-drill.sh` 本机实测（2026-11-01，`cc3fabc` 前后同树）：exit 0，**FAULT DRILL OK**，7 PASS——redis 段 3（redis down 下新码 GET 302【L2 fail-open】、带 Idempotency-Key 建 200【幂等 fail-open】、redis 恢复后新链 302 且 `redis-cli GET linkforge:code:{C}` 有值【自愈含 L2 写回】）；webhook 段 2（重试期 GET /r 仍 302、FAILED|3|500 终态）；mysql-ro 段 2（read_only=1 下写 API 失败、HEAD /r 302 + detail/stats 200、read_only=0 后写恢复）。入口依赖 `.env` + `mvn -B -DskipTests package` 的 jar + compose 三件套；webhook 段 5xx 桩用 PowerShell HttpListener 127.0.0.1:8099，无 powershell 诚实 SKIP；mysql-ro 段无 `MYSQL_ROOT_PASSWORD` 诚实 SKIP。**note（产品行为，实测确认，不改代码）**：read_only 下 GET /r 返回 500——302 前 recordClick 要写 `lf_click_log`/`lf_outbox`，**HEAD 才是只读安全探针**。幂等提醒：脚本每轮注册 2 个用户，`LINKFORGE_REGISTER_MAX` 默认 5/600s，十分钟内跑三轮会撞注册限流
+- [x] **C4-10** webhook 故障不阻塞 `/r/{code}` 302（fault-drill webhook 段：5xx 桩重试期 GET /r 仍 302；WebhookRebindingIT request timeout 例——超时→retry→FAILED(max 3)）
+- [x] **C4-11** C3-S1：variants 失败整单回滚、库中无残留链（AbSplitIT S1 例；红先 run 41218922009 于 `cc0fd99` 翻绿）
+- [x] **C4-12** C3-N2：update/PATCH 响应含 variants（`toDetailWithVariants` 统一 detail/update；同上红先翻绿）
+- [x] **C4-13** C3-N3：delete 后该 `link_id` 无 variant 行（AbSplitIT delete 例）
+- [x] **C4-14** C3-N1：C3 章 CI 表补 tip run 行（`main tip 记账` 41210621379@`c0e00a0` success，插在 main 合并行之后）；本表 conclusion 列从首轮即带
+- [x] **C4-15** 导入仍逐行独立成功/失败（C3-S1 未并成整包大事务；BulkImportIT 回归绿——run 41225181075 全量含）
+- [x] **C4-16** README：SSRF 段改诚实口径（rebinding 已钉死：一次解析+全 IP 校验+连接钉死保 Host/SNI；端口白名单/出口代理仍后置）；脚本清单/演练段加 fault-drill；徽章 315（147+166+2）——本轮 README 改动
+- [x] **C4-17** resume post-C4 收口：SSRF 钉死 bullet + fault-drill 三段 + C3 修复并入、例数 315；bench/B10 纪律 blockquote 保留——本轮 resume 改动
+- [x] **C4-18** 本章含 D-C4 决策表（1..35）、红先证据（C/A/B 三块）、CI conclusion 列、改动清单、钉死选型理由、例数构成与连接预算
+- [x] **C4-19** 全量 verify 绿 = run [41225181075](https://github.com/NorthAdb/LinkForge/actions/runs/41225181075)（surefire 147 + failsafe 166 + tz 2 = 315，Too many connections=0）；分支终态 / main 合并行**待跑**（见 CI 结论表）
+- [x] **C4-20** pom 仍 2.0.0；合 main → push 待 coordinator 收尾（不开 PR，沿 C1/C2/C3），tip 全 SHA 随收尾自报
+- [x] **C4-21** 范围外未做：B10 / Geo / 自定义域名 / ES·CDC·云 / RedisBloom / 端口白名单产品化 / 出口代理 / 改 V1–V10
+
+### 例数与预算
+
+- **315 = surefire 147 + failsafe 166 + tz fork 2**（C4 净增 +8：UT +3【ShortLinkServiceRedisFailopenTest】，IT +5【AbSplitIT +2：S1 整单回滚、delete 清 variant；WebhookRebindingIT +3：toctou、pinned block、request timeout】）
+- 连接预算 27×10+15×4 = **330**（42 个 \*IT、15 个显式 `hikari.maximum-pool-size=4`；C4 新增 WebhookRebindingIT 钉 4），天花板 = 共享容器 `--max-connections=500`，余量 170。**注**：三个 relay-enabled IT（WebhookAggregateIT/WebhookDeliveryIT/WebhookRebindingIT）钉 `@DirtiesContext(AFTER_CLASS)`，类结束即关上下文，实际峰值低于纸面
+- 本地每提交 `mvn -B verify -DskipITs` 退出码显式 0
