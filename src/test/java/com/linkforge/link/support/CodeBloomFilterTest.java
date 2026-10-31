@@ -1,16 +1,24 @@
 package com.linkforge.link.support;
 
+import com.linkforge.common.exception.BizException;
 import com.linkforge.config.LinkForgeProperties;
 import com.linkforge.link.mapper.ShortLinkMapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -21,7 +29,8 @@ class CodeBloomFilterTest {
     private final ShortLinkMapper mapper = mock(ShortLinkMapper.class);
     private final LinkForgeProperties properties = new LinkForgeProperties();
     private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
-    private final CodeBloomFilter bloom = new CodeBloomFilter(mapper, properties, meters);
+    private final CodeBloomFilter bloom = new CodeBloomFilter(mapper, properties, meters,
+            mock(RedisMessageListenerContainer.class));
 
     @Test
     void seededCodesArePositiveAndUnseenCodesNegative() {
@@ -90,5 +99,48 @@ class CodeBloomFilterTest {
     @Test
     void notYetLoadedAnswersTrue() {
         assertTrue(bloom.mightContain("anything"), "pre-load must fail open");
+    }
+
+    @Test
+    void manualRebuildWhileOneIsRunningIs409Busy() throws Exception {
+        // D-C2-13: the IT cannot race two triggers deterministically; pin the 409 here.
+        CountDownLatch reachedSeed = new CountDownLatch(1);
+        CountDownLatch releaseSeed = new CountDownLatch(1);
+        when(mapper.selectAllCodes()).thenAnswer(inv -> {
+            reachedSeed.countDown();
+            releaseSeed.await();
+            return List.of("abc1234");
+        });
+
+        ExecutorService worker = Executors.newSingleThreadExecutor();
+        try {
+            Future<Long> running = worker.submit(bloom::rebuildManual);
+            assertTrue(reachedSeed.await(5, TimeUnit.SECONDS), "rebuild must reach the DB seed");
+            BizException busy = assertThrows(BizException.class, bloom::rebuildManual);
+            assertEquals(409, busy.getCode(), "the overlapping manual trigger must read busy");
+            assertEquals(1.0, meters.get("linkforge.bloom.rebuild").tag("result", "busy").counter().count());
+            releaseSeed.countDown();
+            assertEquals(1L, running.get(5, TimeUnit.SECONDS));
+            assertTrue(bloom.isReady());
+        } finally {
+            worker.shutdownNow();
+        }
+    }
+
+    @Test
+    void failedRebuildRestoresThePreviousFilterAndStaysReady() {
+        // D-C2-10: a failed rebuild must not unseat a loaded filter (pre-DB 404s for
+        // existing codes would be the regression).
+        when(mapper.selectAllCodes()).thenReturn(List.of("abc1234"))
+                .thenThrow(new RuntimeException("db down"));
+        bloom.load();
+        assertTrue(bloom.isReady());
+
+        BizException failure = assertThrows(BizException.class, bloom::rebuildManual);
+        assertEquals(500, failure.getCode());
+
+        assertTrue(bloom.isReady(), "the loaded filter must survive a failed rebuild");
+        assertTrue(bloom.mightContain("abc1234"), "the restored filter keeps its codes");
+        assertEquals(1.0, meters.get("linkforge.bloom.rebuild").tag("result", "error").counter().count());
     }
 }

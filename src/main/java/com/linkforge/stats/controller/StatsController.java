@@ -24,7 +24,8 @@ import java.util.Set;
 public class StatsController {
 
     private static final Set<String> DIM_TYPES = Set.of(
-            ClickDimensions.TYPE_DEVICE, ClickDimensions.TYPE_REFERER_HOST);
+            ClickDimensions.TYPE_DEVICE, ClickDimensions.TYPE_REFERER_HOST,
+            ClickDimensions.TYPE_OS, ClickDimensions.TYPE_BROWSER);
 
     private final ShortLinkService shortLinkService;
     private final ClickStatsService clickStatsService;
@@ -37,9 +38,10 @@ public class StatsController {
         return ApiResponse.ok(clickStatsService.stats(link.getId(), code, window));
     }
 
-    public static final String DIM_REQUIRED = "dim is required and must be one of device, referer_host";
+    public static final String DIM_REQUIRED =
+            "dim is required and must be one of device, referer_host, os, browser";
 
-    /** A8: per-bucket click counts (device / referer_host). Dimension clicks are not UV. */
+    /** A8: per-bucket click counts (device / referer_host / os / browser). Dimension clicks are not UV. */
     @GetMapping("/api/links/{code}/stats/breakdown")
     public ApiResponse<List<DimBreakdown>> breakdown(@PathVariable String code,
                                                      @RequestParam(required = false) String dim,

@@ -71,7 +71,7 @@ class DimBreakdownIT extends AbstractIntegrationTest {
 
         assertEquals(404, get("/api/links/" + code + "/stats/breakdown?dim=device", tokenB)
                 .getStatusCode().value(), "breakdown must be owner-only");
-        var unknown = get("/api/links/" + code + "/stats/breakdown?dim=os", tokenA);
+        var unknown = get("/api/links/" + code + "/stats/breakdown?dim=geo", tokenA);
         assertEquals(400, unknown.getStatusCode().value(), "unsupported dim must be a 4xx");
         assertClientDimError(unknown.getBody());
         var missing = get("/api/links/" + code + "/stats/breakdown", tokenA);

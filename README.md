@@ -39,7 +39,7 @@
 | 安全 | BCrypt 密码短链（签名 cookie、先限流后校验）、本地域名名单门禁（BLOCK/WARN）、非人点击不计 | [密码短链](#密码短链b3)、[域名门禁](#目标域名名单门禁b9)、[非人点击](#非人点击b2预取与预览-bot-照常-302-但不计) |
 | 开放 | API Key（哈希存储+配额，USER/TENANT 双 scope、TENANT 仅 ADMIN 签发）、点击 Webhook（HMAC 签名、AES-256-GCM at-rest、SSRF 防护、逐次/聚合双模式） | [开放能力](#开放能力b4-api-key--b5-webhook) |
 | 可观测 | 令牌守卫的 `/actuator/prometheus`、Grafana 自动 provision 看板、积压 gauge | [可观测](#可观测b1-prometheus--grafana) |
-| 工程 | Flyway 版本化迁移（V1–V9）、测试 261 例（含 Testcontainers 集成 137）、GitHub Actions CI、prod profile 一键收紧 | [测试与质量](#-测试与质量) |
+| 工程 | Flyway 版本化迁移（V1–V9）、测试 281 例（含 Testcontainers 集成 146）、GitHub Actions CI、prod profile 一键收紧 | [测试与质量](#-测试与质量) |
 
 **明确不做**（冻结决策，详见[待办](docs/backlog.md)）：AI / PostgreSQL / Supabase / 向量库（整体延期另立方案）；Spring Cloud / Seata / 多机房；独立前端 SPA（静态控制台已够用）；云公网部署（D5=本地 Compose，prod profile 已备好收紧开关）。
 
@@ -293,12 +293,17 @@ flowchart LR
 
 **先说实话**：为了强一致，跳转**每个请求都要读一次 DB 行**判禁用/过期——Redis 只省 URL 字段，不替 DB 挡流量。以下五层省的是：不存在码的 DB miss、热点码的 Redis 往返、同码并发的重复行读，以及雪崩形态。
 
-**多实例（Bloom 与 L1 是进程内的）**：本版**没有**改成 RedisBloom，也**没有**分布式 L1。Guava Bloom 和 Caffeine L1 都只活在当前 JVM 里。实例 B 新建的短码，在实例 A 重启重新播种之前，可能被 A 的 Bloom 直接 404（假阴性）。实例 A 改了目标 URL 之后，实例 B 的 L1 在 TTL（默认 10 秒）内仍可能给出旧 URL。空值缓存和 Redis L2 是共享的。指标 `linkforge.bloom.*` 与 `linkforge.l1.*` 只计**本进程**；看板里的 L1/Bloom 曲线不是集群汇总。Grafana 面板标题写了 “this process”。
+**多实例（C2 后的对齐与仍存缺口）**：进程内结构保留 Guava Bloom / Caffeine L1（**没有** RedisBloom/Redis Stack，**没有**分布式 L1），跨实例对齐走 **Redis pub/sub 广播**（`CacheBus`，`LINKFORGE_CACHE_BUS_ENABLED` 可整体关闭）：
 
-1. **Bloom 防穿透（A9）**：进程内 Guava `BloomFilter<String>` 只存短码。负答（`mightContain == false`）是权威否定 → 直接 404 不碰 Redis/MySQL；误判（fpp 默认 1e-4）只是多一次 DB miss 照常 404。启动 `ApplicationReadyEvent` 全量装载，创建成功即 `put`。禁用/过期/删除语义不变（Bloom 只挡「从未存在」）；已删码仍装进 Bloom（逻辑删除、码位不可复用）。装载失败自动 fail-open（`linkforge.bloom.loadfailed`）。**已知限制**：多实例各自装载不共享——实例 B 新建的码在实例 A 重启前是假阴性 404（Demo 单实例可接受；RedisBloom 后置）。
+- **Bloom put 广播**（`linkforge:bloom:put`，payload `<code>|<origin>`）：创建成功本地 put 后广播，各实例订阅后本地 put（自消息幂等再 put）；订阅先于启动全量装载注册，避免装载窗口丢广播。publish 失败 **fail-open**（log + `linkforge.bloom.publish{result=error}`），创建不受影响——漏广播的他机假阴性持续到其 rebuild/重启
+- **Bloom 定时 rebuild**：默认 24h（`LINKFORGE_BLOOM_REBUILD_INTERVAL_MS`，`LINKFORGE_BLOOM_REBUILD_ENABLED` 可关）旁路建新过滤器再原子替换；`selectAllCodes()` **仍装入逻辑删码**——rebuild 的价值是容量/fpp 重置与弥补漏广播，**不是**「从过滤器删除已删码」（经典 Bloom 做不到，码位不可复用）；`POST /api/admin/bloom/rebuild` 手动触发（仅租户 ADMIN JWT；MEMBER/API Key 403；单飞，重叠触发 409；多实例需各自调度或分别打到各实例——本接口只影响命中的那个进程）
+- **L1 失效广播**（`linkforge:l1:invalidate`）：update/disable/enable/delete 提交时广播一次（延迟双删不重复广播）；订阅端**只**剔本地 L1，不碰 Redis L2/absent/Bloom；**origin 跳过自己**防抹掉刚写穿的新 URL；publish 失败 fail-open；L1 TTL（默认 10s）仍作兜底
+- **仍 per-process**：指标 `linkforge.bloom.*` 与 `linkforge.l1.*` 只计本进程，看板曲线不是集群汇总（Grafana 标题 “this process”）；空值缓存与 Redis L2 是共享的；漏广播窗口（publish 失败/订阅断连）内他机仍可能假阴性或旧 URL，兜底 = 短 TTL + 定时 rebuild
+
+1. **Bloom 防穿透（A9）**：进程内 Guava `BloomFilter<String>` 只存短码。负答（`mightContain == false`）是权威否定 → 直接 404 不碰 Redis/MySQL；误判（fpp 默认 1e-4）只是多一次 DB miss 照常 404。启动 `ApplicationReadyEvent` 全量装载，创建成功即 `put`。禁用/过期/删除语义不变（Bloom 只挡「从未存在」）；已删码仍装进 Bloom（逻辑删除、码位不可复用）。装载失败自动 fail-open（`linkforge.bloom.loadfailed`）。**多实例**：创建即广播 put、订阅先于装载（见上「多实例」段）；漏广播窗口由定时 rebuild + 短 TTL 兜底。
 2. **空值缓存（B7）**：只缓存「DB 行读取结果为 null」这一种负答，键 `linkforge:absent:{code}`（哨兵 `"1"`）。**禁用/过期/不可渲染绝不写入**（行还在，启用后须立即生效）；创建成功后 DEL。TTL 60s+30s 抖动；`LINKFORGE_ABSENT_TTL_SECONDS<=0` 关闭。
 3. **TTL 抖动（防同批过期雪崩）**：正缓存与空值缓存 TTL 统一 `base + uniform[0, jitter]` 只向上抖——正缓存 `3600+300`、空值 `60+30`；同一批创建的码不再同时失效。
-4. **Caffeine L1（B8）**：进程内缓存 URL 字符串（与 Redis L2 同形状，不缓存行），maximum-size 10000、TTL 10s。**命中不跳过 singleflight/DB 行读**，禁用/过期语义零变化。多实例不同步（实例 A 改 URL，实例 B 在 L1 TTL 内可能跳旧值；pub/sub 广播后置）。
+4. **Caffeine L1（B8）**：进程内缓存 URL 字符串（与 Redis L2 同形状，不缓存行），maximum-size 10000、TTL 10s。**命中不跳过 singleflight/DB 行读**，禁用/过期语义零变化。多实例：resolution-changing 写路径广播失效、订阅只剔本地 L1（origin 跳过自己；见上「多实例」段），TTL 仍作兜底。
 5. **singleflight 防击穿（A10）**：同一短码的并发行读合并成一次在途读（`ConcurrentHashMap<code, CompletableFuture<行>>`，完成即摘除）。跟车等待超时（默认 500ms）自己读库（fail-open）。写路径提交后 `forget(code)`，写后到达的请求重新领头读新行。**不引入分布式锁**：在「每请求必须读行」前提下，分布式互斥只会把读串行化、拉长尾延迟。
 
 **行级 URL 校验门（B8 护栏）**：行的 `original_url` 不可渲染时一律 410，与缓存命中与否无关——「脏行 + 旧缓存未清」永远不会被旧缓存遮蔽成 302（IT 钉住）。
@@ -445,6 +450,8 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 | 变量 | 默认 |
 |------|------|
 | `LINKFORGE_BLOOM_ENABLED` / `_EXPECTED_INSERTIONS` / `_FPP` | true / 100000 / 0.0001 |
+| `LINKFORGE_BLOOM_REBUILD_ENABLED` / `_REBUILD_INTERVAL_MS` | true / 86400000（C2 定时 rebuild；`POST /api/admin/bloom/rebuild` 手动） |
+| `LINKFORGE_CACHE_BUS_ENABLED` | true（C2 Bloom put / L1 invalidate 广播总线；false = 不订阅不发布） |
 | `LINKFORGE_SINGLEFLIGHT_ENABLED` / `_WAIT_TIMEOUT_MS` | true / 500 |
 | `LINKFORGE_CACHE_TTL_JITTER_SECONDS` | 300 |
 | `LINKFORGE_ABSENT_TTL_SECONDS` / `_JITTER_SECONDS` | 60 / 30（≤0 关闭空值缓存） |
@@ -484,9 +491,9 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 |------|------|
 | 跳转/点击 | `linkforge.links.created`、`linkforge.redirects`、`linkforge.click.skipped{reason=prefetch\|preview_bot}` |
 | 限流 | `linkforge.ratelimit.rejected{entry=register\|create\|redirect}`、`linkforge.ratelimit.failopen{reason=error\|null}` |
-| Bloom | `linkforge.bloom.rejected` / `.loaded` / `.loadfailed` |
+| Bloom | `linkforge.bloom.rejected` / `.loaded` / `.loadfailed`、`.publish{result=ok\|error}` / `.subscribe.put` / `.rebuild{result=ok\|busy\|error}`（C2 广播与 rebuild） |
 | singleflight | `linkforge.singleflight.loads` / `.shared` / `.timeout` |
-| 缓存 | `linkforge.cache.absent.hit` / `.put`、`linkforge.l1.hit` / `.miss`、`linkforge.cache.l2{result=hit\|miss}` |
+| 缓存 | `linkforge.cache.absent.hit` / `.put`、`linkforge.l1.hit` / `.miss`、`linkforge.cache.l2{result=hit\|miss}`、`linkforge.l1.invalidate.publish{result=ok\|error}` / `.remote`（C2 失效广播） |
 | 门禁 | `linkforge.phishing.gate{action,stage}`、`.continue`、`.reload{result}`、gauge `.rules{level}` |
 | 密码短链 | `linkforge.link.unlock{result=ok\|bad_password\|rate_limited}`、`linkforge.link.locked` |
 | API Key | `linkforge.apikey.auth{result=ok\|invalid\|revoked\|ambiguous}`、`.quota.rejected{window}` |
@@ -496,12 +503,12 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 
 ## 🧪 测试与质量
 
-- **261 例**（v2.0.0 发布口径 211 → v2.1 抛光 220 → C1 +41）：surefire 纯单测 **122** + failsafe Testcontainers 集成 **137** + 时区 fork **2**（`WebhookRetryClockIT` 独立 fork 到 Asia/Shanghai，钉 DB 时钟退避）。静态徽章会随例数变化，以本行拆分为准
+- **281 例**（v2.0.0 发布口径 211 → v2.1 抛光 220 → C1 261 → C2 +20）：surefire 纯单测 **133** + failsafe Testcontainers 集成 **146** + 时区 fork **2**（`WebhookRetryClockIT` 独立 fork 到 Asia/Shanghai，钉 DB 时钟退避）。静态徽章会随例数变化，以本行拆分为准
 - **红先纪律**：每个特性先提交测试（CI 红 = 证据）再提交实现（CI 绿）；B 波 3+4+5 轮 13 次分支红全部留档根因（progress.md）
 - **CI**：GitHub Actions `mvn -B verify`（ubuntu + 原生 Docker Testcontainers），push 即跑，main 恒绿
-- **连接预算口径**：集成测试共享一个 Testcontainers MySQL（`--max-connections=500` 是**配置侧天花板**）；上下文峰值 ≈ 26×10+8×4 = **292 是最坏情形推导值**（每上下文 Hikari 同时满池的纸面相加；C1 新增 3 个 IT 上下文均显式 4），余量 208，全绿即零 `Too many connections`
+- **连接预算口径**：集成测试共享一个 Testcontainers MySQL（`--max-connections=500` 是**配置侧天花板**）；上下文峰值 ≈ 26×10+12×4 = **308 是最坏情形推导值**（每上下文 Hikari 同时满池的纸面相加；39 个 *IT、12 个显式 4，其中 C1/C2 新增各 3/4 个均 4；时区 fork 独立 JVM 另计），余量 192，全绿即零 `Too many connections`
 - **对账演练**：`scripts/mq-drill.sh` / `scripts/outbox-drill.sh` 断 MQ 追平，回归皆绿
-- 审计证据与逐轮记录：[docs/progress.md](docs/progress.md)（1221 行，每阶段验收、决策、红绿史）
+- 审计证据与逐轮记录：[docs/progress.md](docs/progress.md)（1324 行，每阶段验收、决策、红绿史）
 
 ## 📈 性能与压测
 
@@ -514,7 +521,7 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 | 优先 | 事项 |
 |------|------|
 | 高 | **B10：Linux 复跑 bench 刷新数字**（现有数字是 Windows 历史 / 固定窗口时期，不代表当前 tip；Linux bench 仍未跑） |
-| 中 | Bloom 多实例共享（RedisBloom）；L1 失效广播（QR+UTM、租户级 API Key、Webhook 聚合已于 C1 关闭） |
+| 中 | 维度扩展 Geo（os/browser 已于 C2 关闭；L1 失效广播 / Bloom 广播与 rebuild 已于 C2 关闭） |
 | 低 | 维度扩展（os/browser/Geo）；Webhook DNS rebinding |
 
 按范围纪律：开新轮次需运营者指令。
@@ -523,6 +530,7 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 
 | 版本 | 日期 | 内容 |
 |------|------|------|
+| **C2（未发版）** | 2026-10-31 | 深化 C2：Bloom put 广播 + 定时 rebuild（24h + ADMIN 手动、单飞、旁路原子替换）+ L1 失效广播（origin 跳过、只剔 L1）；维度 os/browser（轻量 UA 规则，Geo 不做）；C1 审计 N1/N4 docs；测试 261→281；红先四轮 CI 留档（conclusion 列） |
 | **C1（未发版）** | 2026-10-31 | 深化 C1：QR 物料 + 短时签名分享链（ZXing 3.5.3）+ UTM 写时合并；API Key 双 scope（TENANT 仅租户 ADMIN 签发，租户级可见性）；Webhook 聚合推送（双触发 digest、at-least-once、part 续篇、late 标记）；V8/V9 迁移；测试 220→261；红先三轮 CI 留档 |
 | **v2.0.0** | 2026-10-25 | 深化 A2–A10（保留字/HEAD 探测/Flyway/Outbox/维度/Bloom/singleflight）+ B 档波 1–5：B7 空值缓存+TTL 抖动、B8 L1、B4 API Key、B5 Webhook、B6 滑动窗口限流、B2 非人点击不计、B9 域名名单门禁、B3 密码短链、B1 Prometheus+Grafana；测试 155→211；多轮审计（含两次修复轮）通过；tag `v2.0.0` |
 | v1.0.0 | 2026-10-24 | P0–P5 完整交付：Compose 三件套、认证、短链 CRUD、缓存跳转（写穿+双删）、MQ 异步聚合（幂等/对账/断链追平）、创建幂等、并发不撞码、限流、Testcontainers CI、bench、prod profile；tag `v1.0.0` |

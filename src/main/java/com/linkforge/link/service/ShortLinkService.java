@@ -17,6 +17,7 @@ import com.linkforge.link.dto.ShortLinkDetail;
 import com.linkforge.link.dto.UpdateShortLinkRequest;
 import com.linkforge.link.entity.ShortLink;
 import com.linkforge.link.mapper.ShortLinkMapper;
+import com.linkforge.link.support.CacheBus;
 import com.linkforge.link.support.CodeBloomFilter;
 import com.linkforge.link.support.ClickFilter;
 import com.linkforge.link.support.CsvFormat;
@@ -80,6 +81,7 @@ public class ShortLinkService {
     private final RedisRateLimiter rateLimiter;
     private final MeterRegistry meterRegistry;
     private final CodeBloomFilter codeBloom;
+    private final CacheBus cacheBus;
     private final SingleFlight<String, ShortLink> singleFlight;
     private final ShortLinkRowLoader rowLoader;
     private final UrlLocalCache urlLocalCache;
@@ -205,6 +207,7 @@ public class ShortLinkService {
         }
 
         codeBloom.put(link.getCode());
+        cacheBus.publishBloomPut(link.getCode());
         clearAbsent(link.getCode());
         cacheUrl(link.getCode(), url);
         meterRegistry.counter("linkforge.links.created").increment();
@@ -322,6 +325,9 @@ public class ShortLinkService {
         // reader may have cached from the pre-commit row. Final consistency window ~1s.
         cacheUrl(code, effectiveUrl);
         scheduleStaleClear(code);
+        // D-C2-16: one broadcast per resolution-changing write, at the write itself —
+        // never from scheduleStaleClear's delayed pass (that would publish twice).
+        cacheBus.publishL1Invalidate(code);
         return toDetail(link);
     }
 
@@ -342,6 +348,7 @@ public class ShortLinkService {
         singleFlight.forget(code, priorFlight);
         evictCache(code);
         scheduleStaleClear(code);
+        cacheBus.publishL1Invalidate(code);
     }
 
     /** Logical delete: the code stays reserved (uk_code) and cannot be reused. */
@@ -352,6 +359,7 @@ public class ShortLinkService {
         singleFlight.forget(code, priorFlight);
         evictCache(code);
         scheduleStaleClear(code);
+        cacheBus.publishL1Invalidate(code);
     }
 
     /**

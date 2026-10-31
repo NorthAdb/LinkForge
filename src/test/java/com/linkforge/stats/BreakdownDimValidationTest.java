@@ -52,7 +52,7 @@ class BreakdownDimValidationTest {
         assertDim400("/api/links/abc/stats/breakdown");
         assertDim400("/api/links/abc/stats/breakdown?dim=");
         assertDim400("/api/links/abc/stats/breakdown?dim=%20");
-        assertDim400("/api/links/abc/stats/breakdown?dim=os");
+        assertDim400("/api/links/abc/stats/breakdown?dim=geo");
     }
 
     @Test

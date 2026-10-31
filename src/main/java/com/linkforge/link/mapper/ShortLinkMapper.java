@@ -15,6 +15,9 @@ public interface ShortLinkMapper extends BaseMapper<ShortLink> {
      * bypasses @TableLogic on purpose: logically-deleted rows still hold their
      * uk_code, so they must stay Bloom-positive and be rejected by the DB
      * (deleted=0 filter) instead of turning into pre-DB 404s.
+     * C2 wave B rebuild re-includes them on purpose: a rebuild is a capacity/fpp
+     * reset and missed-broadcast healer, NOT deleted-code retraction (classic Bloom
+     * cannot retract).
      */
     @Select("SELECT code FROM lf_short_link")
     List<String> selectAllCodes();

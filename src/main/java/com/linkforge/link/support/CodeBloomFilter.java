@@ -2,17 +2,24 @@ package com.linkforge.link.support;
 
 import com.google.common.hash.BloomFilter;
 import com.google.common.hash.Funnels;
+import com.linkforge.common.exception.BizException;
 import com.linkforge.config.LinkForgeProperties;
 import com.linkforge.link.mapper.ShortLinkMapper;
 import io.micrometer.core.instrument.MeterRegistry;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.data.redis.connection.Message;
+import org.springframework.data.redis.listener.ChannelTopic;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * A9: process-local Guava Bloom over short codes, guarding the redirect hot path
@@ -36,9 +43,37 @@ public class CodeBloomFilter {
     private final ShortLinkMapper shortLinkMapper;
     private final LinkForgeProperties properties;
     private final MeterRegistry meterRegistry;
+    private final RedisMessageListenerContainer container;
 
     private volatile BloomFilter<String> filter;
     private volatile boolean ready;
+
+    /** D-C2-13: one rebuild at a time per process; overlapping triggers read busy. */
+    private final AtomicBoolean rebuilding = new AtomicBoolean();
+
+    /** C2 wave A (D-C2-5): peer puts teach this filter; own messages are applied too. */
+    @PostConstruct
+    void subscribe() {
+        if (!properties.isCacheBusEnabled()) {
+            return;
+        }
+        // Registered pre-load (D-C2-5): the container is a SmartLifecycle that subscribes at context start, strictly before the ApplicationReadyEvent load, so no put can land between load and subscribe (that gap would stay invisible until rebuild).
+        container.addMessageListener((message, pattern) -> applyRemotePut(message),
+                new ChannelTopic(CacheBus.BLOOM_PUT_CHANNEL));
+        log.info("bloom put broadcast subscriber registered on {}", CacheBus.BLOOM_PUT_CHANNEL);
+    }
+
+    /** Listener-thread work only: one parse + one idempotent put, no executor hop. */
+    private void applyRemotePut(Message message) {
+        CacheBus.Put put = CacheBus.parsePut(new String(message.getBody(), StandardCharsets.UTF_8));
+        if (put == null) {
+            meterRegistry.counter("linkforge.bloom.subscribe.malformed").increment();
+            return;
+        }
+        // Own messages are applied too (D-C2-7): Guava put is idempotent and an origin skip only adds a way to lose a put.
+        put(put.code());
+        meterRegistry.counter("linkforge.bloom.subscribe.put").increment();
+    }
 
     /** Full seed from the DB once the app is up; a failed load must never take redirects down. */
     @EventListener(ApplicationReadyEvent.class)
@@ -73,6 +108,73 @@ public class CodeBloomFilter {
             ready = false;
             meterRegistry.counter("linkforge.bloom.loadfailed").increment();
             log.warn("bloom load failed; fail-open on the cache+DB path: {}", ex.getMessage(), ex);
+        }
+    }
+
+    /** C2 wave B (D-C2-9): scheduled full rebuild; a disabled flag returns immediately. */
+    @Scheduled(fixedDelayString = "${linkforge.bloom.rebuild-interval-ms:86400000}")
+    public void scheduledRebuild() {
+        if (!properties.getBloom().isRebuildEnabled()) {
+            return;
+        }
+        rebuild(false);
+    }
+
+    /** Manual ADMIN trigger (D-C2-12): rebuilds THIS process's filter, returns the seeded count. */
+    public long rebuildManual() {
+        return rebuild(true);
+    }
+
+    /**
+     * D-C2-10 bypass-then-atomic-swap, mirroring load(): publish the fresh filter first
+     * so concurrent creates put straight into it, then seed from selectAllCodes(); the
+     * swap and the failure restore are single volatile writes.
+     */
+    private long rebuild(boolean manual) {
+        if (!properties.getBloom().isEnabled()) {
+            // load() leaves the filter absent when disabled; rebuilding would publish one
+            // (and flip isReady) behind a feature that is off.
+            return 0;
+        }
+        if (!rebuilding.compareAndSet(false, true)) {
+            meterRegistry.counter("linkforge.bloom.rebuild", "result", "busy").increment();
+            if (manual) {
+                throw new BizException(409, "bloom rebuild already in progress");
+            }
+            return 0;
+        }
+        try {
+            LinkForgeProperties.Bloom cfg = properties.getBloom();
+            BloomFilter<String> fresh = BloomFilter.create(
+                    Funnels.stringFunnel(StandardCharsets.UTF_8), cfg.getExpectedInsertions(), cfg.getFpp());
+            // Publish before seeding (same A9 audit S1 reason as load()): a create landing
+            // in the seeding window puts straight into `fresh` instead of being lost.
+            BloomFilter<String> previous = filter;
+            filter = fresh;
+            try {
+                List<String> codes = shortLinkMapper.selectAllCodes();
+                for (String code : codes) {
+                    fresh.put(code);
+                }
+                ready = true;
+                meterRegistry.counter("linkforge.bloom.rebuild", "result", "ok").increment();
+                log.info("bloom rebuilt with {} codes (expectedInsertions={}, fpp={}, approxSize={})",
+                        codes.size(), cfg.getExpectedInsertions(), cfg.getFpp(), fresh.approximateElementCount());
+                return codes.size();
+            } catch (Exception ex) {
+                // Restore the pre-rebuild reference; never downgrade a loaded filter to
+                // fail-open (ready stays true unless the old filter was already absent).
+                filter = previous;
+                ready = previous != null;
+                meterRegistry.counter("linkforge.bloom.rebuild", "result", "error").increment();
+                log.warn("bloom rebuild failed; previous filter restored: {}", ex.getMessage(), ex);
+                if (manual) {
+                    throw new BizException(500, "bloom rebuild failed: " + ex.getMessage());
+                }
+                return 0;
+            }
+        } finally {
+            rebuilding.set(false);
         }
     }
 
