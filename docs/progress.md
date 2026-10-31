@@ -1327,3 +1327,10 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 - **281 = surefire 133 + failsafe 146 + tz fork 2**（C2 净增 20：UT +11【CacheBus 3、CodeBloomFilter +2、DimOsBrowser 相关 UT 6】，IT +9【BloomBroadcast 2、BloomRebuild 2、L1Invalidate 3、DimOsBrowser 2】）
 - 连接预算 26×10+12×4 = **308**（39 个 \*IT、12 个显式 4；C2 新增 4 个均 4），余量 192
 - 本地每提交 `mvn -B verify -DskipITs` 退出码显式 0（D 红期 held-out UT 说明：Wave D 的红 UT 在其实现前暂存 src/test 之外，避免污染前几波的本地绿门——CI 侧红先证据不受影响）
+
+---
+
+## 深化 C3 A/B 权重分流 + 批量导入（feat/deepen-c3-ab-split-bulk-import，发车基线 main@ab57869，2026-10-31）
+
+> 交接单：`记录追踪/05-阶段交接/LinkForge-phase-C3-ab-split-bulk-import-handoff.md`。开放问题 Q1–Q6 **已全部确认 A**（t116u/t117u，2026-10-31），按 §1.1 D-C3-1…34 执行；本章随开发推进补全（红先证据、CI conclusion 表、例数与连接预算收口时补）。
+> **A/B 权重分流（A 块）红先进行中**：`AbSplitIT` 合同红六项——`lf_link_variant` 建表、创建带 variants+详情回显、60 样本 302 Location 抽签分布（Location ∈ {urlA,urlB} 且两侧都出现）、密码链解锁 cookie 后 302 抽中 variant、PATCH 整表替换+空数组清空、`dim=variant` 统计分桶（geo 仍 400）。批量导入（B 块）由另一执行者负责，本章不记其红先。
