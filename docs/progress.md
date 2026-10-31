@@ -1372,10 +1372,10 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | A 绿（V10 + 抽签 + dim=variant） | [41205604839](https://github.com/NorthAdb/LinkForge/actions/runs/41205604839) | **success**（surefire 137 + failsafe 154 + tz 2 = 293） | `70a0f22` |
 | B 红（BulkImportIT 红先提交） | [41206479196](https://github.com/NorthAdb/LinkForge/actions/runs/41206479196) | **failure**（7/7 红，端点未实现期 404） | `598bc8a` |
 | B 绿（sync multipart CSV import） | [41206485400](https://github.com/NorthAdb/LinkForge/actions/runs/41206485400) | **success**（surefire 144 + failsafe 161 + tz fork 2 = 307） | `d23a7c2` |
-| 分支终态（本提交） | 待 | **待回填** | 待 |
-| main 合并 | 待 | **待回填** | 待 |
+| 分支终态（docs 收口提交） | [41208814615](https://github.com/NorthAdb/LinkForge/actions/runs/41208814615) | **success** | `e5c89a8` |
+| main 合并 | [41209223513](https://github.com/NorthAdb/LinkForge/actions/runs/41209223513) | **success** | `c0cc48e` |
 
-**口径**：功能绿以 B 绿 `41206485400`（307 全量）为准；「分支终态 / main 合并」两行待 run 落地后由收尾 docs 提交回填（C1/C2 先例，cf. 文档 nit `4435517`）。
+**口径**：功能绿以 B 绿 `41206485400`（307 全量）为准；「分支终态 / main 合并」两行由本收尾 docs 提交回填（C1/C2 先例，cf. 文档 nit `4435517`）。
 
 ### 改动清单（4 提交 + 本 docs 提交）
 
