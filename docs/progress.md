@@ -1178,6 +1178,24 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | B QR+UTM | [41083852762](https://github.com/NorthAdb/LinkForge/actions/runs/41083852762) | QrMaterialIT 8/8 失败（merge 未发生、qr.png 500、分享 404 等，期望/实际成对留痕） |
 | C 聚合 | [41084346370](https://github.com/NorthAdb/LinkForge/actions/runs/41084346370) | WebhookAggregateIT 4/5 ConditionTimeout（最新行停留 `evt_…/link.clicked`，证明 deliveryMode 被忽略）；PER_CLICK 钉子例绿 |
 
+### CI 结论表（C1-N1，2026-10-31 补；标签/run/conclusion/head 全景）
+
+| 标签 | run | conclusion | head |
+|------|-----|------------|------|
+| A 红（TenantApiKeyIT 红先提交） | [41081236062](https://github.com/NorthAdb/LinkForge/actions/runs/41081236062) | **failure**（3/4 新断言红，既余全绿） | `e9715a4` |
+| A 绿（V8+实现） | [41083445449](https://github.com/NorthAdb/LinkForge/actions/runs/41083445449) | **success** | `4fa0057` |
+| B 红（QrMaterialIT 红先提交） | [41083852762](https://github.com/NorthAdb/LinkForge/actions/runs/41083852762) | **failure**（8/8 新断言红） | `70fabdc` |
+| C 红（WebhookAggregateIT 红先提交） | [41084346370](https://github.com/NorthAdb/LinkForge/actions/runs/41084346370) | **failure**（4/5 新断言超时红） | `6cba4e6` |
+| B 绿第一跑（7b93535） | [41089651451](https://github.com/NorthAdb/LinkForge/actions/runs/41089651451) | **failure**（唯一 QR 失败=67 字符边界测试自身缺陷；另余 C 红先 4 例） | `7b93535` |
+| 边界修后（1f38b0b；QrMaterialIT 9/9） | [41091380989](https://github.com/NorthAdb/LinkForge/actions/runs/41091380989) | **failure**（失败仅剩 C 红先 4 例 ConditionTimeout——**该 run 不得当作 B/功能绿引用**） | `1f38b0b` |
+| C 绿第一跑（6acf78c） | [41093181474](https://github.com/NorthAdb/LinkForge/actions/runs/41093181474) | **failure**（唯一失败=digest SENT 断言竞态，测试缺陷） | `6acf78c` |
+| C 绿终态（b122371，failsafe 137 全绿） | [41096159455](https://github.com/NorthAdb/LinkForge/actions/runs/41096159455) | **success** | `b122371` |
+| 分支终态（docs 4ee2f02） | [41098314901](https://github.com/NorthAdb/LinkForge/actions/runs/41098314901) | **success** | `4ee2f02` |
+| main 合并（190e1f1） | [41099039117](https://github.com/NorthAdb/LinkForge/actions/runs/41099039117) | **success** | `190e1f1` |
+| backlog 关闭（01856d8） | [41099748281](https://github.com/NorthAdb/LinkForge/actions/runs/41099748281) | **success** | `01856d8` |
+
+**口径**：B 波功能绿以 C 绿终态 `41096159455` / 分支终态 `41098314901` 为准；`41091380989` conclusion=failure，仅用于证明 QrMaterialIT 9/9（余红为 C 红先），不作为任何「绿」引用。
+
 ### 改动清单（8 提交）
 
 | 提交 | 内容 |
