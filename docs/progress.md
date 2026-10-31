@@ -1409,7 +1409,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 - [x] **C3-15** README 功能总览加 A/B + 导入两行、徽章 307（144+161+2）、诚实边界（非 Geo/设备分流、导入同步非异步、B10/Geo/C4 未做）——本轮 README 改动
 - [x] **C3-16** resume post-C3 收口：A/B + 批量导入 bullet、例数 307；Windows bench 历史纪律与「B10 未跑」保留——本轮 resume 改动
 - [x] **C3-17** 本章含 D-C3 决策表、红先证据、CI conclusion 列、改动清单、例数构成、连接预算
-- [x] **C3-18** 全量 verify 绿 = B 绿 run [41206485400](https://github.com/NorthAdb/LinkForge/actions/runs/41206485400)（surefire 144 + failsafe 161 + tz 2 = 307）；分支终态 / main 合并行**待跑**（见 CI 结论表）
+- [x] **C3-18** 全量 verify 绿 = B 绿 run [41206485400](https://github.com/NorthAdb/LinkForge/actions/runs/41206485400)（surefire 144 + failsafe 161 + tz 2 = 307）；分支终态 / main 合并行由收尾 docs 提交回填（`41229481902` / `41229903727` 均 success，cf. `4435517` 先例）
 - [x] **C3-19** pom 仍 2.0.0；合 main → push 待 coordinator 收尾（不开 PR，沿 C1/C2），tip 全 SHA 随收尾自报
 - [x] **C3-20** 范围外未做：B10 / Geo / C4 / 按设备·地区分流 / 异步导入 / 改 V1–V9
 
@@ -1489,8 +1489,8 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | B 绿（fail-open 实现） | [41223877773](https://github.com/NorthAdb/LinkForge/actions/runs/41223877773) | **failure**（同 relay 竞态，166 例中仅 1 error = maxAttempts；B 的 UT 全绿） | `2e188eb` |
 | 竞态修复 v1 | [41224568503](https://github.com/NorthAdb/LinkForge/actions/runs/41224568503) | **failure**（24 秒编译败——`@DirtiesContext` import 写错包：在 `org.springframework.test.annotation` 不在 `test.context`） | `2d655cd` |
 | 竞态修复 v2（最终） | [41225181075](https://github.com/NorthAdb/LinkForge/actions/runs/41225181075) | **success**（surefire 147 + failsafe 166 + tz fork 2 = **315**；同时是 A 绿与 B 绿的最终证据） | `350c788` |
-| 分支终态（docs 收口提交） | 待回填 | 待回填 | 待回填 |
-| main 合并 | 待回填 | 待回填 | 待回填 |
+| 分支终态（docs 收口提交） | [41229481902](https://github.com/NorthAdb/LinkForge/actions/runs/41229481902) | **success** | `1aa2287` |
+| main 合并 | [41229903727](https://github.com/NorthAdb/LinkForge/actions/runs/41229903727) | **success** | `c961d0a` |
 
 **口径**：功能绿以竞态修复 v2 `41225181075`（315 全量）为准；「分支终态 / main 合并」两行由收尾 docs 提交回填（C2/C3 先例）。**轮内中间 failure 皆为诚实记账链**：41222907515（A 绿首推漏提交迁移后的测试类，staging 失误）、41223431052 与 41223877773（同一跨上下文 relay 竞态，根因见实现注记 7）、41224568503（包名笔误）；四次记账后 `41225181075` 收敛绿，同时充当 A 块与 B 块的最终绿证据。
 
@@ -1530,8 +1530,8 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 - [x] **C4-16** README：SSRF 段改诚实口径（rebinding 已钉死：一次解析+全 IP 校验+连接钉死保 Host/SNI；端口白名单/出口代理仍后置）；脚本清单/演练段加 fault-drill；徽章 315（147+166+2）——本轮 README 改动
 - [x] **C4-17** resume post-C4 收口：SSRF 钉死 bullet + fault-drill 三段 + C3 修复并入、例数 315；bench/B10 纪律 blockquote 保留——本轮 resume 改动
 - [x] **C4-18** 本章含 D-C4 决策表（1..35）、红先证据（C/A/B 三块）、CI conclusion 列、改动清单、钉死选型理由、例数构成与连接预算
-- [x] **C4-19** 全量 verify 绿 = run [41225181075](https://github.com/NorthAdb/LinkForge/actions/runs/41225181075)（surefire 147 + failsafe 166 + tz 2 = 315，Too many connections=0）；分支终态 / main 合并行**待跑**（见 CI 结论表）
-- [x] **C4-20** pom 仍 2.0.0；合 main → push 待 coordinator 收尾（不开 PR，沿 C1/C2/C3），tip 全 SHA 随收尾自报
+- [x] **C4-19** 全量 verify 绿 = run [41225181075](https://github.com/NorthAdb/LinkForge/actions/runs/41225181075)（surefire 147 + failsafe 166 + tz 2 = 315，Too many connections=0）；分支终态 / main 合并行由收尾 docs 提交回填（`41229481902` / `41229903727` 均 success，cf. `4435517` 先例）
+- [x] **C4-20** pom 仍 2.0.0；合 main → push 已收尾（merge `c961d0a`，run `41229903727` success，不开 PR，沿 C1/C2/C3），tip 全 SHA 见收尾自报
 - [x] **C4-21** 范围外未做：B10 / Geo / 自定义域名 / ES·CDC·云 / RedisBloom / 端口白名单产品化 / 出口代理 / 改 V1–V10
 
 ### 例数与预算
