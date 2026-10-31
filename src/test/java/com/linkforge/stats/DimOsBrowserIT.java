@@ -33,13 +33,17 @@ class DimOsBrowserIT extends AbstractIntegrationTest {
 
     @Autowired
     private ClickStatsService clickStatsService;
+    @Autowired
+    private org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     @Test
     void newClicksLandInOsAndBrowserBuckets() throws Exception {
         String token = registerForToken();
         String code = createLink(token, "https://example.com/dimos-" + System.currentTimeMillis());
 
-        ClickEvent event = new ClickEvent("dim-os-" + UUID.randomUUID(), tenantIdOf(token), 1L, code, 1L,
+        // dim rows key on link_id: consume must use the REAL id, not a synthetic one
+        Long linkId = jdbc.queryForObject("SELECT id FROM lf_short_link WHERE code = ?", Long.class, code);
+        ClickEvent event = new ClickEvent("dim-os-" + UUID.randomUUID(), tenantIdOf(token), linkId, code, 1L,
                 "203.0.113.9", EDGE_UA, "https://news.example.com/", LocalDateTime.now());
         assertTrue(clickStatsService.consume(event), "first consume must win");
 
