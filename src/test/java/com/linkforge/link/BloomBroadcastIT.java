@@ -4,6 +4,7 @@ import com.linkforge.AbstractIntegrationTest;
 import com.linkforge.link.support.CodeBloomFilter;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,13 +38,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "spring.datasource.hikari.maximum-pool-size=4"
 })
 @ActiveProfiles("test")
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class BloomBroadcastIT extends AbstractIntegrationTest {
 
     public static final String CHANNEL = "linkforge:bloom:put";
 
-    private static final CopyOnWriteArrayList<String> RECEIVED = new CopyOnWriteArrayList<>();
-    private static RedisMessageListenerContainer peerListener;
-    private static final String PEER_ORIGIN = "it-peer-" + UUID.randomUUID();
+    private final CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+    private RedisMessageListenerContainer peerListener;
+    private final String peerOrigin = "it-peer-" + UUID.randomUUID();
 
     @Autowired
     private CodeBloomFilter codeBloomFilter;
@@ -51,18 +53,21 @@ class BloomBroadcastIT extends AbstractIntegrationTest {
     @Autowired
     private StringRedisTemplate redis;
 
+    @Autowired
+    private RedisConnectionFactory connectionFactory;
+
     @BeforeAll
-    static void subscribePeerInstance(RedisConnectionFactory factory) {
+    void subscribePeerInstance() {
         peerListener = new RedisMessageListenerContainer();
-        peerListener.setConnectionFactory(factory);
+        peerListener.setConnectionFactory(connectionFactory);
         peerListener.addMessageListener((message, pattern) ->
-                        RECEIVED.add(new String(message.getBody())), new ChannelTopic(CHANNEL));
+                received.add(new String(message.getBody())), new ChannelTopic(CHANNEL));
         peerListener.afterPropertiesSet();
         peerListener.start();
     }
 
     @AfterAll
-    static void stopPeerInstance() throws Exception {
+    void stopPeerInstance() throws Exception {
         if (peerListener != null) {
             peerListener.stop();
             peerListener.destroy();
@@ -75,7 +80,7 @@ class BloomBroadcastIT extends AbstractIntegrationTest {
         assertFalse(codeBloomFilter.mightContain(code),
                 "an unknown code must start negative (filter is loaded and empty of it)");
 
-        redis.convertAndSend(CHANNEL, code + "|" + PEER_ORIGIN);
+        redis.convertAndSend(CHANNEL, code + "|" + peerOrigin);
 
         Awaitility.await().atMost(10, TimeUnit.SECONDS).untilAsserted(() ->
                 assertTrue(codeBloomFilter.mightContain(code),
@@ -88,12 +93,12 @@ class BloomBroadcastIT extends AbstractIntegrationTest {
         String code = createLink(token, "https://example.com/bloomcast-" + System.currentTimeMillis());
 
         Awaitility.await().atMost(10, TimeUnit.SECONDS).untilAsserted(() ->
-                assertTrue(RECEIVED.stream().anyMatch(p -> p.startsWith(code + "|")),
-                        "create must broadcast the code on " + CHANNEL + ", peer saw " + RECEIVED));
-        String payload = RECEIVED.stream().filter(p -> p.startsWith(code + "|")).findFirst().orElseThrow();
+                assertTrue(received.stream().anyMatch(p -> p.startsWith(code + "|")),
+                        "create must broadcast the code on " + CHANNEL + ", peer saw " + received));
+        String payload = received.stream().filter(p -> p.startsWith(code + "|")).findFirst().orElseThrow();
         assertEquals(code, payload.split("\\|", 2)[0], "payload must carry the bare code first");
 
-        assertEquals(1, RECEIVED.stream().filter(p -> p.startsWith(code + "|")).count(),
+        assertEquals(1, received.stream().filter(p -> p.startsWith(code + "|")).count(),
                 "the broadcast must happen exactly once per create (not from the delayed clear)");
         assertTrue(codeBloomFilter.mightContain(code), "the local put still happens on the creating instance");
     }
