@@ -112,6 +112,12 @@
             <groupId>com.github.ben-manes.caffeine</groupId>
             <artifactId>caffeine</artifactId>
         </dependency>
+        <!-- D-C4-1: pinned outbound webhook sender — HC5's pluggable DnsResolver is what
+             lets the relay connect only to guard-validated addresses (version from the Boot BOM). -->
+        <dependency>
+            <groupId>org.apache.httpcomponents.client5</groupId>
+            <artifactId>httpclient5</artifactId>
+        </dependency>
         <!-- C1 wave B: core builds the matrix, javase renders PNG and ships the
              BufferedImageLuminanceSource the decode IT asserts with. -->
         <dependency>

@@ -143,9 +143,21 @@ public class ShortLinkService {
             if (replayed != null) {
                 return replayed;
             }
-            Boolean acquired = stringRedisTemplate.opsForValue()
-                    .setIfAbsent(idemKey, "pending", Duration.ofSeconds(5));
-            if (Boolean.TRUE.equals(acquired)) {
+            /**
+             * D-C4-16 fail-open: with Redis down the pending lease cannot be taken, so
+             * the acquire is treated as won — two concurrent same-key creates can both
+             * run during an outage, which beats hard-failing every link write.
+             */
+            boolean acquired;
+            try {
+                acquired = Boolean.TRUE.equals(stringRedisTemplate.opsForValue()
+                        .setIfAbsent(idemKey, "pending", Duration.ofSeconds(5)));
+            } catch (Exception ex) {
+                log.warn("idempotency acquire failed for {}: {}", idemKey, ex.getMessage());
+                meterRegistry.counter("linkforge.cache.failopen", "op", "idem_acquire").increment();
+                acquired = true;
+            }
+            if (acquired) {
                 return doCreate(request, user, idemKey);
             }
             for (int i = 0; i < 10; i++) {
@@ -167,7 +179,15 @@ public class ShortLinkService {
      * holds no settled code. A code owned by a different user is treated as a miss.
      */
     private CreateShortLinkResponse replayIdempotentCreate(String idemKey, AuthUser user) {
-        String code = stringRedisTemplate.opsForValue().get(idemKey);
+        String code;
+        try {
+            code = stringRedisTemplate.opsForValue().get(idemKey);
+        } catch (Exception ex) {
+            // fail-open (D-C4-16): an unreadable key replays nothing, so the create proceeds
+            log.warn("idempotency replay read failed for {}: {}", idemKey, ex.getMessage());
+            meterRegistry.counter("linkforge.cache.failopen", "op", "idem_get").increment();
+            return null;
+        }
         if (code == null || code.isBlank() || "pending".equals(code)) {
             return null;
         }
@@ -209,33 +229,38 @@ public class ShortLinkService {
 
         // uk_code is the concurrency backstop. A taken custom code is a 409; random
         // codes regenerate on collision instead of failing the request.
-        boolean inserted = false;
-        if (customCode != null && !customCode.isEmpty()) {
-            link.setCode(customCode);
-            try {
-                shortLinkMapper.insert(link);
-                inserted = true;
-            } catch (DuplicateKeyException ex) {
-                throw new BizException(409, "code already exists");
-            }
-        } else {
-            for (int attempt = 0; attempt < CODE_ATTEMPTS && !inserted; attempt++) {
-                link.setCode(ShortCodes.randomCode(properties.getShortLink().getCodeLength()));
+        // C3-S1: the link row and its variants commit atomically — a variants failure
+        // rolls the link back too, and the Bloom/cache/idem tail below only runs after
+        // the commit. The DuplicateKeyException catch is safe inside the transaction:
+        // InnoDB rolls back only the failed statement, so the retry loop can continue.
+        transactionTemplate.executeWithoutResult(status -> {
+            boolean inserted = false;
+            if (customCode != null && !customCode.isEmpty()) {
+                link.setCode(customCode);
                 try {
                     shortLinkMapper.insert(link);
                     inserted = true;
                 } catch (DuplicateKeyException ex) {
-                    log.info("short code collision on {}, retrying (attempt {})", link.getCode(), attempt + 1);
+                    throw new BizException(409, "code already exists");
+                }
+            } else {
+                for (int attempt = 0; attempt < CODE_ATTEMPTS && !inserted; attempt++) {
+                    link.setCode(ShortCodes.randomCode(properties.getShortLink().getCodeLength()));
+                    try {
+                        shortLinkMapper.insert(link);
+                        inserted = true;
+                    } catch (DuplicateKeyException ex) {
+                        log.info("short code collision on {}, retrying (attempt {})", link.getCode(), attempt + 1);
+                    }
                 }
             }
-        }
-        if (!inserted) {
-            throw new BizException("failed to allocate short code");
-        }
-        if (!variants.isEmpty()) {
-            // D-C3-2: all rows or none — the code must never resolve with a half-written set.
-            transactionTemplate.executeWithoutResult(status -> insertVariants(link, variants));
-        }
+            if (!inserted) {
+                throw new BizException("failed to allocate short code");
+            }
+            if (!variants.isEmpty()) {
+                insertVariants(link, variants);
+            }
+        });
 
         codeBloom.put(link.getCode());
         cacheBus.publishBloomPut(link.getCode());
@@ -243,8 +268,15 @@ public class ShortLinkService {
         cacheUrl(link.getCode(), url);
         meterRegistry.counter("linkforge.links.created").increment();
         if (idemKey != null) {
-            stringRedisTemplate.opsForValue().set(idemKey, link.getCode(),
-                    Duration.ofSeconds(properties.getRateLimit().getIdempotencyTtlSeconds()));
+            try {
+                stringRedisTemplate.opsForValue().set(idemKey, link.getCode(),
+                        Duration.ofSeconds(properties.getRateLimit().getIdempotencyTtlSeconds()));
+            } catch (Exception ex) {
+                // fail-open (D-C4-16): the link is already committed; the key keeps its
+                // pending lease until TTL, so a same-key retry during the outage re-creates
+                log.warn("idempotency settle failed for {}: {}", idemKey, ex.getMessage());
+                meterRegistry.counter("linkforge.cache.failopen", "op", "idem_settle").increment();
+            }
         }
         return new CreateShortLinkResponse(link.getId(), link.getCode(), url, "/r/" + link.getCode());
     }
@@ -411,13 +443,7 @@ public class ShortLinkService {
     }
 
     public ShortLinkDetail detail(String code) {
-        ShortLink link = getOwnedLink(code);
-        ShortLinkDetail detail = toDetail(link);
-        List<LinkVariant> variants = variantMapper.selectByLinkId(link.getId());
-        if (!variants.isEmpty()) {
-            detail.setVariants(toViews(variants));
-        }
-        return detail;
+        return toDetailWithVariants(getOwnedLink(code));
     }
 
     public ShortLinkDetail update(String code, UpdateShortLinkRequest request) {
@@ -490,7 +516,7 @@ public class ShortLinkService {
         // D-C2-16: one broadcast per resolution-changing write, at the write itself —
         // never from scheduleStaleClear's delayed pass (that would publish twice).
         cacheBus.publishL1Invalidate(code);
-        return toDetail(link);
+        return toDetailWithVariants(link);
     }
 
     public void disable(String code) {
@@ -513,11 +539,17 @@ public class ShortLinkService {
         cacheBus.publishL1Invalidate(code);
     }
 
-    /** Logical delete: the code stays reserved (uk_code) and cannot be reused. */
+    /** Logical delete: the code stays reserved (uk_code) and cannot be reused.
+     * C3-N3: variants are hard rows (no logical-delete column) — they must not outlive
+     * the link, so both deletes commit as one unit; cache evictions stay outside. */
     public void delete(String code) {
         ShortLink link = getOwnedLink(code);
         CompletableFuture<ShortLink> priorFlight = singleFlight.peek(code);
-        shortLinkMapper.deleteById(link.getId());
+        transactionTemplate.executeWithoutResult(status -> {
+            shortLinkMapper.deleteById(link.getId());
+            variantMapper.delete(new LambdaQueryWrapper<LinkVariant>()
+                    .eq(LinkVariant::getLinkId, link.getId()));
+        });
         singleFlight.forget(code, priorFlight);
         evictCache(code);
         scheduleStaleClear(code);
@@ -590,7 +622,13 @@ public class ShortLinkService {
         String cached = urlLocalCache.getIfPresent(code);
         boolean servedFromLocal = cached != null && !cached.isBlank();
         if (!servedFromLocal) {
-            cached = stringRedisTemplate.opsForValue().get(cacheKey);
+            try {
+                cached = stringRedisTemplate.opsForValue().get(cacheKey);
+            } catch (Exception ex) {
+                // fail-open (D-C4-15): an outage degrades to the singleflight row read below, never a 500
+                log.warn("l2 read failed for {}: {}", code, ex.getMessage());
+                meterRegistry.counter("linkforge.cache.failopen", "op", "l2_get").increment();
+            }
             // B1: the Redis L2 round-trip had no metric — dashboards need the hit rate
             meterRegistry.counter("linkforge.cache.l2", "result",
                     cached != null && !cached.isBlank() ? "hit" : "miss").increment();
@@ -918,12 +956,25 @@ public class ShortLinkService {
         long ttl = jitteredTtlSeconds(properties.getShortLink().getCacheTtlSeconds(),
                 properties.getShortLink().getCacheTtlJitterSeconds());
         urlLocalCache.put(code, url);
-        stringRedisTemplate.opsForValue().set(CACHE_KEY_PREFIX + code, url, ttl, TimeUnit.SECONDS);
+        try {
+            stringRedisTemplate.opsForValue().set(CACHE_KEY_PREFIX + code, url, ttl, TimeUnit.SECONDS);
+        } catch (Exception ex) {
+            // fail-open (D-C4-15): L1 already holds the value; Redis warm-up waits for the next read
+            log.warn("l2 write failed for {}: {}", code, ex.getMessage());
+            meterRegistry.counter("linkforge.cache.failopen", "op", "l2_set").increment();
+        }
     }
 
     private void evictCache(String code) {
         urlLocalCache.invalidate(code);
-        stringRedisTemplate.delete(CACHE_KEY_PREFIX + code);
+        try {
+            stringRedisTemplate.delete(CACHE_KEY_PREFIX + code);
+        } catch (Exception ex) {
+            // fail-open (D-C4-15): a stale L2 entry ages out at its TTL — the missed delete
+            // must not fail the update/disable/delete the caller is committing
+            log.warn("l2 evict failed for {}: {}", code, ex.getMessage());
+            meterRegistry.counter("linkforge.cache.failopen", "op", "l2_delete").increment();
+        }
     }
 
     private void scheduleStaleClear(String code) {
@@ -944,7 +995,17 @@ public class ShortLinkService {
         }
     }
 
-    /** List/table rows keep variants null (populated only by {@link #detail(String)}). */
+    /** Single-link read views (detail and the update response) fill variants; list/table rows keep them null. */
+    private ShortLinkDetail toDetailWithVariants(ShortLink link) {
+        ShortLinkDetail detail = toDetail(link);
+        List<LinkVariant> variants = variantMapper.selectByLinkId(link.getId());
+        if (!variants.isEmpty()) {
+            detail.setVariants(toViews(variants));
+        }
+        return detail;
+    }
+
+    /** List/table rows keep variants null; single-link views go through {@link #toDetailWithVariants(ShortLink)}. */
     private static ShortLinkDetail toDetail(ShortLink link) {
         return new ShortLinkDetail(link.getId(), link.getCode(), link.getOriginalUrl(), link.getTitle(),
                 link.getStatus(), link.getExpireAt(), link.getCreatedAt(), link.getUpdatedAt(),

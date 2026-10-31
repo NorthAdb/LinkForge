@@ -2,7 +2,10 @@ package com.linkforge.link;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.linkforge.AbstractIntegrationTest;
+import com.linkforge.link.entity.LinkVariant;
+import com.linkforge.link.mapper.LinkVariantMapper;
 import org.awaitility.Awaitility;
+import org.mockito.Mockito;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -12,6 +15,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.listener.ChannelTopic;
+import org.springframework.boot.test.mock.mockito.SpyBean;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -32,6 +37,7 @@ import java.util.concurrent.TimeUnit;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 
 /**
  * C3 A/B weighted target split (D-C3-1..13, coordinator decisions 1-10): one code
@@ -63,6 +69,9 @@ class AbSplitIT extends AbstractIntegrationTest {
     private JdbcTemplate jdbc;
     @Autowired
     private RedisConnectionFactory connectionFactory;
+
+    @SpyBean
+    private LinkVariantMapper variantMapperSpy;
 
     /** Stands in for another instance so the test can observe the app's broadcasts. */
     @BeforeAll
@@ -199,6 +208,11 @@ class AbSplitIT extends AbstractIntegrationTest {
         ResponseEntity<String> patched = patchJson("/api/links/" + code, om.writeValueAsString(Map.of(
                 "variants", List.of(Map.of("key", "X", "url", urlX, "weight", 9)))), token);
         assertEquals(200, patched.getStatusCode().value(), patched.getBody());
+        JsonNode patchedVariants = body(patched).path("data").path("variants");
+        assertEquals(1, patchedVariants.size(),
+                "the PATCH response itself must carry the replaced set (C3-N2): " + patched.getBody());
+        assertEquals("X", patchedVariants.get(0).path("key").asText());
+        assertEquals(9, patchedVariants.get(0).path("weight").asInt());
         JsonNode afterX = body(get("/api/links/" + code, token)).path("data").path("variants");
         assertEquals(1, afterX.size(), "the submitted set must fully replace the old one: " + afterX);
         assertEquals("X", afterX.get(0).path("key").asText());
@@ -250,5 +264,43 @@ class AbSplitIT extends AbstractIntegrationTest {
                 assertTrue(received.stream().anyMatch(p -> p.startsWith(code + "|")),
                         "a variants-changing update must publish the usual L1 invalidate (C3-9), peer saw "
                                 + received));
+    }
+
+    @Test
+    void variantsInsertFailureLeavesNoLink() throws Exception {
+        String token = registerForToken();
+        try {
+            Mockito.doThrow(new DataIntegrityViolationException("forced"))
+                    .when(variantMapperSpy).insert(any(LinkVariant.class));
+            // A custom code is the only way to name the would-be row: the forced failure
+            // means the 500 response carries no code to query.
+            String code = "s1" + unique("").substring(0, 8);
+            String json = om.writeValueAsString(Map.of(
+                    "originalUrl", "https://s1-main.example.com/f-" + unique(""),
+                    "customCode", code,
+                    "variants", List.of(Map.of("key", "A", "url",
+                            "https://s1-a.example.com/f-" + unique(""), "weight", 100))));
+            ResponseEntity<String> resp = postJson("/api/links", json, token);
+            assertEquals(500, resp.getStatusCode().value(), resp.getBody());
+            Long links = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM lf_short_link WHERE code = ?", Long.class, code);
+            assertEquals(0L, links, "a variants failure must not leave the link row behind (C3-S1)");
+        } finally {
+            Mockito.reset(variantMapperSpy);
+        }
+    }
+
+    @Test
+    void deleteClearsVariantRows() throws Exception {
+        String token = registerForToken();
+        String code = createAbLink(token, "https://ab-main.example.com/del-" + unique(""),
+                "https://ab-a.example.com/del-" + unique(""), "https://ab-b.example.com/del-" + unique(""));
+
+        ResponseEntity<String> deleted = delete("/api/links/" + code, token);
+        assertEquals(200, deleted.getStatusCode().value(), deleted.getBody());
+        Long variantRows = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM lf_link_variant WHERE link_id = (SELECT id FROM lf_short_link WHERE code = ?)",
+                Long.class, code);
+        assertEquals(0L, variantRows, "delete must not leave lf_link_variant orphans (C3-N3)");
     }
 }

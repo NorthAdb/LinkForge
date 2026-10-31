@@ -5,7 +5,7 @@
 ![Java](https://img.shields.io/badge/Java-17-orange)
 ![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.3.5-6DB33F)
 ![MySQL·Redis·RabbitMQ](https://img.shields.io/badge/MySQL%20%C2%B7%20Redis%20%C2%B7%20RabbitMQ-8%20%C2%B7%207%20%C2%B7%203.13-informational)
-![tests](https://img.shields.io/badge/tests-307%20%28144%2B161%2B2%29-brightgreen)
+![tests](https://img.shields.io/badge/tests-315%20%28147%2B166%2B2%29-brightgreen)
 
 多租户短链 + 访问分析后端服务。**v2.0.0**＝P0–P5 全阶段交付（v1.0.0）+ 深化 A2–A10 + B 档波 1–5（B7/B8、B4/B5、B6/B2/B9/B3/B1），多轮外部审计通过。
 
@@ -41,7 +41,7 @@
 | 安全 | BCrypt 密码短链（签名 cookie、先限流后校验）、本地域名名单门禁（BLOCK/WARN）、非人点击不计 | [密码短链](#密码短链b3)、[域名门禁](#目标域名名单门禁b9)、[非人点击](#非人点击b2预取与预览-bot-照常-302-但不计) |
 | 开放 | API Key（哈希存储+配额，USER/TENANT 双 scope、TENANT 仅 ADMIN 签发）、点击 Webhook（HMAC 签名、AES-256-GCM at-rest、SSRF 防护、逐次/聚合双模式） | [开放能力](#开放能力b4-api-key--b5-webhook) |
 | 可观测 | 令牌守卫的 `/actuator/prometheus`、Grafana 自动 provision 看板、积压 gauge | [可观测](#可观测b1-prometheus--grafana) |
-| 工程 | Flyway 版本化迁移（V1–V10）、测试 307 例（含 Testcontainers 集成 161）、GitHub Actions CI、prod profile 一键收紧 | [测试与质量](#-测试与质量) |
+| 工程 | Flyway 版本化迁移（V1–V10）、测试 315 例（含 Testcontainers 集成 166）、GitHub Actions CI、prod profile 一键收紧 | [测试与质量](#-测试与质量) |
 
 **明确不做**（冻结决策，详见[待办](docs/backlog.md)）：AI / PostgreSQL / Supabase / 向量库（整体延期另立方案）；Spring Cloud / Seata / 多机房；独立前端 SPA（静态控制台已够用）；云公网部署（D5=本地 Compose，prod profile 已备好收紧开关）。
 
@@ -163,7 +163,7 @@ curl -s -D - -o /dev/null http://localhost:8080/r/CODE
 
 没有 `python3` 的环境把最后那个解析换成 `python`。Windows 上常见的是 `python`。
 
-**5. 验证脚本**。这三个文件是 bash，会自己读 `.env`。期望 `scripts/smoke.sh` 输出 `SMOKE OK`。`mq-drill.sh` 在 sync 开着时断开 RabbitMQ 再追平。`outbox-drill.sh` 在 sync 关着时做同样的事，并自己另起一个 8082 端口的实例。
+**5. 验证脚本**。这三个文件是 bash，会自己读 `.env`。期望 `scripts/smoke.sh` 输出 `SMOKE OK`。`mq-drill.sh` 在 sync 开着时断开 RabbitMQ 再追平。`outbox-drill.sh` 在 sync 关着时做同样的事，并自己另起一个 8082 端口的实例。`fault-drill.sh`（C4 故障演练，依赖第 2 步的 jar 与 compose 三件套）分 redis 停服 / webhook 5xx·超时 / mysql 只读三段，全文成功输出 `FAULT DRILL OK`；webhook 段的 5xx 桩用 PowerShell HttpListener（无 powershell）、mysql-ro 段缺 `MYSQL_ROOT_PASSWORD` 时对应段诚实 SKIP；只读态探活用 HEAD——GET 会因写点击明细/outbox 而 500。脚本每轮注册 2 个用户，注册限流默认 5 次/10 分钟，短时间连跑多轮会撞限流。
 
 bash：
 
@@ -171,6 +171,7 @@ bash：
 bash scripts/smoke.sh
 bash scripts/mq-drill.sh
 bash scripts/outbox-drill.sh
+bash scripts/fault-drill.sh
 ```
 
 PowerShell 里通常没有 `bash`（Git 默认只把 `Git\cmd` 放进 PATH）。打开 Git Bash 跑上面三行，或显式调用 bash：
@@ -425,7 +426,7 @@ curl -X POST -H "X-API-Key: lfk_xxxxxxxx_xxx" -H "Content-Type: application/json
 - **payload 最小化**：`{id, type, createdAt, data:{linkId, code, clickedAt, device, refererHost}}`——不推原始 IP / 完整 UA / 完整 Referer
 - **secret at-rest**：AES-256-GCM 密文（`v1:` + Base64(nonce‖ct‖tag)），主密钥 env `LINKFORGE_WEBHOOK_SECRET_KEY`（Base64 的 32 字节）。bash 用 `openssl rand -base64 32`。PowerShell 用 `[Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }))`。明文只在创建或轮换时返回一次，GET 只给掩码。**主密钥缺失时 endpoint 管理 503，投递意图照常落 PENDING**（不静默丢），补密钥重启后补投；主密钥丢失须对全部租户 rotate-secret 重发
 - **重试**：2xx = SENT；网络错/超时/408/429/5xx 按 `min(1h, 10s·2^attempts)` 退避（首次重试等 20s）；其它 4xx 首败即 FAILED；上限 8 次。退避在 **DB 时钟**上调度，JVM 与 MySQL 时区不一致不会拉长或杀掉退避。SENT 投递行与 Outbox 共用 `LINKFORGE_SENT_RETENTION_DAYS`（默认 7）；webhook 的 `sent_at` 是 JVM 时钟写入的，清理也按 JVM 时钟比较，避免再引入时区错配。PENDING / FAILED 不删
-- **SSRF 基本防护**：保存时与每次发送前双校验——仅 http/https、拒 userinfo、解析出的所有 IP 拒环回/私网/链路本地（含 169.254.169.254）/CGNAT/ULA、不跟随重定向。**诚实限制**：DNS rebinding TOCTOU 不做、无端口白名单、无出口代理隔离；`LINKFORGE_WEBHOOK_ALLOW_PRIVATE_TARGETS` 仅测试用
+- **SSRF 防护（C4 钉死 rebinding）**：保存时与每次发送前双校验——仅 http/https、拒 userinfo、解析出的所有 IP 拒环回/私网/链路本地（含 169.254.169.254）/CGNAT/ULA、不跟随重定向。**DNS rebinding TOCTOU 已钉死**：投递时**一次解析 → 对全部解析地址校验 → 只向已校验地址建连**（httpclient5 + 自定义 DnsResolver，Host/TLS SNI/证书校验保原 hostname），校验与连接之间不再有第二次解析窗口。**诚实限制**：无端口白名单、无出口代理隔离（仍后置）；`LINKFORGE_WEBHOOK_ALLOW_PRIVATE_TARGETS` 仅测试用
 - **调度隔离**：`spring.task.scheduling.pool.size` 默认 6（`LINKFORGE_SCHEDULING_POOL_SIZE`），webhook relay 慢不拖点击 outbox 追平；纯 sync 模式（`LINKFORGE_ASYNC_CLICK_ENABLED=false`）不产生回调
 - **聚合模式（C1，`deliveryMode`）**：`PER_CLICK`（默认，逐次推送，行为与上完全一致）| `AGGREGATE`——点击进 `lf_webhook_agg_buffer` 的（endpoint， 窗口， 链接）桶，**双触发**封窗冲刷：窗口到期（默认 60s，可配 15–300）或窗内累计点击达 `aggregateMaxEvents`（默认 100）；冲刷在同一事务内落 `lf_webhook_delivery`（`event_type=link.clicks.digest`，`event_id=digest-{endpointId}-{windowStart}[-partN]`）并删缓冲，**签名/SSRF/重试/relay 全部复用逐次链路**。每 digest 最多 500 个 link 桶，超出同窗开 `-partN` 续篇（不静默丢；配置硬上限超出才置 `truncated:true`）；已封窗的迟到点击并入下一开放窗并带 `late:true`，不回补历史。**投递语义 at-least-once**——接收方按 `X-LinkForge-Event-Id` 去重；digest payload 同样无原始 IP/完整 UA、每 link 至多 1 条 sample。切换模式不换 secret；AGGREGATE→PER_CLICK 先冲刷缓冲；删除带缓冲的 endpoint 时缓冲以 **FAILED digest 行留痕**（不静默丢，不发送）
 
@@ -517,7 +518,7 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 | 限流 | `linkforge.ratelimit.rejected{entry=register\|create\|redirect}`、`linkforge.ratelimit.failopen{reason=error\|null}` |
 | Bloom | `linkforge.bloom.rejected` / `.loaded` / `.loadfailed`、`.publish{result=ok\|error}` / `.subscribe.put` / `.rebuild{result=ok\|busy\|error}`（C2 广播与 rebuild） |
 | singleflight | `linkforge.singleflight.loads` / `.shared` / `.timeout` |
-| 缓存 | `linkforge.cache.absent.hit` / `.put`、`linkforge.l1.hit` / `.miss`、`linkforge.cache.l2{result=hit\|miss}`、`linkforge.l1.invalidate.publish{result=ok\|error}` / `.remote`（C2 失效广播） |
+| 缓存 | `linkforge.cache.absent.hit` / `.put`、`linkforge.l1.hit` / `.miss`、`linkforge.cache.l2{result=hit\|miss}`、`linkforge.l1.invalidate.publish{result=ok\|error}` / `.remote`（C2 失效广播）、`linkforge.cache.failopen{op=l2_get\|l2_set\|l2_delete\|idem_get\|idem_acquire\|idem_settle}`（C4 L2/幂等 fail-open） |
 | 门禁 | `linkforge.phishing.gate{action,stage}`、`.continue`、`.reload{result}`、gauge `.rules{level}` |
 | 密码短链 | `linkforge.link.unlock{result=ok\|bad_password\|rate_limited}`、`linkforge.link.locked` |
 | API Key | `linkforge.apikey.auth{result=ok\|invalid\|revoked\|ambiguous}`、`.quota.rejected{window}` |
@@ -527,12 +528,12 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 
 ## 🧪 测试与质量
 
-- **307 例**（v2.0.0 发布口径 211 → v2.1 抛光 220 → C1 261 → C2 +20 → C3 +26）：surefire 纯单测 **144** + failsafe Testcontainers 集成 **161** + 时区 fork **2**（`WebhookRetryClockIT` 独立 fork 到 Asia/Shanghai，钉 DB 时钟退避）。静态徽章会随例数变化，以本行拆分为准
+- **315 例**（v2.0.0 发布口径 211 → v2.1 抛光 220 → C1 261 → C2 +20 → C3 +26 → C4 +8）：surefire 纯单测 **147** + failsafe Testcontainers 集成 **166** + 时区 fork **2**（`WebhookRetryClockIT` 独立 fork 到 Asia/Shanghai，钉 DB 时钟退避）。静态徽章会随例数变化，以本行拆分为准
 - **红先纪律**：每个特性先提交测试（CI 红 = 证据）再提交实现（CI 绿）；B 波 3+4+5 轮 13 次分支红全部留档根因（progress.md）
 - **CI**：GitHub Actions `mvn -B verify`（ubuntu + 原生 Docker Testcontainers），push 即跑，main 恒绿
-- **连接预算口径**：集成测试共享一个 Testcontainers MySQL（`--max-connections=500` 是**配置侧天花板**）；上下文峰值 ≈ 27×10+14×4 = **326 是最坏情形推导值**（每上下文 Hikari 同时满池的纸面相加；41 个 *IT、14 个显式 4，其中 C1/C2/C3 新增各 3/4/2 个均 4；时区 fork 独立 JVM 另计），余量 174，全绿即零 `Too many connections`
-- **对账演练**：`scripts/mq-drill.sh` / `scripts/outbox-drill.sh` 断 MQ 追平，回归皆绿
-- 审计证据与逐轮记录：[docs/progress.md](docs/progress.md)（1417 行，每阶段验收、决策、红绿史）
+- **连接预算口径**：集成测试共享一个 Testcontainers MySQL（`--max-connections=500` 是**配置侧天花板**）；上下文峰值 ≈ 27×10+15×4 = **330 是最坏情形推导值**（每上下文 Hikari 同时满池的纸面相加；42 个 *IT、15 个显式 4，其中 C1/C2/C3/C4 新增各 3/4/2/1 个均 4；时区 fork 独立 JVM 另计），余量 170，全绿即零 `Too many connections`。三个 relay-enabled webhook IT 钉 `@DirtiesContext(AFTER_CLASS)`，类结束即关上下文，实际峰值低于纸面
+- **对账与故障演练**：`scripts/mq-drill.sh` / `scripts/outbox-drill.sh` 断 MQ 追平；`scripts/fault-drill.sh`（C4）redis 停服 / webhook 5xx / mysql 只读三段，本机实测 `FAULT DRILL OK`（只读态 GET /r 500、HEAD 才是只读探针——实测注记），回归皆绿
+- 审计证据与逐轮记录：[docs/progress.md](docs/progress.md)（1541 行，每阶段验收、决策、红绿史）
 
 ## 📈 性能与压测
 
@@ -546,7 +547,7 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 |------|------|
 | 高 | **B10：Linux 复跑 bench 刷新数字**（现有数字是 Windows 历史 / 固定窗口时期，不代表当前 tip；Linux bench 仍未跑） |
 | 中 | 维度扩展 Geo（os/browser 已于 C2 关闭；L1 失效广播 / Bloom 广播与 rebuild 已于 C2 关闭） |
-| 低 | 维度扩展（os/browser/Geo）；Webhook DNS rebinding |
+| 低 | 维度扩展 Geo；Webhook 端口白名单 / 出口代理隔离（DNS rebinding 已于 C4 钉死） |
 
 按范围纪律：开新轮次需运营者指令。
 
@@ -554,6 +555,7 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 
 | 版本 | 日期 | 内容 |
 |------|------|------|
+| **C4（未发版）** | 2026-11-01 | 深化 C4：Webhook SSRF DNS rebinding 钉死（httpclient5 + 自定义 DnsResolver——投递时一次解析、全 IP 校验、只连已校验地址，Host/SNI 保原 hostname）+ 故障演练 `scripts/fault-drill.sh`（redis 停服 / webhook 5xx / mysql 只读，SKIP 语义）+ Redis L2/幂等 fail-open（`linkforge.cache.failopen`）+ C3 审计修复并入（S1 建链+variants 同事务 / N2 update 带 variants / N3 delete 清 variants）；测试 307→315；红先三块 CI 留档（conclusion 列） |
 | **C3（未发版）** | 2026-10-31 | 深化 C3：A/B 权重分流（一码多目标 ≤10 按权重抽签、密码/门禁/UTM 仍链层、`dim=variant` 统计分桶）+ 批量 CSV 导入（同步 multipart ≤100 行、部分失败返回文件行号+原因、专用 import 限流）；V10 迁移；测试 281→307；红先两块 CI 留档（conclusion 列） |
 | **C2（未发版）** | 2026-10-31 | 深化 C2：Bloom put 广播 + 定时 rebuild（24h + ADMIN 手动、单飞、旁路原子替换）+ L1 失效广播（origin 跳过、只剔 L1）；维度 os/browser（轻量 UA 规则，Geo 不做）；C1 审计 N1/N4 docs；测试 261→281；红先四轮 CI 留档（conclusion 列） |
 | **C1（未发版）** | 2026-10-31 | 深化 C1：QR 物料 + 短时签名分享链（ZXing 3.5.3）+ UTM 写时合并；API Key 双 scope（TENANT 仅租户 ADMIN 签发，租户级可见性）；Webhook 聚合推送（双触发 digest、at-least-once、part 续篇、late 标记）；V8/V9 迁移；测试 220→261；红先三轮 CI 留档 |
