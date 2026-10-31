@@ -1374,8 +1374,10 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | B 绿（sync multipart CSV import） | [41206485400](https://github.com/NorthAdb/LinkForge/actions/runs/41206485400) | **success**（surefire 144 + failsafe 161 + tz fork 2 = 307） | `d23a7c2` |
 | 分支终态（docs 收口提交） | [41208814615](https://github.com/NorthAdb/LinkForge/actions/runs/41208814615) | **success** | `e5c89a8` |
 | main 合并 | [41209223513](https://github.com/NorthAdb/LinkForge/actions/runs/41209223513) | **success** | `c0cc48e` |
+| 终态回填（docs-only，暴露 pre-existing flake） | [41209655123](https://github.com/NorthAdb/LinkForge/actions/runs/41209655123) | **failure**（QrMaterialIT tampered-sig：首字符为 `0` 时 1/16 概率 tamper 无操作 → 200；C1 期测试自身缺陷，非 C3 回归——同树 merge run 绿） | `aa69da4` |
+| flake 修复（sig 整串塌 `0`，确定性 401） | [41210212501](https://github.com/NorthAdb/LinkForge/actions/runs/41210212501) | **success** | `3b1516d` |
 
-**口径**：功能绿以 B 绿 `41206485400`（307 全量）为准；「分支终态 / main 合并」两行由本收尾 docs 提交回填（C1/C2 先例，cf. 文档 nit `4435517`）。
+**口径**：功能绿以 B 绿 `41206485400`（307 全量）为准；「分支终态 / main 合并」两行由收尾 docs 提交回填（C1/C2 先例，cf. 文档 nit `4435517`）。**轮内修复（测试自身缺陷一枚，C2 先例）**：`QrMaterialIT:126` 单字符 tamper 有 1/16 概率替换后仍等于原 sig（首字符本就是 `0`），`[0-9a-fA-F]` → `[0-9a-fA-F]+` 让整串签名塌成 `0`、对 64 位 HMAC 恒不等——先记账（上表 failure 行）后修根因。
 
 ### 改动清单（4 提交 + 本 docs 提交）
 
