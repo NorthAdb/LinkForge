@@ -16,7 +16,7 @@ import org.springframework.boot.test.mock.mockito.SpyBean;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.DirtiesContext;
+import org.springframework.test.annotation.DirtiesContext;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
