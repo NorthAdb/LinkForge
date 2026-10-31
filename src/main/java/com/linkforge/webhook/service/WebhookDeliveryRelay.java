@@ -5,6 +5,7 @@ import com.linkforge.webhook.entity.WebhookDelivery;
 import com.linkforge.webhook.entity.WebhookEndpoint;
 import com.linkforge.webhook.mapper.WebhookDeliveryMapper;
 import com.linkforge.webhook.mapper.WebhookEndpointMapper;
+import com.linkforge.webhook.support.PinnedHttpSender;
 import com.linkforge.webhook.support.WebhookSecretCipher;
 import com.linkforge.webhook.support.WebhookSigner;
 import com.linkforge.webhook.support.WebhookTargetGuard;
@@ -13,24 +14,23 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 /**
- * B-wave2 D-Bw2-13/14: drains PENDING webhook deliveries over HTTP. Runs on the
- * shared (but now 4-thread) scheduler — the click outbox relay and the reconciler
- * are independent of a slow webhook endpoint because of the pool size, never
- * because of shared execution. 2xx = SENT; network errors, timeouts, 408/429/5xx
- * retry with min(cap, base*2^attempts) backoff; other 4xx and blocked targets fail
- * immediately; max-attempts ends in FAILED (this repo's dead-letter equivalent).
- * at-least-once: multiple relays may deliver the same row, receivers dedup on the
- * event id.
+ * B-wave2 D-Bw2-13/14: drains PENDING webhook deliveries over HTTP through
+ * {@link PinnedHttpSender} (D-C4-1: it connects only to the addresses
+ * {@link WebhookTargetGuard#resolveForSend(String)} validated, so a second DNS
+ * resolution can never pick a different endpoint). Runs on the shared (but now
+ * 4-thread) scheduler — the click outbox relay and the reconciler are independent of a
+ * slow webhook endpoint because of the pool size, never because of shared execution.
+ * 2xx = SENT; network errors, timeouts, 408/429/5xx retry with min(cap, base*2^attempts)
+ * backoff; other 4xx and blocked targets fail immediately; max-attempts ends in FAILED
+ * (this repo's dead-letter equivalent). at-least-once: multiple relays may deliver the
+ * same row, receivers dedup on the event id.
  */
 @Slf4j
 @Component
@@ -40,26 +40,24 @@ public class WebhookDeliveryRelay {
     private final WebhookEndpointMapper endpointMapper;
     private final WebhookSecretCipher cipher;
     private final WebhookTargetGuard targetGuard;
+    private final PinnedHttpSender sender;
     private final LinkForgeProperties properties;
     private final MeterRegistry meterRegistry;
-    private final HttpClient httpClient;
 
     public WebhookDeliveryRelay(WebhookDeliveryMapper deliveryMapper,
                                 WebhookEndpointMapper endpointMapper,
                                 WebhookSecretCipher cipher,
                                 WebhookTargetGuard targetGuard,
+                                PinnedHttpSender sender,
                                 LinkForgeProperties properties,
                                 MeterRegistry meterRegistry) {
         this.deliveryMapper = deliveryMapper;
         this.endpointMapper = endpointMapper;
         this.cipher = cipher;
         this.targetGuard = targetGuard;
+        this.sender = sender;
         this.properties = properties;
         this.meterRegistry = meterRegistry;
-        this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(properties.getWebhook().getConnectTimeoutMs()))
-                .followRedirects(HttpClient.Redirect.NEVER)
-                .build();
     }
 
     @Scheduled(fixedDelayString = "${linkforge.webhook.relay-fixed-delay-ms:2000}",
@@ -96,10 +94,16 @@ public class WebhookDeliveryRelay {
             meterRegistry.counter("linkforge.webhook.delivery", "result", "failed").increment();
             return;
         }
-        if (targetGuard.isBlocked(endpoint.getUrl())) {
+        // resolve+validate ONCE here; the sender below connects only to these addresses,
+        // so DNS cannot be flipped between this check and the connection (D-C4-1 rebinding)
+        WebhookTargetGuard.ResolvedAddresses resolved = targetGuard.resolveForSend(endpoint.getUrl());
+        if (resolved.violationReason() != null) {
             deliveryMapper.markFailed(delivery.getId(), null, "blocked target");
             meterRegistry.counter("linkforge.webhook.blocked").increment();
             meterRegistry.counter("linkforge.webhook.delivery", "result", "failed").increment();
+            // D-C4-8: never log the resolved addresses or the guard's inner reason
+            log.warn("webhook delivery {} to endpoint {} blocked (event {})",
+                    delivery.getId(), endpoint.getId(), delivery.getEventId());
             return;
         }
 
@@ -113,37 +117,32 @@ public class WebhookDeliveryRelay {
 
         String body = delivery.getPayload();
         long timestamp = System.currentTimeMillis() / 1000;
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(endpoint.getUrl()))
-                .timeout(Duration.ofMillis(properties.getWebhook().getRequestTimeoutMs()))
-                .header("Content-Type", "application/json")
-                .header(WebhookSigner.HEADER_EVENT_ID, delivery.getEventId())
-                .header(WebhookSigner.HEADER_TIMESTAMP, String.valueOf(timestamp))
-                .header(WebhookSigner.HEADER_SIGNATURE, WebhookSigner.sign(secret, timestamp, body))
-                .POST(HttpRequest.BodyPublishers.ofString(body))
-                .build();
+        Map<String, String> headers = Map.of(
+                "Content-Type", "application/json",
+                WebhookSigner.HEADER_EVENT_ID, delivery.getEventId(),
+                WebhookSigner.HEADER_TIMESTAMP, String.valueOf(timestamp),
+                WebhookSigner.HEADER_SIGNATURE, WebhookSigner.sign(secret, timestamp, body));
 
-        Integer statusCode = null;
-        try {
-            HttpResponse<Void> response = httpClient.send(request, HttpResponse.BodyHandlers.discarding());
-            statusCode = response.statusCode();
-            if (statusCode >= 200 && statusCode < 300) {
-                deliveryMapper.markSent(delivery.getId(), statusCode, LocalDateTime.now());
-                meterRegistry.counter("linkforge.webhook.delivery", "result", "success").increment();
-                return;
-            }
-            if (statusCode == 408 || statusCode == 429 || statusCode >= 500) {
-                scheduleRetry(delivery, statusCode, "http " + statusCode);
-            } else {
-                // the receiver explicitly refused (401/403/404/410/...): retrying is pointless
-                deliveryMapper.markFailed(delivery.getId(), statusCode, "http " + statusCode);
-                meterRegistry.counter("linkforge.webhook.delivery", "result", "failed").increment();
-            }
-        } catch (IOException ex) {
-            scheduleRetry(delivery, statusCode, ex.getClass().getSimpleName());
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-            scheduleRetry(delivery, statusCode, "interrupted");
+        PinnedHttpSender.Result result = sender.send(endpoint.getUrl(), resolved.pinned(),
+                body.getBytes(StandardCharsets.UTF_8), headers,
+                Duration.ofMillis(properties.getWebhook().getConnectTimeoutMs()),
+                Duration.ofMillis(properties.getWebhook().getRequestTimeoutMs()));
+        if (result instanceof PinnedHttpSender.Failed failed) {
+            scheduleRetry(delivery, null, failed.cause().getClass().getSimpleName());
+            return;
+        }
+        int statusCode = ((PinnedHttpSender.Responded) result).statusCode();
+        if (statusCode >= 200 && statusCode < 300) {
+            deliveryMapper.markSent(delivery.getId(), statusCode, LocalDateTime.now());
+            meterRegistry.counter("linkforge.webhook.delivery", "result", "success").increment();
+            return;
+        }
+        if (statusCode == 408 || statusCode == 429 || statusCode >= 500) {
+            scheduleRetry(delivery, statusCode, "http " + statusCode);
+        } else {
+            // the receiver explicitly refused (401/403/404/410/...): retrying is pointless
+            deliveryMapper.markFailed(delivery.getId(), statusCode, "http " + statusCode);
+            meterRegistry.counter("linkforge.webhook.delivery", "result", "failed").increment();
         }
     }
 

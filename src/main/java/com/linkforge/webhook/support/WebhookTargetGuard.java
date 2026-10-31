@@ -12,21 +12,34 @@ import java.net.UnknownHostException;
 import java.util.Arrays;
 
 /**
- * B-wave2 D-Bw2-15: basic SSRF guard for webhook targets, applied at save time
- * AND re-checked before every send. Rules: only http/https, no userinfo, and every
+ * B-wave2 D-Bw2-15: SSRF guard for webhook targets, applied at save time AND at every
+ * send, where {@link #resolveForSend(String)} resolves the host exactly once and the
+ * sender pins the connection to those addresses only — the resolve-then-connect TOCTOU
+ * (DNS rebinding, D-C4-1) is closed. Rules: only http/https, no userinfo, and every
  * resolved IP of the host must be public — loopback, any-local, multicast,
  * link-local (incl. cloud metadata 169.254.169.254), site-local, CGNAT 100.64/10
- * and IPv6 ULA fc00::/7 are blocked. Redirects are never followed by the relay.
+ * and IPv6 ULA fc00::/7 are blocked. Redirects are never followed by the sender.
  *
- * Honest limits (README): the resolve-then-connect TOCTOU (DNS rebinding) is NOT
- * solved here — the relay's HttpClient does its own resolution; port whitelisting
- * and egress-proxy isolation are out of scope this wave.
+ * Honest limits (README): port whitelisting and egress-proxy isolation are out of
+ * scope this wave.
  */
 @Component
 @RequiredArgsConstructor
 public class WebhookTargetGuard {
 
     private final LinkForgeProperties properties;
+
+    /** One send-time resolution: either a violation reason or the addresses to pin the connection to. */
+    public record ResolvedAddresses(String violationReason, InetAddress[] pinned) {
+
+        static ResolvedAddresses blocked(String reason) {
+            return new ResolvedAddresses(reason, null);
+        }
+
+        static ResolvedAddresses pinned(InetAddress[] addresses) {
+            return new ResolvedAddresses(null, addresses);
+        }
+    }
 
     /** Save-time check: raises 400 on a blocked target. */
     public void check(String url) {
@@ -36,46 +49,51 @@ public class WebhookTargetGuard {
         }
     }
 
-    /** Send-time check: true when the target must not be contacted. */
-    public boolean isBlocked(String url) {
-        return violationOf(url) != null;
-    }
-
-    /** Null when the target is acceptable, otherwise a short violation reason. */
-    String violationOf(String url) {
+    /**
+     * Send-time resolution: the host is resolved ONCE here and the returned addresses are
+     * the only ones the sender may connect to, so DNS cannot be flipped between validation
+     * and connection. Reason strings are the same ones {@link #check(String)} echoes.
+     */
+    public ResolvedAddresses resolveForSend(String url) {
         URI uri;
         try {
             uri = URI.create(url);
         } catch (IllegalArgumentException ex) {
-            return "unparseable url";
+            return ResolvedAddresses.blocked("unparseable url");
         }
         String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase();
         if (!scheme.equals("http") && !scheme.equals("https")) {
-            return "scheme must be http or https";
+            return ResolvedAddresses.blocked("scheme must be http or https");
         }
         if (uri.getUserInfo() != null) {
-            return "userinfo is not allowed";
+            return ResolvedAddresses.blocked("userinfo is not allowed");
         }
         String host = uri.getHost();
         if (host == null || host.isBlank()) {
-            return "missing host";
-        }
-        if (properties.getWebhook().isAllowPrivateTargets()) {
-            return null; // IT-only escape hatch; never true in prod
+            return ResolvedAddresses.blocked("missing host");
         }
         InetAddress[] addresses;
         try {
             addresses = resolveHost(host);
         } catch (UnknownHostException ex) {
-            return "host does not resolve";
+            return ResolvedAddresses.blocked("host does not resolve");
+        }
+        if (properties.getWebhook().isAllowPrivateTargets()) {
+            // IT-only escape hatch; never true in prod
+            return ResolvedAddresses.pinned(addresses);
         }
         for (InetAddress address : addresses) {
             if (violationOf(address) != null) {
-                // Bw2-N6: the 400 body must not echo resolved addresses — one uniform reason
-                return "blocked target";
+                // Bw2-N6: the reason must not echo resolved addresses — one uniform reason
+                return ResolvedAddresses.blocked("blocked target");
             }
         }
-        return null;
+        return ResolvedAddresses.pinned(addresses);
+    }
+
+    /** Null when the target is acceptable, otherwise a short violation reason. */
+    String violationOf(String url) {
+        return resolveForSend(url).violationReason();
     }
 
     String violationOf(InetAddress address) {
