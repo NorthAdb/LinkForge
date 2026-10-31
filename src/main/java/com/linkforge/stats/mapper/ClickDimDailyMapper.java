@@ -32,7 +32,7 @@ public interface ClickDimDailyMapper extends BaseMapper<ClickDimDaily> {
     @Select("SELECT dim_value AS dimValue, SUM(clicks) AS clicks FROM lf_click_dim_daily "
             + "WHERE link_id = #{linkId} AND dim_type = #{dimType} "
             + "AND stat_date >= #{from} AND stat_date <= #{to} "
-            + "GROUP BY dim_value ORDER BY clicks DESC")
+            + "GROUP BY dim_value ORDER BY clicks DESC, dim_value ASC")
     List<DimBreakdown> selectBreakdown(@Param("linkId") long linkId,
                                        @Param("dimType") String dimType,
                                        @Param("from") LocalDate from,
