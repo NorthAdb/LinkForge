@@ -4,6 +4,7 @@ import com.linkforge.AbstractIntegrationTest;
 import com.linkforge.link.support.UrlLocalCache;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,31 +38,34 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "spring.datasource.hikari.maximum-pool-size=4"
 })
 @ActiveProfiles("test")
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class L1InvalidateIT extends AbstractIntegrationTest {
 
     public static final String CHANNEL = "linkforge:l1:invalidate";
 
-    private static final CopyOnWriteArrayList<String> RECEIVED = new CopyOnWriteArrayList<>();
-    private static RedisMessageListenerContainer peerListener;
-    private static final String PEER_ORIGIN = "it-l1-peer";
+    private final CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+    private RedisMessageListenerContainer peerListener;
+    private final String peerOrigin = "it-l1-peer";
 
     @Autowired
     private UrlLocalCache l1;
     @Autowired
     private StringRedisTemplate redis;
+    @Autowired
+    private RedisConnectionFactory connectionFactory;
 
     @BeforeAll
-    static void subscribePeerInstance(RedisConnectionFactory factory) {
+    void subscribePeerInstance() {
         peerListener = new RedisMessageListenerContainer();
-        peerListener.setConnectionFactory(factory);
+        peerListener.setConnectionFactory(connectionFactory);
         peerListener.addMessageListener((message, pattern) ->
-                        RECEIVED.add(new String(message.getBody())), new ChannelTopic(CHANNEL));
+                received.add(new String(message.getBody())), new ChannelTopic(CHANNEL));
         peerListener.afterPropertiesSet();
         peerListener.start();
     }
 
     @AfterAll
-    static void stopPeerInstance() throws Exception {
+    void stopPeerInstance() throws Exception {
         if (peerListener != null) {
             peerListener.stop();
             peerListener.destroy();
@@ -81,7 +85,7 @@ class L1InvalidateIT extends AbstractIntegrationTest {
         String code = createAndWarm(token);
         assertNotNull(l1.getIfPresent(code), "the redirect must have backfilled the local L1");
 
-        redis.convertAndSend(CHANNEL, code + "|" + PEER_ORIGIN);
+        redis.convertAndSend(CHANNEL, code + "|" + peerOrigin);
 
         Awaitility.await().atMost(10, TimeUnit.SECONDS).untilAsserted(() ->
                 assertNull(l1.getIfPresent(code),
@@ -101,18 +105,18 @@ class L1InvalidateIT extends AbstractIntegrationTest {
                         + System.currentTimeMillis())), token);
         assertEquals(200, patched.getStatusCode().value(), patched.getBody());
         Awaitility.await().atMost(10, TimeUnit.SECONDS).untilAsserted(() ->
-                assertTrue(RECEIVED.stream().anyMatch(p -> p.startsWith(code + "|")),
-                        "update must publish an invalidate for the other instances, peer saw " + RECEIVED));
-        long afterUpdate = RECEIVED.stream().filter(p -> p.startsWith(code + "|")).count();
+                assertTrue(received.stream().anyMatch(p -> p.startsWith(code + "|")),
+                        "update must publish an invalidate for the other instances, peer saw " + received));
+        long afterUpdate = received.stream().filter(p -> p.startsWith(code + "|")).count();
 
         Awaitility.await().atMost(15, TimeUnit.SECONDS).untilAsserted(() ->
-                assertTrue(RECEIVED.stream().filter(p -> p.startsWith(code + "|")).count() > afterUpdate,
+                assertTrue(received.stream().filter(p -> p.startsWith(code + "|")).count() > afterUpdate,
                         "disable/enable must publish its own invalidate"));
         assertEquals(200, postJson("/api/links/" + code + "/disable", "{}", token).getStatusCode().value());
 
         assertEquals(200, delete("/api/links/" + code, token).getStatusCode().value());
         Awaitility.await().atMost(10, TimeUnit.SECONDS).untilAsserted(() -> {
-            long afterDelete = RECEIVED.stream().filter(p -> p.startsWith(code + "|")).count();
+            long afterDelete = received.stream().filter(p -> p.startsWith(code + "|")).count();
             assertTrue(afterDelete > afterUpdate + 1,
                     "delete must publish too (update + disable + delete = at least 3)");
         });
@@ -129,9 +133,9 @@ class L1InvalidateIT extends AbstractIntegrationTest {
         assertEquals(200, patched.getStatusCode().value(), patched.getBody());
 
         Awaitility.await().atMost(10, TimeUnit.SECONDS).untilAsserted(() ->
-                assertTrue(RECEIVED.stream().anyMatch(p -> p.startsWith(code + "|")),
+                assertTrue(received.stream().anyMatch(p -> p.startsWith(code + "|")),
                         "the update broadcast must have arrived so the test knows the app origin"));
-        String appOrigin = RECEIVED.stream().filter(p -> p.startsWith(code + "|")).findFirst()
+        String appOrigin = received.stream().filter(p -> p.startsWith(code + "|")).findFirst()
                 .orElseThrow().split("\\|", 2)[1];
 
         String freshUrl = l1.getIfPresent(code);
