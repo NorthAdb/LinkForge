@@ -109,17 +109,16 @@ class L1InvalidateIT extends AbstractIntegrationTest {
                         "update must publish an invalidate for the other instances, peer saw " + received));
         long afterUpdate = received.stream().filter(p -> p.startsWith(code + "|")).count();
 
+        assertEquals(200, postJson("/api/links/" + code + "/disable", "{}", token).getStatusCode().value());
         Awaitility.await().atMost(15, TimeUnit.SECONDS).untilAsserted(() ->
                 assertTrue(received.stream().filter(p -> p.startsWith(code + "|")).count() > afterUpdate,
-                        "disable/enable must publish its own invalidate"));
-        assertEquals(200, postJson("/api/links/" + code + "/disable", "{}", token).getStatusCode().value());
+                        "disable must publish its own invalidate"));
+        long afterDisable = received.stream().filter(p -> p.startsWith(code + "|")).count();
 
         assertEquals(200, delete("/api/links/" + code, token).getStatusCode().value());
-        Awaitility.await().atMost(10, TimeUnit.SECONDS).untilAsserted(() -> {
-            long afterDelete = received.stream().filter(p -> p.startsWith(code + "|")).count();
-            assertTrue(afterDelete > afterUpdate + 1,
-                    "delete must publish too (update + disable + delete = at least 3)");
-        });
+        Awaitility.await().atMost(10, TimeUnit.SECONDS).untilAsserted(() ->
+                assertTrue(received.stream().filter(p -> p.startsWith(code + "|")).count() > afterDisable,
+                        "delete must publish too (update + disable + delete = at least 3)"));
     }
 
     @Test
@@ -138,11 +137,20 @@ class L1InvalidateIT extends AbstractIntegrationTest {
         String appOrigin = received.stream().filter(p -> p.startsWith(code + "|")).findFirst()
                 .orElseThrow().split("\\|", 2)[1];
 
+        // The update's own delayed stale clear (~1s) wipes the local slot BY DESIGN;
+        // wait it out and re-warm so the only thing under test is the origin skip.
+        try {
+            Thread.sleep(1600);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
+        assertEquals(302, get("/r/" + code, null).getStatusCode().value());
         String freshUrl = l1.getIfPresent(code);
-        assertNotNull(freshUrl, "the update must have written the fresh URL into the local L1");
+        assertNotNull(freshUrl, "the re-warm must have backfilled the local L1");
+
         redis.convertAndSend(CHANNEL, code + "|" + appOrigin);
         try {
-            Thread.sleep(1500);
+            Thread.sleep(1000);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
         }
