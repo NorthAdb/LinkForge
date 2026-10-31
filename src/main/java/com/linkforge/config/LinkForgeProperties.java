@@ -224,6 +224,9 @@ public class LinkForgeProperties {
         /** Sliding-window-log per-user limit for link creation. */
         private int createMax = 30;
         private int createWindowSeconds = 60;
+        /** D-C3-22: per-user limit for POST /api/links/import — one token per request, never per row. */
+        private int importMax = 5;
+        private int importWindowSeconds = 60;
         /** Sliding-window-log per-IP limit for public redirects. */
         private int redirectMax = 300;
         private int redirectWindowSeconds = 60;

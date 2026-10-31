@@ -26,7 +26,7 @@
   .row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
   .row-actions button { padding: 3px 8px; font-size: 12px; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
-  .msg { margin-top: 10px; font-size: 13px; }
+  .msg { margin-top: 10px; font-size: 13px; white-space: pre-line; }
   .msg.err { color: #dc2626; }
   .msg.ok { color: #059669; }
   .stats-line { color: var(--muted); font-size: 12px; }
@@ -87,6 +87,8 @@
     <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
       <button onclick="createLink()">创建</button>
       <a href="#" id="exportLink" onclick="this.href='/api/links/export';return true;">导出 CSV</a>
+      <input type="file" id="importFile" accept=".csv,text/csv" style="width:auto">
+      <button class="ghost" onclick="importCsv()">导入 CSV</button>
       <span class="stats-line">幂等：同 Idempotency-Key 重复提交会返回同一短码</span>
     </div>
     <div class="msg" id="createMsg"></div>
@@ -216,6 +218,22 @@ async function createLink() {
   loadLinks();
 }
 
+async function importCsv() {
+  const file = $('importFile').files[0];
+  if (!file) return setMsg('createMsg', '导入失败：请先选择 CSV 文件', false);
+  const form = new FormData();
+  form.append('file', file);
+  const resp = await fetch('/api/links/import', { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: form });
+  let json = {}; try { json = await resp.json(); } catch (e) {}
+  if (!resp.ok || json.code !== 0) return setMsg('createMsg', '导入失败：' + (json.message || ('HTTP ' + resp.status)), false);
+  const d = json.data;
+  // setMsg writes textContent, so failure reasons need no esc() (and would double-escape).
+  const lines = ['成功 ' + d.successCount + ' 行，失败 ' + d.failureCount + ' 行'];
+  for (const f of (d.failures || [])) lines.push('第' + f.row + '行：' + f.reason);
+  setMsg('createMsg', lines.join('\n'), d.failureCount === 0);
+  loadLinks();
+}
+
 async function loadLinks() {
   const r = await api('GET', '/api/links?page=' + page + '&size=10');
   if (r.error) return setMsg('listMsg', '加载失败：' + r.error, false);
@@ -241,12 +259,13 @@ function turnPage(d) { page = Math.max(1, page + d); loadLinks(); }
 async function showStats(code) {
   const el = $('st-' + code);
   el.textContent = '统计加载中…';
-  const [r, dev, ref, os, browser] = await Promise.all([
+  const [r, dev, ref, os, browser, variant] = await Promise.all([
     api('GET', `/api/links/${code}/stats?days=7`),
     api('GET', `/api/links/${code}/stats/breakdown?dim=device&days=7`),
     api('GET', `/api/links/${code}/stats/breakdown?dim=referer_host&days=7`),
     api('GET', `/api/links/${code}/stats/breakdown?dim=os&days=7`),
-    api('GET', `/api/links/${code}/stats/breakdown?dim=browser&days=7`)
+    api('GET', `/api/links/${code}/stats/breakdown?dim=browser&days=7`),
+    api('GET', `/api/links/${code}/stats/breakdown?dim=variant&days=7`)
   ]);
   if (r.error) { el.textContent = '统计加载失败'; return; }
   const days = r.data.daily.slice(-7).map(d => `${d.date.slice(5)}:${d.clicks}/UV${d.uv}`).join('  ');
@@ -255,7 +274,8 @@ async function showStats(code) {
     + `<br>设备：${fmt(dev)}`
     + `<br>来源：${fmt(ref)}`
     + `<br>系统：${fmt(os)}`
-    + `<br>浏览器：${fmt(browser)}`;
+    + `<br>浏览器：${fmt(browser)}`
+    + `<br>分流：${fmt(variant)}`;
 }
 async function toggle(code, isActive) {
   const r = await api('POST', `/api/links/${code}/${isActive ? 'disable' : 'enable'}`);

@@ -4,6 +4,7 @@ import com.linkforge.common.result.ApiResponse;
 import com.linkforge.common.result.PageResponse;
 import com.linkforge.link.dto.CreateShortLinkRequest;
 import com.linkforge.link.dto.CreateShortLinkResponse;
+import com.linkforge.link.dto.ImportResponse;
 import com.linkforge.link.dto.QrShareRequest;
 import com.linkforge.link.dto.QrShareResponse;
 import com.linkforge.link.dto.ShortLinkDetail;
@@ -29,6 +30,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/links")
@@ -56,6 +58,13 @@ public class ShortLinkController {
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=links.csv")
                 .body(shortLinkService.exportOwnCsv());
+    }
+
+    /** C3 (D-C3-14): synchronous CSV import. D-C3-23: the Idempotency-Key header is
+     * deliberately not honored on imports — the response itself reports every row. */
+    @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ApiResponse<ImportResponse> importCsv(@RequestParam("file") MultipartFile file) {
+        return ApiResponse.ok(shortLinkService.importCsv(file));
     }
 
     @GetMapping("/{code}")

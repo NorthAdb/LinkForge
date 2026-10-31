@@ -2,6 +2,7 @@ package com.linkforge.link.dto;
 
 import com.fasterxml.jackson.annotation.JsonAnySetter;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -9,6 +10,7 @@ import lombok.Data;
 
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @Data
@@ -54,6 +56,10 @@ public class CreateShortLinkRequest {
     @Pattern(regexp = "[A-Za-z0-9._-]*", message = "utmContent must be letters, digits, dot, underscore or hyphen")
     @Size(max = 64, message = "utmContent too long")
     private String utmContent;
+
+    /** C3 A/B (D-C3-6): optional weighted targets; null = absent, [] = none. The
+     * chain-level originalUrl stays required (D-C3-5) — gates and UTM keep living there. */
+    private List<@Valid VariantSpec> variants;
 
     /** D-C1-8: unknown props land here; the service 400s utm* and click-attribution
      * ids captured this way, everything else stays silently ignored. */

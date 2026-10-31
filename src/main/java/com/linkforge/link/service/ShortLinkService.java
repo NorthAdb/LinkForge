@@ -13,14 +13,19 @@ import com.linkforge.common.util.ClientIps;
 import com.linkforge.config.LinkForgeProperties;
 import com.linkforge.link.dto.CreateShortLinkRequest;
 import com.linkforge.link.dto.CreateShortLinkResponse;
+import com.linkforge.link.dto.ImportResponse;
 import com.linkforge.link.dto.ShortLinkDetail;
 import com.linkforge.link.dto.UpdateShortLinkRequest;
+import com.linkforge.link.dto.VariantSpec;
+import com.linkforge.link.entity.LinkVariant;
 import com.linkforge.link.entity.ShortLink;
+import com.linkforge.link.mapper.LinkVariantMapper;
 import com.linkforge.link.mapper.ShortLinkMapper;
 import com.linkforge.link.support.CacheBus;
 import com.linkforge.link.support.CodeBloomFilter;
 import com.linkforge.link.support.ClickFilter;
 import com.linkforge.link.support.CsvFormat;
+import com.linkforge.link.support.CsvImportParser;
 import com.linkforge.link.support.LinkAccessTokens;
 import com.linkforge.link.support.LinkValidations;
 import com.linkforge.link.support.PhishingPolicy;
@@ -30,6 +35,7 @@ import com.linkforge.link.support.SingleFlight;
 import com.linkforge.link.support.TargetPolicy;
 import com.linkforge.link.support.UrlLocalCache;
 import com.linkforge.link.support.UtmMerger;
+import com.linkforge.link.support.VariantPicker;
 import com.linkforge.security.AuthUser;
 import com.linkforge.security.UserContext;
 import com.linkforge.stats.service.ClickRecordService;
@@ -38,19 +44,29 @@ import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.regex.Pattern;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
@@ -73,8 +89,15 @@ public class ShortLinkService {
     private static final Pattern UTM_PREFIX = Pattern.compile("^utm", Pattern.CASE_INSENSITIVE);
     private static final Set<String> CLICK_ATTRIBUTION_IDS = Set.of(
             "gclid", "fbclid", "msclkid", "ttclid", "yclid", "dclid", "igshid", "wbraid", "gbraid");
+    /** D-C3-7: hard cap on variants per link. */
+    private static final int MAX_VARIANTS = 10;
+    /** D-C3-25/16: 256 KiB per import file, 100 data rows per import. */
+    private static final int MAX_IMPORT_BYTES = 256 * 1024;
+    private static final int MAX_IMPORT_ROWS = 100;
+    private static final String COLUMN_ORIGINAL_URL = "original_url";
 
     private final ShortLinkMapper shortLinkMapper;
+    private final LinkVariantMapper variantMapper;
     private final StringRedisTemplate stringRedisTemplate;
     private final LinkForgeProperties properties;
     private final ClickRecordService clickRecordService;
@@ -88,6 +111,7 @@ public class ShortLinkService {
     private final ClickFilter clickFilter;
     private final PhishingPolicy phishingPolicy;
     private final LinkAccessTokens linkAccessTokens;
+    private final TransactionTemplate transactionTemplate;
     private final org.springframework.security.crypto.password.PasswordEncoder passwordEncoder;
 
     private final ScheduledExecutorService evictor = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -163,6 +187,9 @@ public class ShortLinkService {
         if (request.getExpireAt() != null && !request.getExpireAt().isAfter(LocalDateTime.now())) {
             throw new BizException("expireAt must be in the future");
         }
+        // D-C3-7: validate before ANY write so a bad variant cannot leave a minted link.
+        List<LinkVariant> variants = request.getVariants() == null
+                ? List.of() : validateVariants(request.getVariants());
         String customCode = request.getCustomCode() == null ? null : request.getCustomCode().trim();
         if (customCode != null && !customCode.isEmpty()) {
             LinkValidations.requireValidCustomCode(customCode);
@@ -204,6 +231,10 @@ public class ShortLinkService {
         }
         if (!inserted) {
             throw new BizException("failed to allocate short code");
+        }
+        if (!variants.isEmpty()) {
+            // D-C3-2: all rows or none — the code must never resolve with a half-written set.
+            transactionTemplate.executeWithoutResult(status -> insertVariants(link, variants));
         }
 
         codeBloom.put(link.getCode());
@@ -265,8 +296,128 @@ public class ShortLinkService {
                 CsvFormat.escape(l.getCreatedAt() == null ? "" : l.getCreatedAt().toString())) + "\n";
     }
 
+    /**
+     * D-C3-14..25: synchronous CSV import. One import:user sliding-window token per
+     * request (D-C3-22, never the create:user window); structural rejects fire before
+     * ANY write; then each record runs {@link #doCreate} independently so one bad row
+     * is a report entry while its neighbours stay committed (D-C3-19/20/21 — Bloom,
+     * broadcast and cache warm come from doCreate's tail, no divergent validation).
+     */
+    public ImportResponse importCsv(MultipartFile file) {
+        AuthUser user = requireUser();
+        LinkForgeProperties.RateLimit rl = properties.getRateLimit();
+        RateLimitDecision decision = rateLimiter.acquire(
+                RateLimitKeys.sw(rl.getKeyPrefix(), "import:user:" + user.getUserId()),
+                rl.getImportMax(), rl.getImportWindowSeconds());
+        if (!decision.allowed()) {
+            meterRegistry.counter("linkforge.ratelimit.rejected", "entry", "import").increment();
+            throw new RateLimitedException(decision.retryAfterSeconds());
+        }
+        if (file == null || file.isEmpty()) {
+            throw new BizException("file is required");
+        }
+        if (file.getSize() > MAX_IMPORT_BYTES) {
+            throw new BizException("file must be at most 256 KiB");
+        }
+        String text;
+        try {
+            text = new String(file.getBytes(), StandardCharsets.UTF_8);
+        } catch (IOException ex) {
+            throw new BizException("failed to read uploaded file");
+        }
+
+        CsvImportParser.ParsedCsv parsed = CsvImportParser.parse(text);
+        if (!parsed.header().contains(COLUMN_ORIGINAL_URL)) {
+            throw new BizException("missing required column " + COLUMN_ORIGINAL_URL);
+        }
+        if (parsed.rows().size() > MAX_IMPORT_ROWS) {
+            throw new BizException("at most " + MAX_IMPORT_ROWS + " data rows per import");
+        }
+        Map<String, Integer> columns = new HashMap<>();
+        for (int i = 0; i < parsed.header().size(); i++) {
+            columns.putIfAbsent(parsed.header().get(i), i);
+        }
+        List<ImportResponse.RowSuccess> successes = new ArrayList<>();
+        List<ImportResponse.RowFailure> failures = new ArrayList<>();
+        for (CsvImportParser.CsvRow row : parsed.rows()) {
+            if (row.cells().stream().allMatch(c -> c == null || c.isBlank())) {
+                continue;
+            }
+            try {
+                CreateShortLinkResponse created = doCreate(importRowRequest(row, columns), user, null);
+                successes.add(new ImportResponse.RowSuccess(row.fileLine(), created.getCode()));
+            } catch (BizException | DataIntegrityViolationException ex) {
+                failures.add(new ImportResponse.RowFailure(row.fileLine(), rowReason(ex)));
+            }
+        }
+        return new ImportResponse(successes.size(), failures.size(), successes, failures);
+    }
+
+    /** Maps one parsed record onto the create contract. Rejects are BizExceptions so a
+     * bad cell becomes a failure ROW, never a 500. Values are never logged (the
+     * access_password column especially, D-C3-25). */
+    private static CreateShortLinkRequest importRowRequest(CsvImportParser.CsvRow row,
+                                                           Map<String, Integer> columns) {
+        CreateShortLinkRequest request = new CreateShortLinkRequest();
+        String url = cell(row, columns, COLUMN_ORIGINAL_URL);
+        if (url == null || url.isBlank()) {
+            throw new BizException("original_url required");
+        }
+        request.setOriginalUrl(url.trim());
+        setIfPresent(request, row, columns, "title", CreateShortLinkRequest::setTitle);
+        setIfPresent(request, row, columns, "custom_code", CreateShortLinkRequest::setCustomCode);
+        setIfPresent(request, row, columns, "access_password", CreateShortLinkRequest::setAccessPassword);
+        setIfPresent(request, row, columns, "utm_source", CreateShortLinkRequest::setUtmSource);
+        setIfPresent(request, row, columns, "utm_medium", CreateShortLinkRequest::setUtmMedium);
+        setIfPresent(request, row, columns, "utm_campaign", CreateShortLinkRequest::setUtmCampaign);
+        setIfPresent(request, row, columns, "utm_term", CreateShortLinkRequest::setUtmTerm);
+        setIfPresent(request, row, columns, "utm_content", CreateShortLinkRequest::setUtmContent);
+        String expireAt = cell(row, columns, "expire_at");
+        if (expireAt != null && !expireAt.isBlank()) {
+            try {
+                request.setExpireAt(LocalDateTime.parse(expireAt.trim()));
+            } catch (DateTimeParseException ex) {
+                throw new BizException("expire_at must be ISO-8601 like 2027-01-01T00:00:00");
+            }
+        }
+        return request;
+    }
+
+    private static void setIfPresent(CreateShortLinkRequest request, CsvImportParser.CsvRow row,
+                                     Map<String, Integer> columns, String column,
+                                     BiConsumer<CreateShortLinkRequest, String> setter) {
+        String value = cell(row, columns, column);
+        if (value != null && !value.isBlank()) {
+            setter.accept(request, value.trim());
+        }
+    }
+
+    /** null = the header has no such column (or this record is shorter than the header). */
+    private static String cell(CsvImportParser.CsvRow row, Map<String, Integer> columns, String name) {
+        Integer index = columns.get(name);
+        if (index == null || index >= row.cells().size()) {
+            return null;
+        }
+        return row.cells().get(index);
+    }
+
+    /** Spring constraint messages leak SQL/DDL detail; the BizException messages are
+     * already the short 400-style strings (and never echo the blocked domain). */
+    private static String rowReason(Exception ex) {
+        if (ex instanceof DataIntegrityViolationException) {
+            return "row violates a database constraint";
+        }
+        return ex.getMessage();
+    }
+
     public ShortLinkDetail detail(String code) {
-        return toDetail(getOwnedLink(code));
+        ShortLink link = getOwnedLink(code);
+        ShortLinkDetail detail = toDetail(link);
+        List<LinkVariant> variants = variantMapper.selectByLinkId(link.getId());
+        if (!variants.isEmpty()) {
+            detail.setVariants(toViews(variants));
+        }
+        return detail;
     }
 
     public ShortLinkDetail update(String code, UpdateShortLinkRequest request) {
@@ -277,7 +428,7 @@ public class ShortLinkService {
         Map<String, String> utm = UtmMerger.canonical(request.getUtmSource(), request.getUtmMedium(),
                 request.getUtmCampaign(), request.getUtmTerm(), request.getUtmContent());
         if (!hasUrl && request.getTitle() == null && request.getExpireAt() == null
-                && !clearPassword && !setPassword && utm.isEmpty()) {
+                && !clearPassword && !setPassword && utm.isEmpty() && request.getVariants() == null) {
             throw new BizException("nothing to update");
         }
         if (clearPassword && setPassword) {
@@ -286,6 +437,10 @@ public class ShortLinkService {
         if (request.getExpireAt() != null && !request.getExpireAt().isAfter(LocalDateTime.now())) {
             throw new BizException("expireAt must be in the future");
         }
+        // D-C3-7: validate the replacement set before ANY write (whole-set semantics,
+        // D-C3-6: null = untouched, [] = clear back to single-target).
+        List<LinkVariant> replacement = request.getVariants() == null
+                ? null : validateVariants(request.getVariants());
         ShortLink link = getOwnedLink(code);
         String effectiveUrl = link.getOriginalUrl();
         // D-C1-6: utm fields alone are a valid update; merge into the provided or the
@@ -320,6 +475,13 @@ public class ShortLinkService {
             link.setAccessPasswordHash(null);
         }
         shortLinkMapper.updateById(link);
+        if (replacement != null) {
+            transactionTemplate.executeWithoutResult(status -> {
+                variantMapper.delete(new LambdaQueryWrapper<LinkVariant>()
+                        .eq(LinkVariant::getLinkId, link.getId()));
+                insertVariants(link, replacement);
+            });
+        }
         singleFlight.forget(code, priorFlight);
         // Write-through now, then a delayed delete clears any stale write-back a racing
         // reader may have cached from the pre-commit row. Final consistency window ~1s.
@@ -375,7 +537,7 @@ public class ShortLinkService {
                 meterRegistry.counter("linkforge.click.skipped", "reason", skip.get().tag()).increment();
                 return redirect;
             }
-            clickRecordService.recordClick(redirect.link(), request);
+            clickRecordService.recordClick(redirect.link(), request, redirect.variantKey());
             meterRegistry.counter("linkforge.redirects").increment();
         }
         return outcome;
@@ -493,7 +655,22 @@ public class ShortLinkService {
                         TargetPolicy.asciiHost(link.getOriginalUrl()));
             }
         }
-        return new RedirectOutcome.Redirect(link, originalUrl);
+        // D-C3-8/10: the draw happens only after every gate passed, and a non-empty
+        // variant set always wins over the cached originalUrl (the cache stays a
+        // single-URL hint, never the Location truth for a split link).
+        LinkVariant picked = pickVariant(link.getId());
+        return new RedirectOutcome.Redirect(link,
+                picked != null ? picked.getTargetUrl() : originalUrl,
+                picked != null ? picked.getVariantKey() : null);
+    }
+
+    /** D-C3-8: weighted draw over the link's variants; null = single-target link. */
+    private LinkVariant pickVariant(Long linkId) {
+        List<LinkVariant> variants = variantMapper.selectByLinkId(linkId);
+        if (variants.isEmpty()) {
+            return null;
+        }
+        return VariantPicker.pick(variants, ThreadLocalRandom.current()::nextDouble);
     }
 
     /** B3: the unlock cookie for this code, or null when the request carries none. */
@@ -592,6 +769,47 @@ public class ShortLinkService {
             throw new BizException("accessPassword must be 4-64 characters");
         }
         return passwordEncoder.encode(trimmed);
+    }
+
+    /** D-C3-7: same URL rules as create, plus the per-link caps; tenantId/linkId are
+     * filled at insert time. */
+    private List<LinkVariant> validateVariants(List<VariantSpec> specs) {
+        if (specs.size() > MAX_VARIANTS) {
+            throw new BizException("at most " + MAX_VARIANTS + " variants per link");
+        }
+        Set<String> keys = new HashSet<>();
+        List<LinkVariant> rows = new ArrayList<>(specs.size());
+        for (VariantSpec spec : specs) {
+            if (!keys.add(spec.getKey())) {
+                throw new BizException("variant keys must be unique within a link");
+            }
+            String url = spec.getUrl().trim();
+            LinkValidations.requireHttpUrl(url);
+            rejectBlockedTarget(url);
+            LinkVariant row = new LinkVariant();
+            row.setVariantKey(spec.getKey());
+            row.setTargetUrl(url);
+            row.setWeight(spec.getWeight());
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    private void insertVariants(ShortLink link, List<LinkVariant> variants) {
+        LocalDateTime now = LocalDateTime.now();
+        for (LinkVariant variant : variants) {
+            variant.setTenantId(link.getTenantId());
+            variant.setLinkId(link.getId());
+            variant.setCreatedAt(now);
+            variant.setUpdatedAt(now);
+            variantMapper.insert(variant);
+        }
+    }
+
+    private static List<ShortLinkDetail.VariantView> toViews(List<LinkVariant> variants) {
+        return variants.stream()
+                .map(v -> new ShortLinkDetail.VariantView(v.getVariantKey(), v.getTargetUrl(), v.getWeight()))
+                .toList();
     }
 
     /** D-C1-6/7: write-time merge; a merge past the 2048 column cap is a 400, never a DB error. */
@@ -726,9 +944,10 @@ public class ShortLinkService {
         }
     }
 
+    /** List/table rows keep variants null (populated only by {@link #detail(String)}). */
     private static ShortLinkDetail toDetail(ShortLink link) {
         return new ShortLinkDetail(link.getId(), link.getCode(), link.getOriginalUrl(), link.getTitle(),
                 link.getStatus(), link.getExpireAt(), link.getCreatedAt(), link.getUpdatedAt(),
-                link.getAccessPasswordHash() != null);
+                link.getAccessPasswordHash() != null, null);
     }
 }

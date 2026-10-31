@@ -132,7 +132,7 @@ class WebhookAggregateIT extends AbstractIntegrationTest {
 
     private void consumeClick(String tenantId, String eventId, String code, LocalDateTime clickedAt) {
         ClickEvent event = new ClickEvent(eventId, Long.valueOf(tenantId), 1L, code, 1L,
-                "203.0.113.5", "Mozilla/5.0 (aggregate-it)", "https://news.example.com/", clickedAt);
+                "203.0.113.5", "Mozilla/5.0 (aggregate-it)", "https://news.example.com/", clickedAt, null);
         assertTrue(clickStatsService.consume(event), "consume must win: " + eventId);
     }
 

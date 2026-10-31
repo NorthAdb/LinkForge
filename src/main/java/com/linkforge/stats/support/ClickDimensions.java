@@ -15,6 +15,8 @@ public final class ClickDimensions {
     public static final String TYPE_REFERER_HOST = "referer_host";
     public static final String TYPE_OS = "os";
     public static final String TYPE_BROWSER = "browser";
+    /** C3: A/B split bucket; not UA-derived, written only when the click drew a variant. */
+    public static final String TYPE_VARIANT = "variant";
 
     private static final List<String> BOT_TOKENS = List.of(
             "bot", "spider", "crawler", "slurp", "curl", "wget", "python-requests",

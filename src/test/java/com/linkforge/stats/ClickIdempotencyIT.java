@@ -75,7 +75,7 @@ class ClickIdempotencyIT extends AbstractIntegrationTest {
         long linkId = linkIdOf(code, token);
 
         ClickEvent event = new ClickEvent("it-" + System.currentTimeMillis(), 1L, linkId, code,
-                null, "127.0.0.1", "it-ua", null, LocalDateTime.now());
+                null, "127.0.0.1", "it-ua", null, LocalDateTime.now(), null);
         syntheticEventIds.add(event.getEventId());
         syntheticCodes.add(code);
         syntheticLinkIds.add(linkId);
@@ -96,9 +96,9 @@ class ClickIdempotencyIT extends AbstractIntegrationTest {
         syntheticLinkIds.add(linkId);
 
         ClickEvent yesterday = new ClickEvent("it-a" + stamp, 1L, linkId, code,
-                null, null, null, null, LocalDateTime.now().minusDays(1));
+                null, null, null, null, LocalDateTime.now().minusDays(1), null);
         ClickEvent today = new ClickEvent("it-b" + stamp, 1L, linkId, code,
-                null, null, null, null, LocalDateTime.now());
+                null, null, null, null, LocalDateTime.now(), null);
         syntheticEventIds.add(yesterday.getEventId());
         syntheticEventIds.add(today.getEventId());
 

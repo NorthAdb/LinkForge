@@ -9,6 +9,7 @@ import org.springframework.validation.BindException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -56,6 +57,16 @@ public class GlobalExceptionHandler {
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public ApiResponse<Void> handleMissingParam(MissingServletRequestParameterException ex) {
         return ApiResponse.fail(400, ex.getParameterName() + " is required");
+    }
+
+    /**
+     * The multipart resolver throws before any controller runs, so the catch-all below
+     * would render an over-cap upload as a 500 (D-C3-25 caps import files at 256 KiB).
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public ApiResponse<Void> handleOversizedUpload(MaxUploadSizeExceededException ex) {
+        return ApiResponse.fail(400, "uploaded file exceeds the size limit");
     }
 
     @ExceptionHandler(Exception.class)

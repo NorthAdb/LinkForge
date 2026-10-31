@@ -5,7 +5,7 @@
 ![Java](https://img.shields.io/badge/Java-17-orange)
 ![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.3.5-6DB33F)
 ![MySQL·Redis·RabbitMQ](https://img.shields.io/badge/MySQL%20%C2%B7%20Redis%20%C2%B7%20RabbitMQ-8%20%C2%B7%207%20%C2%B7%203.13-informational)
-![tests](https://img.shields.io/badge/tests-281%20%28133%2B146%2B2%29-brightgreen)
+![tests](https://img.shields.io/badge/tests-307%20%28144%2B161%2B2%29-brightgreen)
 
 多租户短链 + 访问分析后端服务。**v2.0.0**＝P0–P5 全阶段交付（v1.0.0）+ 深化 A2–A10 + B 档波 1–5（B7/B8、B4/B5、B6/B2/B9/B3/B1），多轮外部审计通过。
 
@@ -33,13 +33,15 @@
 |------|------|------|
 | 认证 | JWT 登录 / 开放注册（按 IP 限流）/ bootstrap 演示租户 / 多租户隔离 | [认证与多租户](#认证与多租户) |
 | 短链 | CRUD、自定义短码（区分大小写）、过期/禁用、创建幂等、并发不撞码、CSV 导出、QR 物料 + 短时分享链、UTM 写时合并 | [短链管理](#短链管理)、[物料与投放](#物料与投放c1qr--utm) |
+| 短链 | A/B 权重分流：一码多目标（≤10）按权重抽签，密码/门禁/UTM 仍链层，统计按 variant 分桶 | [A/B 权重分流与批量导入](#ab-权重分流与批量导入c3) |
+| 短链 | 批量 CSV 导入：POST /api/links/import 同步 multipart ≤100 行，部分失败返回文件行号+原因，专用 import 限流 | [A/B 权重分流与批量导入](#ab-权重分流与批量导入c3) |
 | 跳转 | 302 + HEAD 探测；五层读取防护（限流→Bloom→空值缓存→L1/L2→singleflight） | [跳转读取路径](#跳转读取路径五层防护) |
 | 限流 | Redis 滑动窗口日志（精确计数、Redis TIME 时钟、Retry-After）+ 日固定配额 | [限流体系](#限流体系b6滑动窗口) |
 | 统计 | 同事务 Outbox + Relay 投递 + 幂等消费 + 断链自动追平；精确 UV；设备/来源维度 | [点击统计管道](#点击统计管道a7-transactional-outbox)、[维度分析](#维度分析a8-预聚合) |
 | 安全 | BCrypt 密码短链（签名 cookie、先限流后校验）、本地域名名单门禁（BLOCK/WARN）、非人点击不计 | [密码短链](#密码短链b3)、[域名门禁](#目标域名名单门禁b9)、[非人点击](#非人点击b2预取与预览-bot-照常-302-但不计) |
 | 开放 | API Key（哈希存储+配额，USER/TENANT 双 scope、TENANT 仅 ADMIN 签发）、点击 Webhook（HMAC 签名、AES-256-GCM at-rest、SSRF 防护、逐次/聚合双模式） | [开放能力](#开放能力b4-api-key--b5-webhook) |
 | 可观测 | 令牌守卫的 `/actuator/prometheus`、Grafana 自动 provision 看板、积压 gauge | [可观测](#可观测b1-prometheus--grafana) |
-| 工程 | Flyway 版本化迁移（V1–V9）、测试 281 例（含 Testcontainers 集成 146）、GitHub Actions CI、prod profile 一键收紧 | [测试与质量](#-测试与质量) |
+| 工程 | Flyway 版本化迁移（V1–V10）、测试 307 例（含 Testcontainers 集成 161）、GitHub Actions CI、prod profile 一键收紧 | [测试与质量](#-测试与质量) |
 
 **明确不做**（冻结决策，详见[待办](docs/backlog.md)）：AI / PostgreSQL / Supabase / 向量库（整体延期另立方案）；Spring Cloud / Seata / 多机房；独立前端 SPA（静态控制台已够用）；云公网部署（D5=本地 Compose，prod profile 已备好收紧开关）。
 
@@ -177,7 +179,7 @@ PowerShell 里通常没有 `bash`（Git 默认只把 `Git\cmd` 放进 PATH）。
 & "C:\Program Files\Git\bin\bash.exe" scripts/smoke.sh
 ```
 
-浏览器入口是 `http://localhost:8080/` 极简控制台（登录、注册、建链、列表、启停、删除、统计、CSV 导出、访问密码、API Key、点击 Webhook。控制台是可选入口，走的是下面同一套 API，不另开接口）。接口文档是 `http://localhost:8080/swagger-ui/index.html`（springdoc 生成，prod 下关闭）。
+浏览器入口是 `http://localhost:8080/` 极简控制台（登录、注册、建链、列表、启停、删除、统计、CSV 导出、CSV 导入、访问密码、API Key、点击 Webhook。控制台是可选入口，走的是下面同一套 API，不另开接口）。接口文档是 `http://localhost:8080/swagger-ui/index.html`（springdoc 生成，prod 下关闭）。
 
 ### 常见坑
 
@@ -235,7 +237,7 @@ flowchart LR
 9. **B3 密码门**：无有效凭证 → 200 解锁页（HEAD 401），不计点击
 10. **B9 WARN** → 200 警示中间页，`?lf_continue=1` 只跳过 WARN 门
 11. **B2 分类**：预取/预览 bot 照常 302 但全链路不计
-12. **302 + 记点击**：同事务写明细 + outbox → 消费端幂等聚合
+12. **302 + 记点击**：有 variants 时先按权重抽签、`Location` 以抽签为准（见[A/B 权重分流与批量导入](#ab-权重分流与批量导入c3)）；同事务写明细（含所抽 variant）+ outbox → 消费端幂等聚合
 
 管理 API 的越权访问统一 404（不泄露他人短码存在性）；未携带/无效凭证 401；注册租户名冲突、短码占用 409。
 
@@ -256,16 +258,17 @@ flowchart LR
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/links` | 创建；可选 `expireAt`（未来）、`customCode`（4–16 位 `[A-Za-z0-9_-]`）、`Idempotency-Key` 头幂等重放、`accessPassword` 设密码保护 |
+| POST | `/api/links` | 创建；可选 `expireAt`（未来）、`customCode`（4–16 位 `[A-Za-z0-9_-]`）、`Idempotency-Key` 头幂等重放、`accessPassword` 设密码保护、`variants`（A/B 权重分流，≤10 组 `{key,url,weight}`，见[A/B 权重分流与批量导入](#ab-权重分流与批量导入c3)） |
 | GET | `/api/links?page=&size=` | 分页列表（仅本人创建；size 1..100 默认 20） |
-| GET | `/api/links/{code}` | 详情（多一个 `passwordProtected` 布尔） |
-| PATCH | `/api/links/{code}` | 改目标 URL / 备注 / 过期时间；设/换密码用 `accessPassword`、清除用 `clearAccessPassword:true`（两者同发 400） |
+| GET | `/api/links/{code}` | 详情（多 `passwordProtected` 布尔与 `variants` 列表） |
+| PATCH | `/api/links/{code}` | 改目标 URL / 备注 / 过期时间；设/换密码用 `accessPassword`、清除用 `clearAccessPassword:true`（两者同发 400）；`variants` 整表替换（不传=不动、空数组=清空） |
 | POST | `/api/links/{code}/disable` `/enable` | 禁用/启用（过期时间不受影响） |
 | DELETE | `/api/links/{code}` | 逻辑删除；**短码永久保留不可复用** |
 | GET | `/api/links/{code}/stats?days=7` | 总量、精确 UV（按 IP 去重）+ 按天序列；days 1..90 |
-| GET | `/api/links/{code}/stats/breakdown?dim=device\|referer_host` | 维度分布（口径是点击数不是 UV） |
+| GET | `/api/links/{code}/stats/breakdown?dim=device\|referer_host\|os\|browser\|variant` | 维度分布（口径是点击数不是 UV） |
 | GET | `/api/links/{code}/clicks?page=&size=` | 点击明细（时间/IP/UA/Referer） |
 | GET | `/api/links/export` | CSV（UTF-8 BOM；1 万行上限；哈希/明文永不出现在任何导出） |
+| POST | `/api/links/import` | CSV 批量导入（multipart 字段 `file`；同步处理 ≤100 数据行；部分失败返回文件行号+原因，见[A/B 权重分流与批量导入](#ab-权重分流与批量导入c3)） |
 | GET | `/r/{code}` | 302 跳转（全判定链见上节） |
 | HEAD | `/r/{code}` | 探测：302/404/410 与 GET 同档，**不写明细、不发 MQ、不计 UV** |
 | POST | `/r/{code}/unlock` | 密码短链解锁表单（见[密码短链](#密码短链b3)） |
@@ -280,6 +283,7 @@ flowchart LR
 |------|------|------|
 | 注册 | 5 次 / 10 分钟 / IP | `LINKFORGE_REGISTER_MAX` `_WINDOW_SECONDS` |
 | 创建（含自定义码） | 30 次 / 分钟 / 用户 | `LINKFORGE_CREATE_RATE_MAX` `_WINDOW_SECONDS` |
+| 导入 | 5 次 / 分钟 / 用户（整次请求计一次，不占创建配额） | `LINKFORGE_IMPORT_RATE_MAX` `_WINDOW_SECONDS` |
 | 跳转 | 300 次 / 分钟 / IP | `LINKFORGE_REDIRECT_RATE_MAX` `_WINDOW_SECONDS` |
 | 解锁 | 5 次/300s 同 IP 同码 + 50 次/300s 同码 | `LINKFORGE_LINK_ACCESS_UNLOCK_*` |
 | API Key | 120 次/分钟 + 10000/日 / key | 创建时按 Key 覆盖 |
@@ -327,7 +331,7 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 只做消费路径：`consume` 在既有幂等事务内把 UA / Referer 解析进 `lf_click_dim_daily`，302 热路径零新增计算。
 
 - **设备桶**（bot 优先 → tablet → mobile → desktop → unknown；轻量确定性规则无第三方库）；**来源桶**（Referer 归一化 host，小写、去 `www.`、截断 128；缺失/非法 → direct）
-- API：`GET /api/links/{code}/stats/breakdown?dim=device|referer_host&days=1..90`（仅链主）；控制台同步展示
+- API：`GET /api/links/{code}/stats/breakdown?dim=device|referer_host|os|browser|variant&days=1..90`（仅链主）；控制台同步展示
 - 口径：维度计数是**点击数**，与 UV（按 IP 去重）不同；历史明细不回填
 
 ### 非人点击（B2：预取与预览 bot 照常 302 但不计）
@@ -367,8 +371,26 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 - **QR 图**：`GET /api/links/{code}/qr.png` → `image/png`。鉴权与链接面一致（所有者 JWT / 有权 API Key；TENANT Key 可读本租户），**无鉴权公开 PNG 路由不存在**；参数 `size` 128–1024（默认 256）、`margin` 0–4（默认 1）、`ec` L/M/Q/H（默认 M），非法即 400；响应 `Cache-Control: private, max-age=60`，不落盘不进 Redis
 - **码面内容**：永远是 `{public-base-url}/r/{code}`（`LINKFORGE_PUBLIC_BASE_URL`，默认 `http://localhost:8080`）——扫码走完整跳转/解锁/门禁/计数路径；**JWT、API Key、签名一律不进码面**；密码链出 QR 不绕过解锁
 - **短时分享链**：所有者 `POST /api/links/{code}/qr-share`（可选 `ttlSeconds`，钳制 1–3600，默认 300）→ `{base}/api/links/{code}/qr.png?exp=&sig=`。`sig = HMAC-SHA256(code|exp)`（密钥 `LINKFORGE_QR_SHARE_SECRET`，留空则由 `JWT_SECRET` 域分离派生，无需配置）；持签请求免登录下图，过期/改签 → 401；分享响应 `private, no-store`。实现：`QrShareAuthFilter` 只在验签通过时授予 `ROLE_QR_SHARE`——**没有 permitAll 路由**
-- **UTM 写入（write-time merge）**：建链/改链带 `utmSource/utmMedium/utmCampaign/utmTerm/utmContent`（各 ≤64，字符限 `[A-Za-z0-9._-]`），**合并进 `original_url` 存库**——跳转路径零改动、目标站分析可见；URL 上已有同名参数**不覆盖**；请求体出现其它 `utm*` 或已知投放 id（gclid/fbclid 等 9 个）→ 400；合并后超 2048 列宽 → 400。**本服务统计口径不变**（仍 device + referer_host，无 utm 维度桶）
+- **UTM 写入（write-time merge）**：建链/改链带 `utmSource/utmMedium/utmCampaign/utmTerm/utmContent`（各 ≤64，字符限 `[A-Za-z0-9._-]`），**合并进 `original_url` 存库**——跳转路径零改动、目标站分析可见；URL 上已有同名参数**不覆盖**；请求体出现其它 `utm*` 或已知投放 id（gclid/fbclid 等 9 个）→ 400；合并后超 2048 列宽 → 400。**本服务统计口径不变**（维度桶不含 utm）
 - **依赖**：QR 渲染用 ZXing `core`+`javase`，版本钉死 `3.5.3`（`zxing.version` property，升级需过 CVE 与解码回归）
+
+### A/B 权重分流与批量导入（C3）
+
+**A/B 权重分流**（一码多目标）：同一短码可挂 0..N 条加权 variant，N=0 时行为与旧链逐字一致（跳 `original_url`）。
+
+- **写路径**：创建/更新可选 `variants`（`[{key, url, weight}]`；key `[A-Za-z0-9_-]{1,32}` 同链唯一、区分大小写；weight 1..10000 正整数，按相对权重抽、总和不必为 100；每链 ≤10）。**整表替换语义**（不传=不动、空数组=清空回单目标），校验（数量、key 唯一、URL 走与创建同款 `requireHttpUrl` + 门禁 BLOCK 检查）在**任何写之前**，替换 delete+insert 走 `TransactionTemplate` 原子。`original_url` 仍必填（列表/QR/门禁/详情展示面不变）；详情 JSON 带 `variants`，CSV 导出保持旧 6 列不破脚本
+- **热路径**：抽签点在全部链层门禁（B9 BLOCK → B3 密码 → WARN 放行）通过后、构造 302 前（`VariantPicker` 权重累积抽签，每成功 302 一次索引点查，O(≤10)）；BLOCK/Locked/WARN 路径不查 variants；**门禁/密码/UTM 的评估对象仍是链层 `original_url`**。`unlock` 成功 303 回 `/r/{code}`，抽签发生在解锁后的 GET——密码链解锁后照常分流
+- **缓存与多实例**：L1/L2 仍缓存 `original_url` 作加速提示；**有 variants 时最终 `Location` 以抽签为准**。variants 变更（创建带 variants / 更新替换）走既有 `publishL1Invalidate` 广播（C2 链路，订阅只剔本地 L1）
+- **统计**：`V10__link_variant.sql` 建 `lf_link_variant`（`uk_link_variant (link_id, variant_key)`，`variant_key` 内联 `utf8mb4_0900_bin` 大小写敏感）+ `lf_click_log.variant` 可空列。点击事件带所抽 key，`consume` 在既有维度之后**仅当 variant 非空**写 `dim_type=variant`（无 variant 不写该维）；`dim=variant` 合法，`dim=geo` 等非法仍 400
+- **诚实边界**：按权重随机抽签，**非 Geo/地区/设备定向分流**（明确不做），无实验框架/显著性分析
+
+**批量 CSV 导入**：`POST /api/links/import`（multipart 字段 `file`，鉴权同 `/api/links/**`）。
+
+- **同步处理一次返回**，面向 ≤100 行量级；**非异步任务/队列/进度查询**（诚实边界）
+- **解析**：自写 `CsvImportParser`，零新依赖（RFC4180 风格：引号、双引号转义、引号内逗号/换行、CRLF/LF/lone CR、BOM；全空行跳过）。表头最小必填列 `original_url`，可选 `title`/`custom_code`/`expire_at`/`access_password`/`utm_*`（小写蛇形，未知列忽略）
+- **结构性拒绝在任何写之前 400**：>256 KiB、空文件、缺 `original_url` 列、>100 数据行、未闭合引号；超出 `spring.servlet.multipart` 上限同样 400（`MaxUploadSizeExceededException` 专用 handler，不走 500 兜底）
+- **部分成功**：逐行走与单链创建**同一路径**（`doCreate`——幂等 settle、Bloom put、广播、absent 清除、缓存写穿全部复用，防校验漂移），行级失败记 `{row, reason}`，**row=文件行号**（表头=1，首个数据行=2），成功行保留；响应 `{successCount, failureCount, successes:[{row,code}], failures:[{row,reason}]}`；失败 reason 固定短串，**密码列值永不回显**
+- **限流与幂等**：专用滑窗 `import:user:{userId}`（默认 5 次/60s，`LINKFORGE_IMPORT_RATE_MAX`/`_WINDOW_SECONDS`）整次请求计一次，**不占 create 配额**（100 行不会在创建滑窗第 31 行被 429）；`Idempotency-Key` 刻意不生效（响应本身逐行回报）
 
 ### 开放能力（B4 API Key + B5 Webhook）
 
@@ -414,7 +436,7 @@ curl -X POST -H "X-API-Key: lfk_xxxxxxxx_xxx" -H "Content-Type: application/json
 - **看板**：跳转 QPS/状态、P50/P95/P99（直方图）、SLO 达标率（≤100ms）与 5xx 率、跳过与限流拒绝、L1（本进程）/ L2（Redis）命中、Bloom（本进程）/ absent、singleflight、fail-open、Outbox/Webhook 积压、API Key、门禁与解锁、JVM/Hikari。L1 与 Bloom 面板不是集群命中率。**SLO 阈值是 Demo 目标不是生产承诺**；`DashboardMetricsIT` 断言看板引用的每个指标都真实存在于 scrape
 - **tag 有界**：任何 tag 不含 code/URL/域名/IP/用户/Key id，`uri` 只出现模板值（`/r/{code}`）；`http.server.requests` 开 percentile 直方图 + SLO 桶（仅该 meter）；积压 gauge（`BacklogGauges` 每 15s 采样，不在 scrape 线程查库，失败保留上次值）
 
-### 数据迁移（Flyway，V1–V9）
+### 数据迁移（Flyway，V1–V10）
 
 schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移（`baseline-on-migrate=true`）：
 
@@ -422,7 +444,7 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 - **已到 v1.0.0 schema 的存量卷**（表齐、无 `flyway_schema_history`）：自动记 baseline（version 1）跳过 V1，无需删卷，幂等可重复跑；`scripts/migrate.sh` 可对存量库单独驱动
 - **更老的卷**（缺 `lf_click_daily`/`lf_consumed_event`）：先按 `db/schema.sql` 里的 `CREATE TABLE IF NOT EXISTS` 补表（幂等）再启动
 
-`db/schema.sql` 仅作历史参考，不再被执行；新增 DDL 一律写 `db/migration` 新版本（V7 = `access_password_hash`；V8 = API Key `scope` + 用户 `tenant_role`；V9 = webhook 聚合三列 + `lf_webhook_agg_buffer`）。
+`db/schema.sql` 仅作历史参考，不再被执行；新增 DDL 一律写 `db/migration` 新版本（V7 = `access_password_hash`；V8 = API Key `scope` + 用户 `tenant_role`；V9 = webhook 聚合三列 + `lf_webhook_agg_buffer`；V10 = `lf_link_variant` + `lf_click_log.variant` 列）。
 
 ## ⚙️ 配置参考
 
@@ -442,6 +464,8 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 |------|------|
 | `LINKFORGE_REGISTER_MAX` / `_WINDOW_SECONDS` | 5 / 600 |
 | `LINKFORGE_CREATE_RATE_MAX` / `_WINDOW_SECONDS` | 30 / 60 |
+| `LINKFORGE_IMPORT_RATE_MAX` / `_WINDOW_SECONDS` | 5 / 60（整次 import 计一次，不占 create 配额） |
+| `spring.servlet.multipart.max-file-size` / `max-request-size` | 256KB / 512KB（仅导入端点接收上传；超出 → 400） |
 | `LINKFORGE_REDIRECT_RATE_MAX` / `_WINDOW_SECONDS` | 300 / 60 |
 | `LINKFORGE_TRUST_XFF` | false（仅可信反代后开） |
 
@@ -503,12 +527,12 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 
 ## 🧪 测试与质量
 
-- **281 例**（v2.0.0 发布口径 211 → v2.1 抛光 220 → C1 261 → C2 +20）：surefire 纯单测 **133** + failsafe Testcontainers 集成 **146** + 时区 fork **2**（`WebhookRetryClockIT` 独立 fork 到 Asia/Shanghai，钉 DB 时钟退避）。静态徽章会随例数变化，以本行拆分为准
+- **307 例**（v2.0.0 发布口径 211 → v2.1 抛光 220 → C1 261 → C2 +20 → C3 +26）：surefire 纯单测 **144** + failsafe Testcontainers 集成 **161** + 时区 fork **2**（`WebhookRetryClockIT` 独立 fork 到 Asia/Shanghai，钉 DB 时钟退避）。静态徽章会随例数变化，以本行拆分为准
 - **红先纪律**：每个特性先提交测试（CI 红 = 证据）再提交实现（CI 绿）；B 波 3+4+5 轮 13 次分支红全部留档根因（progress.md）
 - **CI**：GitHub Actions `mvn -B verify`（ubuntu + 原生 Docker Testcontainers），push 即跑，main 恒绿
-- **连接预算口径**：集成测试共享一个 Testcontainers MySQL（`--max-connections=500` 是**配置侧天花板**）；上下文峰值 ≈ 26×10+12×4 = **308 是最坏情形推导值**（每上下文 Hikari 同时满池的纸面相加；39 个 *IT、12 个显式 4，其中 C1/C2 新增各 3/4 个均 4；时区 fork 独立 JVM 另计），余量 192，全绿即零 `Too many connections`
+- **连接预算口径**：集成测试共享一个 Testcontainers MySQL（`--max-connections=500` 是**配置侧天花板**）；上下文峰值 ≈ 27×10+14×4 = **326 是最坏情形推导值**（每上下文 Hikari 同时满池的纸面相加；41 个 *IT、14 个显式 4，其中 C1/C2/C3 新增各 3/4/2 个均 4；时区 fork 独立 JVM 另计），余量 174，全绿即零 `Too many connections`
 - **对账演练**：`scripts/mq-drill.sh` / `scripts/outbox-drill.sh` 断 MQ 追平，回归皆绿
-- 审计证据与逐轮记录：[docs/progress.md](docs/progress.md)（1324 行，每阶段验收、决策、红绿史）
+- 审计证据与逐轮记录：[docs/progress.md](docs/progress.md)（1417 行，每阶段验收、决策、红绿史）
 
 ## 📈 性能与压测
 
@@ -530,6 +554,7 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 
 | 版本 | 日期 | 内容 |
 |------|------|------|
+| **C3（未发版）** | 2026-10-31 | 深化 C3：A/B 权重分流（一码多目标 ≤10 按权重抽签、密码/门禁/UTM 仍链层、`dim=variant` 统计分桶）+ 批量 CSV 导入（同步 multipart ≤100 行、部分失败返回文件行号+原因、专用 import 限流）；V10 迁移；测试 281→307；红先两块 CI 留档（conclusion 列） |
 | **C2（未发版）** | 2026-10-31 | 深化 C2：Bloom put 广播 + 定时 rebuild（24h + ADMIN 手动、单飞、旁路原子替换）+ L1 失效广播（origin 跳过、只剔 L1）；维度 os/browser（轻量 UA 规则，Geo 不做）；C1 审计 N1/N4 docs；测试 261→281；红先四轮 CI 留档（conclusion 列） |
 | **C1（未发版）** | 2026-10-31 | 深化 C1：QR 物料 + 短时签名分享链（ZXing 3.5.3）+ UTM 写时合并；API Key 双 scope（TENANT 仅租户 ADMIN 签发，租户级可见性）；Webhook 聚合推送（双触发 digest、at-least-once、part 续篇、late 标记）；V8/V9 迁移；测试 220→261；红先三轮 CI 留档 |
 | **v2.0.0** | 2026-10-25 | 深化 A2–A10（保留字/HEAD 探测/Flyway/Outbox/维度/Bloom/singleflight）+ B 档波 1–5：B7 空值缓存+TTL 抖动、B8 L1、B4 API Key、B5 Webhook、B6 滑动窗口限流、B2 非人点击不计、B9 域名名单门禁、B3 密码短链、B1 Prometheus+Grafana；测试 155→211；多轮审计（含两次修复轮）通过；tag `v2.0.0` |

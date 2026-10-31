@@ -2,12 +2,14 @@ package com.linkforge.link.dto;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonAnySetter;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @Data
@@ -49,6 +51,10 @@ public class UpdateShortLinkRequest {
     @Pattern(regexp = "[A-Za-z0-9._-]*", message = "utmContent must be letters, digits, dot, underscore or hyphen")
     @Size(max = 64, message = "utmContent too long")
     private String utmContent;
+
+    /** C3 A/B (D-C3-6): whole-set replace semantics — a submitted array is the link's
+     * complete variant collection (empty clears back to single-target), null = untouched. */
+    private List<@Valid VariantSpec> variants;
 
     /** D-C1-8: unknown props land here; the service 400s utm* and click-attribution
      * ids captured this way, everything else stays silently ignored. */

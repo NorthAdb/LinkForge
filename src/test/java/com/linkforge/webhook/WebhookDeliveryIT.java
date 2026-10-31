@@ -280,7 +280,7 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
         Long tenantId = tenantIdOf(token);
         String eventId = "evt-" + UUID.randomUUID();
         ClickEvent event = new ClickEvent(eventId, tenantId, 1L, "hookcase", 1L,
-                "203.0.113.9", "Mozilla/5.0 (iPhone)", "https://news.example.com/", LocalDateTime.now());
+                "203.0.113.9", "Mozilla/5.0 (iPhone)", "https://news.example.com/", LocalDateTime.now(), null);
 
         assertTrue(clickStatsService.consume(event), "first consume wins");
         assertFalse(clickStatsService.consume(event), "second consume is a dedup skip");
@@ -332,7 +332,7 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
         Long tenantId = tenantIdOf(token);
         String eventId = "evt-rollback-" + UUID.randomUUID();
         ClickEvent event = new ClickEvent(eventId, tenantId, 1L, "hookrb", 1L,
-                "203.0.113.77", "Mozilla/5.0", null, LocalDateTime.now());
+                "203.0.113.77", "Mozilla/5.0", null, LocalDateTime.now(), null);
         org.mockito.Mockito.doThrow(new IllegalStateException("db exploded"))
                 .when(deliveryMapper).insert(org.mockito.ArgumentMatchers.any(
                         com.linkforge.webhook.entity.WebhookDelivery.class));
@@ -357,7 +357,7 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
         Long tenantId = tenantIdOf(token);
         String eventId = "evt-dup-" + UUID.randomUUID();
         ClickEvent event = new ClickEvent(eventId, tenantId, 1L, "hookdup", 1L,
-                "203.0.113.78", "Mozilla/5.0", null, LocalDateTime.now());
+                "203.0.113.78", "Mozilla/5.0", null, LocalDateTime.now(), null);
         assertTrue(clickStatsService.consume(event), "first consume wins");
 
         double failed0 = taggedCounter("linkforge.webhook.enqueue.failed", "duplicate");

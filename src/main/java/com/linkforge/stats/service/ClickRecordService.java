@@ -38,7 +38,7 @@ public class ClickRecordService {
      * stable UUID persisted in the outbox when it is off.
      */
     @Transactional
-    public void recordClick(ShortLink link, HttpServletRequest request) {
+    public void recordClick(ShortLink link, HttpServletRequest request, String variant) {
         LocalDateTime now = LocalDateTime.now();
         String ip = ClientIps.resolve(request, properties.getRateLimit().isTrustXff());
         String ua = truncate(request.getHeader("User-Agent"), 512);
@@ -52,6 +52,7 @@ public class ClickRecordService {
         logRow.setUserAgent(ua);
         logRow.setReferer(referer);
         logRow.setClickedAt(now);
+        logRow.setVariant(variant);
         if (properties.getMq().isSyncClickEnabled()) {
             clickLogMapper.insert(logRow);
         }
@@ -63,7 +64,7 @@ public class ClickRecordService {
             Long userId = UserContext.get() == null ? null : UserContext.get().getUserId();
             ClickEvent event = new ClickEvent(
                     eventId, link.getTenantId(), link.getId(), link.getCode(),
-                    userId, ip, ua, referer, now);
+                    userId, ip, ua, referer, now, variant);
             Outbox outbox = new Outbox();
             outbox.setEventId(eventId);
             outbox.setPayload(toJson(event));
