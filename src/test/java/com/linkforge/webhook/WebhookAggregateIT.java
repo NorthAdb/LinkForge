@@ -18,6 +18,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DirtiesContext;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -61,6 +62,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "spring.datasource.hikari.maximum-pool-size=4"
 })
 @ActiveProfiles("test")
+// See WebhookDeliveryIT: relay-enabled contexts must not outlive their class or a
+// cached context's drain thread settles another class's rows with the wrong config.
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class WebhookAggregateIT extends AbstractIntegrationTest {
 
     private static HttpServer stub;

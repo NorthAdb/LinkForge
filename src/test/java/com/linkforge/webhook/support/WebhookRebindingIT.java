@@ -15,6 +15,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DirtiesContext;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -63,6 +64,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "spring.datasource.hikari.maximum-pool-size=4"
 })
 @ActiveProfiles("test")
+// See WebhookDeliveryIT: relay-enabled contexts must not outlive their class or a
+// cached context's drain thread settles another class's rows with the wrong config.
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class WebhookRebindingIT extends AbstractIntegrationTest {
 
     private static final String PUBLIC_IP = "93.184.216.34"; // literal, no DNS

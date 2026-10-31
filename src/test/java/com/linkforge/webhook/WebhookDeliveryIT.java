@@ -16,6 +16,7 @@ import org.springframework.boot.test.mock.mockito.SpyBean;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DirtiesContext;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -57,6 +58,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         "spring.datasource.hikari.maximum-pool-size=4"
 })
 @ActiveProfiles("test")
+// Relay-enabled contexts share one Testcontainers MySQL delivery table; a cached
+// context keeps its @Scheduled drain thread alive after its class finishes, so a
+// later class's rows would be settled by an earlier class's relay (max-attempts and
+// timeouts included). Closing the context per class keeps exactly one relay alive.
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class WebhookDeliveryIT extends AbstractIntegrationTest {
 
     private static HttpServer stub;
