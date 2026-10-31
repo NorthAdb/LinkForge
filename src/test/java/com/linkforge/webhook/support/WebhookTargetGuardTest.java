@@ -9,8 +9,9 @@ import java.net.UnknownHostException;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class WebhookTargetGuardTest {
 
@@ -32,8 +33,7 @@ class WebhookTargetGuardTest {
                 "169.254.169.254", "100.64.0.13", "0.0.0.0", "::1", "fe80::1", "fd00::5", "ff02::1"};
         for (String ip : blocked) {
             WebhookTargetGuard guard = guard(new LinkForgeProperties(), ip);
-            assertTrue(guard.isBlocked("http://target.test/hook"),
-                    "expected blocked: " + ip + " -> " + guard.violationOf("http://target.test/hook"));
+            assertNotNull(guard.violationOf("http://target.test/hook"), "expected blocked: " + ip);
         }
     }
 
@@ -41,7 +41,7 @@ class WebhookTargetGuardTest {
     void ipv4MappedIpv6FallsBackToV4Rules() throws Exception {
         InetAddress mapped = InetAddress.getByName("::ffff:127.0.0.1");
         WebhookTargetGuard guard = guard(new LinkForgeProperties(), mapped.getHostAddress());
-        assertTrue(guard.isBlocked("http://target.test/hook"),
+        assertNotNull(guard.violationOf("http://target.test/hook"),
                 "::ffff:127.0.0.1 must not slip through as IPv6");
     }
 
@@ -72,8 +72,7 @@ class WebhookTargetGuardTest {
         // Bw2-N6: 0.0.0.0/8, 198.18.0.0/15, 240.0.0.0/4 (incl. broadcast)
         for (String ip : new String[]{"0.1.2.3", "198.18.0.1", "198.19.255.255", "240.0.0.1", "255.255.255.255"}) {
             WebhookTargetGuard guard = guard(new LinkForgeProperties(), ip);
-            assertTrue(guard.isBlocked("http://target.test/hook"),
-                    "expected blocked: " + ip);
+            assertNotNull(guard.violationOf("http://target.test/hook"), "expected blocked: " + ip);
         }
     }
 
@@ -82,8 +81,7 @@ class WebhookTargetGuardTest {
         // Bw2-N6: NAT64, 6to4 and IPv4-compatible wrapping of private addresses
         for (String literal : new String[]{"64:ff9b::a9fe:a9fe", "2002:7f00:1::1", "::127.0.0.1"}) {
             WebhookTargetGuard guard = guard(new LinkForgeProperties(), InetAddress.getByName(literal).getHostAddress());
-            assertTrue(guard.isBlocked("http://target.test/hook"),
-                    "expected blocked: " + literal + " (resolved " + InetAddress.getByName(literal).getHostAddress() + ")");
+            assertNotNull(guard.violationOf("http://target.test/hook"), "expected blocked: " + literal);
         }
     }
 
@@ -91,7 +89,7 @@ class WebhookTargetGuardTest {
     void publicNat64TargetIsAllowed() throws Exception {
         // 64:ff9b::808:808 embeds the public 8.8.8.8
         WebhookTargetGuard guard = guard(new LinkForgeProperties(), "64:ff9b::808:808");
-        assertFalse(guard.isBlocked("http://target.test/hook"),
+        assertNull(guard.violationOf("http://target.test/hook"),
                 "a NAT64-wrapped PUBLIC address must pass");
     }
 
@@ -130,10 +128,10 @@ class WebhookTargetGuardTest {
     }
 
     private void assertBlocked(WebhookTargetGuard guard, String url) {
-        assertTrue(guard.isBlocked(url), "expected blocked: " + url);
+        assertNotNull(guard.violationOf(url), "expected blocked: " + url);
     }
 
     private void assertNotBlocked(WebhookTargetGuard guard, String url) {
-        assertFalse(guard.isBlocked(url), "expected allowed: " + url);
+        assertNull(guard.violationOf(url), "expected allowed: " + url);
     }
 }
