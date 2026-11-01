@@ -44,6 +44,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -569,7 +570,15 @@ public class ShortLinkService {
                 meterRegistry.counter("linkforge.click.skipped", "reason", skip.get().tag()).increment();
                 return redirect;
             }
-            clickRecordService.recordClick(redirect.link(), request, redirect.variantKey());
+            try {
+                clickRecordService.recordClick(redirect.link(), request, redirect.variantKey());
+            } catch (DataAccessException ex) {
+                // fail-open (D-C5-1/6): the 302 must not depend on the click write; the tx
+                // inside recordClick has already rolled back when we get here, so the catch
+                // sits outside any transaction and the jump still counts as a redirect.
+                meterRegistry.counter("linkforge.click.record.failopen").increment();
+                log.warn("click record failed for {}: {}", code, ex.getClass().getSimpleName());
+            }
             meterRegistry.counter("linkforge.redirects").increment();
         }
         return outcome;
@@ -938,6 +947,7 @@ public class ShortLinkService {
             meterRegistry.counter("linkforge.cache.absent.put").increment();
         } catch (Exception ex) {
             log.warn("absent write failed for {}: {}", code, ex.getMessage());
+            meterRegistry.counter("linkforge.cache.failopen", "op", "absent_mark").increment();
         }
     }
 
@@ -949,6 +959,7 @@ public class ShortLinkService {
             stringRedisTemplate.delete(ABSENT_KEY_PREFIX + code);
         } catch (Exception ex) {
             log.warn("absent clear failed for {}: {}", code, ex.getMessage());
+            meterRegistry.counter("linkforge.cache.failopen", "op", "absent_clear").increment();
         }
     }
 

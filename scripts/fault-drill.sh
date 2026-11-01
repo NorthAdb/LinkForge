@@ -230,18 +230,16 @@ else
   case "$EST" in
     2*) fail "create succeeded with status $EST while read_only=1 (write unexpectedly survived)" ;;
   esac
-  # GET /r/{code} records the click through an inline DB write (ClickRecordService),
-  # so the GET itself 500s under read_only; HEAD never records, which makes it the
-  # read-only-safe redirect probe
-  S=$(status_of -I "$BASE_URL/r/$E0CODE")
-  [ "$S" = "302" ] || fail "HEAD redirect under read_only returned $S (expected 302)"
+  # S1 fail-open: the click write failure is caught at the call site, so the 302 does not depend on the click being recorded
+  S=$(status_of "$BASE_URL/r/$E0CODE")
+  [ "$S" = "302" ] || fail "GET redirect under read_only returned $S (expected 302)"
+  H=$(status_of -I "$BASE_URL/r/$E0CODE")
+  [ "$H" = "302" ] || fail "HEAD redirect under read_only returned $H (expected 302)"
   DET=$(status_of "$BASE_URL/api/links/$E0CODE" -H "Authorization: Bearer $TOKEN")
   [ "$DET" = "200" ] || fail "link detail read under read_only returned $DET (expected 200)"
   STA=$(status_of "$BASE_URL/api/links/$E0CODE/stats" -H "Authorization: Bearer $TOKEN")
   [ "$STA" = "200" ] || fail "stats read under read_only returned $STA (expected 200)"
-  G=$(status_of "$BASE_URL/r/$E0CODE")
-  echo "note: GET /r/$E0CODE under read_only returned $G (GET records the click via a DB write; HEAD is the read-safe probe)"
-  echo "PASS mysql-ro: writes fail while reads/redirect survive"
+  echo "PASS mysql-ro: writes fail while reads/redirect survive (GET 302, click fail-open)"
 
   docker exec linkforge-mysql mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "SET GLOBAL read_only=0" >/dev/null 2>&1 \
     || fail "could not clear read_only"
