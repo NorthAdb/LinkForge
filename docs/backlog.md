@@ -21,7 +21,7 @@
 | # | 事项 | 说明 | 来源 |
 |---|------|------|------|
 | 10 | Webhook SSRF 残余 | DNS rebinding（校验与连接两次解析的 TOCTOU）**已随 C4 闭环 ✅**（投递时一次解析 + 全 IP 校验 + 连接钉死保 Host/SNI，见 `docs/progress.md` C4 章）；端口白名单、出口代理隔离仍开 | B 波 2 诚实限制；C4 收口 |
-| 12 | README「tests 211 green」静态徽章会腐化 | 例数增减时需手改徽章数字（或换 CI 生成/动态方案）；v2.0 发布轮跨模型复审 flag #2；C3 轮（2026-10-31）已同步 307；C4 轮（2026-11-01）已同步 315 | v2.0 复审 |
+| 12 | README「tests 211 green」静态徽章会腐化 | 例数增减时需手改徽章数字（或换 CI 生成/动态方案）；v2.0 发布轮跨模型复审 flag #2；C3 轮（2026-10-31）已同步 307；C4 轮（2026-11-01）已同步 315；C5 轮（2026-11-01）已同步 319 | v2.0 复审 |
 
 ## 已做的运维项（v2.1 抛光，仍无新版本号）
 
@@ -44,3 +44,5 @@
 > C3 闭环备注（2026-10-31）：**A/B 权重分流 + 批量 CSV 导入已随 C3 闭环**（`feat/deepen-c3-ab-split-bulk-import`，见 `docs/progress.md` C3 章与 README「A/B 权重分流与批量导入（C3）」节）。上表开项 #1（B10）/ #6（Geo）/ #10（SSRF）不受影响，仍开放。
 >
 > C4 闭环备注（2026-11-01）：**Webhook SSRF 的 DNS rebinding 段已随 C4 闭环**（`feat/deepen-c4-ssrf-rebinding-drills`——投递时一次解析 + 全 IP 校验 + 连接钉死，故障演练与 C3 审计修复并入，见 `docs/progress.md` C4 章）；#10 余下端口白名单/出口代理仍开。#1（B10）/ #6（Geo）不受影响，仍开放。
+>
+> C5 闭环备注（2026-11-01）：**C4-S1/N1/N2/N3 已随 C5 闭环**（`feat/deepen-c5-closeout`——点击记账 fail-open：主链路 302 不依赖 Redis / 点击写 / Webhook 任一侧写成功，fault-drill mysql-ro 主探针改 GET 302；C4 章 main tip 记账行、absent fail-open meter、Compose 手验证据入档，见 `docs/progress.md` C5 章）。**功能冻结声明：C5 审计通过后 LinkForge 功能冻结**——不再开产品能力轮；#1（B10）/ #6（Geo）/ 端口白名单 / 出口代理仍开，但「无萧北指令不开」。

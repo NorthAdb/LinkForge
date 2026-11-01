@@ -5,7 +5,7 @@
 ![Java](https://img.shields.io/badge/Java-17-orange)
 ![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.3.5-6DB33F)
 ![MySQL·Redis·RabbitMQ](https://img.shields.io/badge/MySQL%20%C2%B7%20Redis%20%C2%B7%20RabbitMQ-8%20%C2%B7%207%20%C2%B7%203.13-informational)
-![tests](https://img.shields.io/badge/tests-315%20%28147%2B166%2B2%29-brightgreen)
+![tests](https://img.shields.io/badge/tests-319%20%28151%2B166%2B2%29-brightgreen)
 
 多租户短链 + 访问分析后端服务。**v2.0.0**＝P0–P5 全阶段交付（v1.0.0）+ 深化 A2–A10 + B 档波 1–5（B7/B8、B4/B5、B6/B2/B9/B3/B1），多轮外部审计通过。
 
@@ -41,7 +41,7 @@
 | 安全 | BCrypt 密码短链（签名 cookie、先限流后校验）、本地域名名单门禁（BLOCK/WARN）、非人点击不计 | [密码短链](#密码短链b3)、[域名门禁](#目标域名名单门禁b9)、[非人点击](#非人点击b2预取与预览-bot-照常-302-但不计) |
 | 开放 | API Key（哈希存储+配额，USER/TENANT 双 scope、TENANT 仅 ADMIN 签发）、点击 Webhook（HMAC 签名、AES-256-GCM at-rest、SSRF 防护、逐次/聚合双模式） | [开放能力](#开放能力b4-api-key--b5-webhook) |
 | 可观测 | 令牌守卫的 `/actuator/prometheus`、Grafana 自动 provision 看板、积压 gauge | [可观测](#可观测b1-prometheus--grafana) |
-| 工程 | Flyway 版本化迁移（V1–V10）、测试 315 例（含 Testcontainers 集成 166）、GitHub Actions CI、prod profile 一键收紧 | [测试与质量](#-测试与质量) |
+| 工程 | Flyway 版本化迁移（V1–V10）、测试 319 例（含 Testcontainers 集成 166）、GitHub Actions CI、prod profile 一键收紧 | [测试与质量](#-测试与质量) |
 
 **明确不做**（冻结决策，详见[待办](docs/backlog.md)）：AI / PostgreSQL / Supabase / 向量库（整体延期另立方案）；Spring Cloud / Seata / 多机房；独立前端 SPA（静态控制台已够用）；云公网部署（D5=本地 Compose，prod profile 已备好收紧开关）。
 
@@ -163,7 +163,7 @@ curl -s -D - -o /dev/null http://localhost:8080/r/CODE
 
 没有 `python3` 的环境把最后那个解析换成 `python`。Windows 上常见的是 `python`。
 
-**5. 验证脚本**。这三个文件是 bash，会自己读 `.env`。期望 `scripts/smoke.sh` 输出 `SMOKE OK`。`mq-drill.sh` 在 sync 开着时断开 RabbitMQ 再追平。`outbox-drill.sh` 在 sync 关着时做同样的事，并自己另起一个 8082 端口的实例。`fault-drill.sh`（C4 故障演练，依赖第 2 步的 jar 与 compose 三件套）分 redis 停服 / webhook 5xx·超时 / mysql 只读三段，全文成功输出 `FAULT DRILL OK`；webhook 段的 5xx 桩用 PowerShell HttpListener（无 powershell）、mysql-ro 段缺 `MYSQL_ROOT_PASSWORD` 时对应段诚实 SKIP；只读态探活用 HEAD——GET 会因写点击明细/outbox 而 500。脚本每轮注册 2 个用户，注册限流默认 5 次/10 分钟，短时间连跑多轮会撞限流。
+**5. 验证脚本**。这四个文件是 bash，会自己读 `.env`。期望 `scripts/smoke.sh` 输出 `SMOKE OK`。`mq-drill.sh` 在 sync 开着时断开 RabbitMQ 再追平。`outbox-drill.sh` 在 sync 关着时做同样的事，并自己另起一个 8082 端口的实例。`fault-drill.sh`（C4 故障演练，依赖第 2 步的 jar 与 compose 三件套）分 redis 停服 / webhook 5xx·超时 / mysql 只读三段，全文成功输出 `FAULT DRILL OK`；webhook 段的 5xx 桩用 PowerShell HttpListener（无 powershell）、mysql-ro 段缺 `MYSQL_ROOT_PASSWORD` 时对应段诚实 SKIP；只读态主探针是 GET `/r/{code}` 期望 302——点击记账 fail-open（C5），只读库写不了明细/Outbox 也不再拖垮跳转，HEAD 探针保留作次要断言。脚本每轮注册 2 个用户，注册限流默认 5 次/10 分钟，短时间连跑多轮会撞限流。
 
 bash：
 
@@ -174,7 +174,7 @@ bash scripts/outbox-drill.sh
 bash scripts/fault-drill.sh
 ```
 
-PowerShell 里通常没有 `bash`（Git 默认只把 `Git\cmd` 放进 PATH）。打开 Git Bash 跑上面三行，或显式调用 bash：
+PowerShell 里通常没有 `bash`（Git 默认只把 `Git\cmd` 放进 PATH）。打开 Git Bash 跑上面四行，或显式调用 bash：
 
 ```powershell
 & "C:\Program Files\Git\bin\bash.exe" scripts/smoke.sh
@@ -191,6 +191,16 @@ PowerShell 里通常没有 `bash`（Git 默认只把 `Git\cmd` 放进 PATH）。
 - **scrape-token 文件权限**（Linux 踩坑实录）：Prometheus 容器内进程（`prom/prometheus` 以 nobody 运行）必须能读 `/etc/linkforge/scrape-token`。宿主机上该文件若是 `600` 且属主是登录用户，容器内读取被拒、target 永久 down。Linux 下 `chmod 644 ops/observability/scrape-token`（Windows / Docker Desktop 不校验 Unix 权限位，无此坑）。文件内容须与 `.env` 的 `LINKFORGE_METRICS_SCRAPE_TOKEN` 逐字一致，末尾不要换行。bash 用 `printf '%s' "$token" > ops/observability/scrape-token`。PowerShell 用 `Set-Content -NoNewline -Path ops/observability/scrape-token -Value $token`。
 - **本机开 Clash/Surge fake-IP**：198.18.0.0/15 段会被 Webhook SSRF 防护拒掉，保存公网 webhook 目标返回 400；联调前关 fake-IP 或改 redir-host。
 - **jar 名随版本走**：v2.0.0 起 jar 为 `target/linkforge-2.0.0.jar`。
+
+### 面试 Demo 五步（可照读）
+
+前置同上：compose 三件套 healthy、应用已起、`$TOKEN` 是登录拿到的 JWT。每步 30 秒量级，讲完一步再走下一步。
+
+1. **建链 + 跳转 302**。`POST /api/links` 建 `https://example.com`，然后 `curl -s -D - -o /dev/null http://localhost:8080/r/CODE`，指给面试官看 `302` 与 `Location`。口播：五层读路径（限流→Bloom→空值缓存→L1/L2→行读）；坚持每请求读 DB 行，禁用/过期永不被旧缓存遮蔽。
+2. **A/B 权重分流**。建链请求体带 `variants`（如 `a`/`b` 两条，weight 1 和 3），连刷几次 `GET /r/{code}`，`Location` 在两个目标间按权重变化；再 `GET /api/links/{code}/stats/breakdown?dim=variant` 看两桶计数。口播：门禁/密码/UTM 全留在链层，抽签发生在全部门禁通过后；点击按所抽 key 进 `dim=variant` 分桶。
+3. **CSV 导入部分成功**。造 3 行 CSV（两行合法 URL + 一行坏 URL），`curl -H "Authorization: Bearer $TOKEN" -F file=@links.csv http://localhost:8080/api/links/import`，响应里 `successCount=2`、`failures` 带 `row`（文件行号）与 `reason`。口播：逐行走与单链创建同一路径，结构性拒绝先于任何写入，专用 import 限流不占创建配额。
+4. **故障演练**（或口播）。`bash scripts/fault-drill.sh`：redis 段停服下跳转仍 302、恢复自愈；webhook 段重试期主链路照常 302；mysql-ro 段只读库下 GET 仍 302——点击记账 fail-open。逐行 `PASS …`，终行 `FAULT DRILL OK`。口播口径一句话：主链路 302 不依赖 Redis / 点击写 / Webhook 任一侧写成功。
+5. **SSRF 口播**。投递时一次解析 → 对全部解析地址校验（拒环回/私网/元数据 IP）→ 只向已校验地址建连（httpclient5 + 自定义 DnsResolver，Host/TLS SNI/证书校验保原 hostname）——「校验通过后 DNS 再改」没有第二次解析窗口。诚实边界：端口白名单/出口代理仍后置。
 
 ## 🧱 架构总览
 
@@ -238,7 +248,7 @@ flowchart LR
 9. **B3 密码门**：无有效凭证 → 200 解锁页（HEAD 401），不计点击
 10. **B9 WARN** → 200 警示中间页，`?lf_continue=1` 只跳过 WARN 门
 11. **B2 分类**：预取/预览 bot 照常 302 但全链路不计
-12. **302 + 记点击**：有 variants 时先按权重抽签、`Location` 以抽签为准（见[A/B 权重分流与批量导入](#ab-权重分流与批量导入c3)）；同事务写明细（含所抽 variant）+ outbox → 消费端幂等聚合
+12. **302 + 记点击**：有 variants 时先按权重抽签、`Location` 以抽签为准（见[A/B 权重分流与批量导入](#ab-权重分流与批量导入c3)）；同事务写明细（含所抽 variant）+ outbox → 消费端幂等聚合；记账写库失败 fail-open（meter `linkforge.click.record.failopen`，C5）——302 不变，`linkforge.redirects` 照常 +1
 
 管理 API 的越权访问统一 404（不泄露他人短码存在性）；未携带/无效凭证 401；注册租户名冲突、短码占用 409。
 
@@ -514,11 +524,11 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 
 | 域 | 指标 |
 |------|------|
-| 跳转/点击 | `linkforge.links.created`、`linkforge.redirects`、`linkforge.click.skipped{reason=prefetch\|preview_bot}` |
+| 跳转/点击 | `linkforge.links.created`、`linkforge.redirects`、`linkforge.click.skipped{reason=prefetch\|preview_bot}`、`linkforge.click.record.failopen`（C5 记账 fail-open） |
 | 限流 | `linkforge.ratelimit.rejected{entry=register\|create\|redirect}`、`linkforge.ratelimit.failopen{reason=error\|null}` |
 | Bloom | `linkforge.bloom.rejected` / `.loaded` / `.loadfailed`、`.publish{result=ok\|error}` / `.subscribe.put` / `.rebuild{result=ok\|busy\|error}`（C2 广播与 rebuild） |
 | singleflight | `linkforge.singleflight.loads` / `.shared` / `.timeout` |
-| 缓存 | `linkforge.cache.absent.hit` / `.put`、`linkforge.l1.hit` / `.miss`、`linkforge.cache.l2{result=hit\|miss}`、`linkforge.l1.invalidate.publish{result=ok\|error}` / `.remote`（C2 失效广播）、`linkforge.cache.failopen{op=l2_get\|l2_set\|l2_delete\|idem_get\|idem_acquire\|idem_settle}`（C4 L2/幂等 fail-open） |
+| 缓存 | `linkforge.cache.absent.hit` / `.put`、`linkforge.l1.hit` / `.miss`、`linkforge.cache.l2{result=hit\|miss}`、`linkforge.l1.invalidate.publish{result=ok\|error}` / `.remote`（C2 失效广播）、`linkforge.cache.failopen{op=l2_get\|l2_set\|l2_delete\|idem_get\|idem_acquire\|idem_settle\|absent_mark\|absent_clear}`（C4 L2/幂等 + C5 absent fail-open） |
 | 门禁 | `linkforge.phishing.gate{action,stage}`、`.continue`、`.reload{result}`、gauge `.rules{level}` |
 | 密码短链 | `linkforge.link.unlock{result=ok\|bad_password\|rate_limited}`、`linkforge.link.locked` |
 | API Key | `linkforge.apikey.auth{result=ok\|invalid\|revoked\|ambiguous}`、`.quota.rejected{window}` |
@@ -528,12 +538,12 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 
 ## 🧪 测试与质量
 
-- **315 例**（v2.0.0 发布口径 211 → v2.1 抛光 220 → C1 261 → C2 +20 → C3 +26 → C4 +8）：surefire 纯单测 **147** + failsafe Testcontainers 集成 **166** + 时区 fork **2**（`WebhookRetryClockIT` 独立 fork 到 Asia/Shanghai，钉 DB 时钟退避）。静态徽章会随例数变化，以本行拆分为准
+- **319 例**（v2.0.0 发布口径 211 → v2.1 抛光 220 → C1 261 → C2 +20 → C3 +26 → C4 +8 → C5 +4）：surefire 纯单测 **151** + failsafe Testcontainers 集成 **166** + 时区 fork **2**（`WebhookRetryClockIT` 独立 fork 到 Asia/Shanghai，钉 DB 时钟退避）。静态徽章会随例数变化，以本行拆分为准
 - **红先纪律**：每个特性先提交测试（CI 红 = 证据）再提交实现（CI 绿）；B 波 3+4+5 轮 13 次分支红全部留档根因（progress.md）
 - **CI**：GitHub Actions `mvn -B verify`（ubuntu + 原生 Docker Testcontainers），push 即跑，main 恒绿
-- **连接预算口径**：集成测试共享一个 Testcontainers MySQL（`--max-connections=500` 是**配置侧天花板**）；上下文峰值 ≈ 27×10+15×4 = **330 是最坏情形推导值**（每上下文 Hikari 同时满池的纸面相加；42 个 *IT、15 个显式 4，其中 C1/C2/C3/C4 新增各 3/4/2/1 个均 4；时区 fork 独立 JVM 另计），余量 170，全绿即零 `Too many connections`。三个 relay-enabled webhook IT 钉 `@DirtiesContext(AFTER_CLASS)`，类结束即关上下文，实际峰值低于纸面
-- **对账与故障演练**：`scripts/mq-drill.sh` / `scripts/outbox-drill.sh` 断 MQ 追平；`scripts/fault-drill.sh`（C4）redis 停服 / webhook 5xx / mysql 只读三段，本机实测 `FAULT DRILL OK`（只读态 GET /r 500、HEAD 才是只读探针——实测注记），回归皆绿
-- 审计证据与逐轮记录：[docs/progress.md](docs/progress.md)（1541 行，每阶段验收、决策、红绿史）
+- **连接预算口径**：集成测试共享一个 Testcontainers MySQL（`--max-connections=500` 是**配置侧天花板**）；上下文峰值 ≈ 27×10+15×4 = **330 是最坏情形推导值**（每上下文 Hikari 同时满池的纸面相加；42 个 *IT、15 个显式 4，其中 C1/C2/C3/C4 新增各 3/4/2/1 个均 4，C5 零新 IT；时区 fork 独立 JVM 另计），余量 170，全绿即零 `Too many connections`。三个 relay-enabled webhook IT 钉 `@DirtiesContext(AFTER_CLASS)`，类结束即关上下文，实际峰值低于纸面
+- **对账与故障演练**：`scripts/mq-drill.sh` / `scripts/outbox-drill.sh` 断 MQ 追平；`scripts/fault-drill.sh`（C4）redis 停服 / webhook 5xx / mysql 只读三段，本机实测 `FAULT DRILL OK`（C5 于 tip `e0c567c` 复验，2026-11-01：只读态 GET /r 仍 302——点击记账 fail-open，HEAD 保留次要；PASS 行原文见 [docs/progress.md](docs/progress.md) C5 章 Compose 手验证据），回归皆绿
+- 审计证据与逐轮记录：[docs/progress.md](docs/progress.md)（1655 行，每阶段验收、决策、红绿史）
 
 ## 📈 性能与压测
 
@@ -555,6 +565,7 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 
 | 版本 | 日期 | 内容 |
 |------|------|------|
+| **C5（未发版）** | 2026-11-01 | 收口 C5：点击记账 fail-open（`resolveForGet` 调用点 catch `DataAccessException`、meter `linkforge.click.record.failopen`——主链路 302 不依赖 Redis/点击写/Webhook 任一侧写成功）+ C4 nit 收尾（main tip 记账行、absent fail-open meter、Compose 手验证据入档 progress）+ fault-drill mysql-ro 主探针改 GET 302 + 面试 Demo 五步（README）；测试 315→319；**C5 审计通过后功能冻结** |
 | **C4（未发版）** | 2026-11-01 | 深化 C4：Webhook SSRF DNS rebinding 钉死（httpclient5 + 自定义 DnsResolver——投递时一次解析、全 IP 校验、只连已校验地址，Host/SNI 保原 hostname）+ 故障演练 `scripts/fault-drill.sh`（redis 停服 / webhook 5xx / mysql 只读，SKIP 语义）+ Redis L2/幂等 fail-open（`linkforge.cache.failopen`）+ C3 审计修复并入（S1 建链+variants 同事务 / N2 update 带 variants / N3 delete 清 variants）；测试 307→315；红先三块 CI 留档（conclusion 列） |
 | **C3（未发版）** | 2026-10-31 | 深化 C3：A/B 权重分流（一码多目标 ≤10 按权重抽签、密码/门禁/UTM 仍链层、`dim=variant` 统计分桶）+ 批量 CSV 导入（同步 multipart ≤100 行、部分失败返回文件行号+原因、专用 import 限流）；V10 迁移；测试 281→307；红先两块 CI 留档（conclusion 列） |
 | **C2（未发版）** | 2026-10-31 | 深化 C2：Bloom put 广播 + 定时 rebuild（24h + ADMIN 手动、单飞、旁路原子替换）+ L1 失效广播（origin 跳过、只剔 L1）；维度 os/browser（轻量 UA 规则，Geo 不做）；C1 审计 N1/N4 docs；测试 261→281；红先四轮 CI 留档（conclusion 列） |

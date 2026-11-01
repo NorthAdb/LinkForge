@@ -1543,4 +1543,113 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 
 ## 收口 C5 点击记账 fail-open + C4 nit + Compose 手验（feat/deepen-c5-closeout，发车基线 main@c7abd77，2026-11-01）
 
-> 交接单：`记录追踪/05-阶段交接/LinkForge-phase-C5-closeout-handoff.md`。开放问题 Q1–Q6 **已全部确认 A**（t121s638，2026-11-01）。**合入后功能冻结**，本章随开发推进补全。
+> 交接单：`记录追踪/05-阶段交接/LinkForge-phase-C5-closeout-handoff.md`。开放问题 Q1–Q6 **已全部确认 A**（t121s638，2026-11-01）；C4-S1/N1/N2/N3 捆入本波；本章已随收口 docs 提交补全（红先证据、CI conclusion 表、改动清单、验收勾选、Compose 手验证据、例数与连接预算）。**C5 审计通过后功能冻结**（D-C5-28）。
+> **红先完成（S1+N2 一块收口）**：红提交 `e8d460f` 只含测试 → run [41268891231](https://github.com/NorthAdb/LinkForge/actions/runs/41268891231) **failure**（32s，surefire 3 红：redirectSurvivesClickRecordFailure、absentClear/absentMark 两 meter 用例；skip 守卫 skipPathNeverTouchesClickRecording 与 C4 旧例保持绿——skip 不记点击在无实现树上本就成立），实现 `e0c567c` 翻绿（319 = 151+166+2）。docs 收口提交与 merge 尚未发生：CI 表「分支终态（本提交）」「main 合并」「main tip 记账」三行 run=待 / conclusion=待回填（C2/C3/C4 先例）。run/conclusion 全景见下表。
+
+### 决策记录（D-C5 落地）
+
+| ID | 落地 |
+|----|------|
+| D-C5-1 | 缺口闭合：GET `/r/{code}` 主链路 302 **不依赖侧写成功**——MySQL 只读/瞬时写失败时用户仍拿到 Location，与 C4 的 Redis L2/幂等 fail-open 同一口径（面试一句话：「主链路 302 不依赖 Redis / 点击写 / Webhook 任一侧写成功」） |
+| D-C5-2 | 落点 = `ShortLinkService.resolveForGet` **调用点** try/catch `recordClick`：catch 后 meter + warn 日志，仍 `return redirect`。**不**把 fail-open 做进 `@Transactional` 方法内部「吞异常继续提交」——catch 在调用点外，`recordClick` 事务已回滚才进 catch，无「事务内吞异常」的半提交错觉（读码纠偏一致：`recordClick` 是同步 DB 双写 `lf_click_log` + `lf_outbox`，非「异步 MQ 记点击」） |
+| D-C5-3 | catch 类型钉死 **`DataAccessException`**（写库相关运行时异常；不吞 `Error`）；只包 `recordClick` 一行，门禁/限流/`BizException` 仍按原语义抛（防误吞业务 404/410/429） |
+| D-C5-4 | meter = **`linkforge.click.record.failopen`**（Counter，**无 tag**——不加 `reason` 简名 tag，progress 钉死） |
+| D-C5-5 | warn 日志只含短码 + 异常类名（`ex.getClass().getSimpleName()`）；SQL、绑定参数、完整 JDBC URL、内网 IP 不进日志与对外响应（堆栈可 debug） |
+| D-C5-6 | fail-open 后 **`linkforge.redirects` 仍 +1**（用户确已 302；递增在 try/catch 之后）——failopen counter 与 redirects counter 区分「记成功 vs 记失败仍跳」，口径不打架 |
+| D-C5-7/8/11 | skip（prefetch/bot）路径零改动：不计点击、不打 failopen、不增 redirects（回归 B2）；`resolveForProbe`（HEAD）零改动；`ClickRecordService` 事务边界零改动；不改 Outbox relay / Webhook 入队失败合同、不做「点击进本地队列再刷」、不改 sync/async 默认开关 |
+| D-C5-9 | 先红后绿：扩 `ShortLinkServiceRedisFailopenTest` 四例 UT（mock `recordClick` 抛 `DataAccessException`，断言仍 `Redirect` + failopen +1 + redirects +1）；**不新增 IT**——UT + fault-drill mysql-ro GET 302 为主证据（progress 钉） |
+| D-C5-10 | fault-drill mysql-ro 段：**主探针改 GET `/r/{code}` 期望 302**（HEAD 保留次要）；删「GET 500 是产品行为、不改代码」旧注，改「S1 后 GET 亦 302」；PASS 文案 `(GET 302, click fail-open)`；无 `MYSQL_ROOT_PASSWORD` 仍诚实 SKIP |
+| D-C5-12 | C4-N1：C4 章 CI 结论表 main 合并行后补 `main tip 记账 \| 41230348027 \| success \| c7abd77`（随本波红提交 `e8d460f` 落，C3-N1 同形态） |
+| D-C5-13 | C4-N2：`markAbsent`/`clearAbsent` catch 分支加 `linkforge.cache.failopen{op=absent_mark\|absent_clear}`；两枚专用 UT（create 走 `clearAbsent`、missing-row resolve 走 `markAbsent`） |
+| D-C5-14..17 | C4-N3 Compose 手验：GLM 交付机在**分支代码终态 tip `e0c567c`** 实跑（审计 box 无 compose/.env，只静态审 + 核证据行）——compose 三件套 healthy → `scripts/smoke.sh` → `scripts/fault-drill.sh`；证据格式 = 日期（Asia/Shanghai）/ tip SHA / 命令 / PASS 行原文 / 终行 / exit code / SKIP 段及原因，全文见下「Compose 手验证据」专节 |
+| D-C5-18 | resume post-C5：保留 C3/C4 bullet；新增「点击记账 fail-open：主链路 302 不依赖 Redis/点击写/Webhook 任一侧写成功」（含 mysql-ro GET 302）；例数 319=151+166+2；文首 tip `e0c567c`；bench/B10 纪律 blockquote 原样保留 |
+| D-C5-19 | README：徽章/例数 319（151+166+2）；fault-drill/演练叙述去「只读态 GET 500、HEAD 才是探针」旧注，改 S1 后口径（GET 302、点击记账 fail-open）；指标表补 `linkforge.click.record.failopen` 与 absent fail-open ops；版本历史加 C5 行（注明功能冻结） |
+| D-C5-20 | Demo 步骤小节进 README「快速上手」（紧凑可照读五步）：①建链+跳转 302；②建 AB 链（API 带 variants）多刷几次看 `Location` 变化 + `dim=variant` 统计；③CSV 导入部分成功（含一行坏 URL）；④fault-drill 演示 Redis/只读降级（或口播）；⑤SSRF 口播「一次解析+全 IP 校验+连接钉死」。不要求新 UI |
+| D-C5-21 | 面试追问包由实习JAVA_AI 交付追踪目录草稿（`LinkForge-pack-C5-interview-c7abd77.md`），**不**合进仓库（仓库以 resume/README 为准） |
+| D-C5-22 | backlog：C5 闭环备注（C4-S1/N1/N2/N3 随 C5 闭环）+ **功能冻结声明**（C5 审计通过后不再开产品能力轮；B10/Geo/端口白名单/出口代理仍开但「无萧北指令不开」）；#12 徽章同步 319 |
+| D-C5-23/24/25 | 单分支 `feat/deepen-c5-closeout` @`c7abd77`；合 main → push 不开 PR（沿 C1/C2/C3/C4，coordinator 收尾）；pom 保持 2.0.0 |
+| D-C5-26 | Flyway 不改 V1–V10；本波零新 migration（最高仍 V10） |
+| D-C5-27 | 范围外未做：B10 / Geo / 自定义域名 / ES·CDC·云 / RedisBloom / 端口白名单产品化 / 出口代理 / 新产品能力 / 改 V1–V10 |
+| D-C5-28 | **功能冻结声明**：C5 审计通过后 LinkForge 功能冻结——默认下一动作 = 面试准备（口述/Demo/追问），非新交接；backlog 与本章声明 |
+
+**实现注记**（落点与事务边界 / nit 落地 / 演练口径）：
+
+1. **S1 落点与事务边界**（D-C5-2）：catch 在 `resolveForGet` 调用点、事务外——`recordClick` 的 `@Transactional` 已回滚才进 catch，无「事务内吞异常」的半提交错觉。catch 类型 `DataAccessException`（D-C5-3）；meter `linkforge.click.record.failopen` 无 tag（D-C5-4）；warn 日志只含短码 + 异常类名（D-C5-5）；fail-open 后 `linkforge.redirects` 仍 +1（D-C5-6）。skip 分支、`resolveForProbe`（HEAD）、`ClickRecordService` 事务边界零改动（D-C5-7/8/11）。
+2. **C4-N2**（D-C5-13）：`markAbsent`/`clearAbsent` catch 分支加 `linkforge.cache.failopen{op=absent_mark\|absent_clear}`；两枚专用 UT（create 走 clearAbsent、missing-row resolve 走 markAbsent）。
+3. **C4-N1**（D-C5-12）：C4 章 CI 表已补 `main tip 记账 | 41230348027 | success | c7abd77`（本波红提交内落）。
+4. **fault-drill mysql-ro**（D-C5-10）：主探针改 **GET 期望 302**（HEAD 保留次要），删「GET 500 不改代码」旧注，PASS 文案 `(GET 302, click fail-open)`——C4 章「只读态 GET 500、HEAD 才是只读探针」注记（实现注记 9 / C4-9）随本波作废，以本章 Compose 手验证据为准。
+5. **红先**：红提交只含测试；无实现树上 3/7 新 UT 红（`ShortLinkServiceRedisFailopenTest` 全类 7 例中 3 例红：redirectSurvivesClickRecordFailure、absentClear/absentMark 两 meter 用例；skip 守卫与 C4 旧例保持绿；本地 clean test-compile + surefire 复核），CI run [41268891231](https://github.com/NorthAdb/LinkForge/actions/runs/41268891231) 为红证据。
+
+### 红先证据（红提交只含测试；conclusion 以 Actions 为准）
+
+| 块 | 红 run | 红况 |
+|----|--------|------|
+| A（S1 点击记账 fail-open + N2 absent meter） | [41268891231](https://github.com/NorthAdb/LinkForge/actions/runs/41268891231) | 预期红：无实现树上 `recordClick` 写库异常未捕获（`DataAccessException` 裸传播），redirectSurvivesClickRecordFailure 断言「异常仍 302」失败；absentClearMetersFailOpenOnCreate、absentMarkMetersFailOpenOnMissingRow 两 meter 用例红；skipPathNeverTouchesClickRecording 守卫与 C4 旧例保持绿 |
+
+### CI 结论表（每行必有 conclusion；吸取 C1-N1 教训，从首轮即带列）
+
+| 标签 | run | conclusion | head |
+|------|-----|------------|------|
+| 红（S1+N2 红先提交） | [41268891231](https://github.com/NorthAdb/LinkForge/actions/runs/41268891231) | **failure**（32s，surefire 3 红：redirectSurvivesClickRecordFailure、absentClear/absentMark 两 meter 用例；skip 守卫与 C4 旧例保持绿） | `e8d460f` |
+| 绿（S1 fail-open + N2 absent meter 实现） | [41268895332](https://github.com/NorthAdb/LinkForge/actions/runs/41268895332) | **success**（surefire 151 + failsafe 166 + tz fork 2 = **319**） | `e0c567c` |
+| 分支终态（本提交） | 待 | 待回填（C2/C3/C4 先例） | 本 docs 提交 |
+| main 合并 | 待 | 待回填（同上） | 待 |
+| main tip 记账 | 待 | 待回填（C3-N1/C4-N1 先例） | 待 |
+
+**口径**：功能绿以 `41268895332`（319 全量）为准；「分支终态（本提交）/ main 合并 / main tip 记账」三行由收尾 docs 提交与 merge 后回填（C2/C3/C4 先例）。本轮无中间 failure：一红一绿直收。
+
+### 改动清单（2 提交 + 本 docs 提交）
+
+| 提交 | 内容 |
+|------|------|
+| `e8d460f` | test(c5)：红先 UT 四枚扩 `ShortLinkServiceRedisFailopenTest`（redirectSurvivesClickRecordFailure、skipPathNeverTouchesClickRecording、absentClearMetersFailOpenOnCreate、absentMarkMetersFailOpenOnMissingRow）+ progress 开章 stub + C4-N1 tip 行（D-C5-12） |
+| `e0c567c` | fix(link)：`resolveForGet` 调用点 catch `DataAccessException`——`recordClick` 写库失败 fail-open（meter `linkforge.click.record.failopen` 无 tag、warn 只含短码+异常类名、`linkforge.redirects` 仍 +1、仍 302）+ `markAbsent`/`clearAbsent` 打 `linkforge.cache.failopen{op=absent_mark\|absent_clear}` + fault-drill mysql-ro 主探针改 GET 302（D-C5-2..8/10/13） |
+| 本 docs 提交（收口） | README（徽章 319、Demo 五步小节、fault-drill/演练 S1 口径、指标表补 `click.record.failopen` 与 absent ops、版本历史 C5 冻结行）+ resume post-C5 收口 + 本章补全 + backlog C5 闭环备注与功能冻结声明 |
+
+### 验收勾选（C5-1..16）
+
+- [x] **C5-1** 基线祖先含 `c7abd77761dc3d514fbb633d3f7df6e2afb0e815`；V1–V10 零字节改动（本波零新 migration，最高仍 V10）
+- [x] **C5-2** `resolveForGet`：`recordClick` 抛写库异常仍返回 `Redirect`，HTTP GET `/r/{code}` **302**（UT redirectSurvivesClickRecordFailure 红先 `e8d460f` → `e0c567c` 翻绿；fault-drill mysql-ro 段 GET 302 实证，见 Compose 手验专节）
+- [x] **C5-3** fail-open 时 `linkforge.click.record.failopen` +1、`linkforge.redirects` 仍 +1；日志无敏感泄漏（warn 只含短码 + 异常类名，UT 断言）
+- [x] **C5-4** prefetch/bot skip 与 HEAD 行为回归不变（UT skipPathNeverTouchesClickRecording——红先期即绿的守卫例，钉「skip 不触点击记账」；`resolveForProbe` 零改动）
+- [x] **C5-5** fault-drill mysql-ro：**GET 期望 302 为主**、HEAD 次要；无「GET 500 不改代码」旧注；PASS 文案 `(GET 302, click fail-open)`（本机实跑 **FAULT DRILL OK**，见 Compose 手验专节）
+- [x] **C5-6** C4-N1：progress C4 章 CI 表含 `main tip 记账 | 41230348027 | success | c7abd77`（随红提交 `e8d460f` 落）
+- [x] **C5-7** C4-N2：`markAbsent`/`clearAbsent` 失败打 `linkforge.cache.failopen{op=absent_mark\|absent_clear}`（UT absentMark/absentClear 两枚红先翻绿）
+- [x] **C5-8** C4-N3：本章 Compose 手验专节（日期 2026-11-01 Asia/Shanghai、tip `e0c567c`、smoke `SMOKE OK` exit 0、fault-drill `FAULT DRILL OK` exit 0、PASS 行原文、无 SKIP 段）
+- [x] **C5-9** resume 对齐 C5 tip：post-C5 口径、文首 tip `e0c567c`、新增点击记账 fail-open 表述（含 mysql-ro GET 302）、例数 319=151+166+2；bench/B10 纪律 blockquote 保留——本轮 resume 改动
+- [x] **C5-10** README 徽章/例数 319（151+166+2）；fault-drill/SSRF/演练叙述与 S1 后口径一致（GET 302、点击记账 fail-open）——本轮 README 改动
+- [x] **C5-11** Demo 步骤小节（README「快速上手」）：建链+跳转 302 / AB 链 variants 抽签看 Location + `dim=variant` / CSV 导入部分成功 / fault-drill Redis·只读降级（或口播）/ SSRF 口播「一次解析+全 IP 校验+连接钉死」——不要求新 UI
+- [x] **C5-12** 本章含 D-C5 决策表（1..28）、红先证据、CI conclusion 列、改动清单、Compose 手验专节、例数构成与连接预算
+- [x] **C5-13** backlog C5 闭环备注 + **功能冻结声明**（C5 审计通过后不再开产品能力轮；B10/Geo/端口白名单/出口代理仍开但「无萧北指令不开」）；本章同声明（D-C5-28）
+- [x] **C5-14** 全量 verify 绿 = run [41268895332](https://github.com/NorthAdb/LinkForge/actions/runs/41268895332)（surefire 151 + failsafe 166 + tz 2 = 319，Too many connections=0）；「分支终态（本提交）/ main 合并 / main tip 记账」三行 run=待、conclusion 待回填（C2/C3/C4 先例）
+- [x] **C5-15** pom 仍 2.0.0；合 main → push 待 coordinator 收尾（不开 PR，沿 C1–C4），tip 全 SHA 随收尾自报
+- [x] **C5-16** 范围外未做：B10 / Geo / 自定义域名 / ES·CDC·云 / RedisBloom / 端口白名单产品化 / 出口代理 / 新产品能力 / 改 V1–V10
+
+### Compose 手验证据（C4-N3，D-C5-14..17）
+
+- **日期与环境**：2026-11-01 Asia/Shanghai；实跑于分支代码终态 tip **`e0c567c`**（jar = `mvn -B -DskipTests clean package` 产物 `target/linkforge-2.0.0.jar`；`docker compose up -d` 后 mysql / redis / rabbitmq 均 healthy，compose 栈同 C4）。**口径**：docs 收口提交与 merge 不改代码/脚本，本证据对 C5 代码终态持续有效。
+- **`bash scripts/smoke.sh` → `SMOKE OK`，exit 0**。PASS 行原文：
+  - `PASS health`
+  - `PASS login user=admin tenant=demo`
+  - `PASS create code=MYgYfre`
+  - `PASS redirect code=MYgYfre location=https://example.com/smoke-1793503677`
+  - `PASS redis cache key=linkforge:code:MYgYfre`
+  - `PASS register tenant=smoke-1793503680`
+  - `PASS lifecycle create/detail/update code=k2MjWdq`
+  - `PASS lifecycle disable -> redirect 404 code=k2MjWdq`
+- **`bash scripts/fault-drill.sh` → `FAULT DRILL OK`，exit 0**。PASS 行原文：
+  - `PASS redis: redirect 302 with redis down (L2 fail-open)`
+  - `PASS redis: create survives redis down (idempotency fail-open)`
+  - `PASS redis: self-heals after redis returns`
+  - `PASS webhook: redirect stays 302 while delivery retries`
+  - `PASS webhook: delivery ends FAILED after max attempts (3x500)`
+  - `PASS mysql-ro: writes fail while reads/redirect survive (GET 302, click fail-open)`
+  - `PASS mysql-ro: writes recover after read_only off`
+- **SKIP 段**：无（webhook 段 powershell 与 mysql-ro 段 `MYSQL_ROOT_PASSWORD` 均在）。
+- **mysql-ro 段口径**：主探针 GET `/r/{code}` 期望 302——S1 后点击记账 fail-open，只读库下用户仍拿到 Location（C4 章「GET 500 / HEAD 才是探针」旧注随本波作废）。
+
+### 例数与预算
+
+- **319 = surefire 151 + failsafe 166 + tz fork 2**（C5 净增 +4：UT +4【ShortLinkServiceRedisFailopenTest：redirectSurvivesClickRecordFailure、skipPathNeverTouchesClickRecording、absentClearMetersFailOpenOnCreate、absentMarkMetersFailOpenOnMissingRow】；IT 零新增）
+- 连接预算 27×10+15×4 = **330**（42 个 \*IT、15 个显式 `hikari.maximum-pool-size=4`；C5 零新 IT，构成不变），天花板 = 共享容器 `--max-connections=500`，余量 170。**注**：三个 relay-enabled IT（WebhookAggregateIT/WebhookDeliveryIT/WebhookRebindingIT）钉 `@DirtiesContext(AFTER_CLASS)`，类结束即关上下文，实际峰值低于纸面
+- 本地每提交 `mvn -B verify -DskipITs` 退出码显式 0
