@@ -1592,9 +1592,10 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 |------|-----|------------|------|
 | 红（S1+N2 红先提交） | [41268891231](https://github.com/NorthAdb/LinkForge/actions/runs/41268891231) | **failure**（32s，surefire 3 红：redirectSurvivesClickRecordFailure、absentClear/absentMark 两 meter 用例；skip 守卫与 C4 旧例保持绿） | `e8d460f` |
 | 绿（S1 fail-open + N2 absent meter 实现） | [41268895332](https://github.com/NorthAdb/LinkForge/actions/runs/41268895332) | **success**（surefire 151 + failsafe 166 + tz fork 2 = **319**） | `e0c567c` |
-| 分支终态（本提交） | 待 | 待回填（C2/C3/C4 先例） | 本 docs 提交 |
-| main 合并 | 待 | 待回填（同上） | 待 |
-| main tip 记账 | 待 | 待回填（C3-N1/C4-N1 先例） | 待 |
+| 分支终态（docs 收口提交） | [41271033439](https://github.com/NorthAdb/LinkForge/actions/runs/41271033439) | **success** | `ffa886e` |
+| main 合并 | [41271350329](https://github.com/NorthAdb/LinkForge/actions/runs/41271350329) | **success** | `e9ffff4` |
+
+**口径**：回填提交自身的 run 无法在本提交树内自引用（C3/C4 的 tip 行由下一波补记；C5 为冻结波，回填 run id 随收尾自报 §9 携带）。
 
 **口径**：功能绿以 `41268895332`（319 全量）为准；「分支终态（本提交）/ main 合并 / main tip 记账」三行由收尾 docs 提交与 merge 后回填（C2/C3/C4 先例）。本轮无中间 failure：一红一绿直收。
 
@@ -1621,7 +1622,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 - [x] **C5-11** Demo 步骤小节（README「快速上手」）：建链+跳转 302 / AB 链 variants 抽签看 Location + `dim=variant` / CSV 导入部分成功 / fault-drill Redis·只读降级（或口播）/ SSRF 口播「一次解析+全 IP 校验+连接钉死」——不要求新 UI
 - [x] **C5-12** 本章含 D-C5 决策表（1..28）、红先证据、CI conclusion 列、改动清单、Compose 手验专节、例数构成与连接预算
 - [x] **C5-13** backlog C5 闭环备注 + **功能冻结声明**（C5 审计通过后不再开产品能力轮；B10/Geo/端口白名单/出口代理仍开但「无萧北指令不开」）；本章同声明（D-C5-28）
-- [x] **C5-14** 全量 verify 绿 = run [41268895332](https://github.com/NorthAdb/LinkForge/actions/runs/41268895332)（surefire 151 + failsafe 166 + tz 2 = 319，Too many connections=0）；「分支终态（本提交）/ main 合并 / main tip 记账」三行 run=待、conclusion 待回填（C2/C3/C4 先例）
+- [x] **C5-14** 全量 verify 绿 = run [41268895332](https://github.com/NorthAdb/LinkForge/actions/runs/41268895332)（surefire 151 + failsafe 166 + tz 2 = 319，Too many connections=0）；「分支终态 / main 合并 / main tip 记账」三行由收尾 docs 提交回填（均 success，cf. `4435517` 先例）
 - [x] **C5-15** pom 仍 2.0.0；合 main → push 待 coordinator 收尾（不开 PR，沿 C1–C4），tip 全 SHA 随收尾自报
 - [x] **C5-16** 范围外未做：B10 / Geo / 自定义域名 / ES·CDC·云 / RedisBloom / 端口白名单产品化 / 出口代理 / 新产品能力 / 改 V1–V10
 
