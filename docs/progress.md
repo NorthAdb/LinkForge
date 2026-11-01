@@ -1491,6 +1491,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | 竞态修复 v2（最终） | [41225181075](https://github.com/NorthAdb/LinkForge/actions/runs/41225181075) | **success**（surefire 147 + failsafe 166 + tz fork 2 = **315**；同时是 A 绿与 B 绿的最终证据） | `350c788` |
 | 分支终态（docs 收口提交） | [41229481902](https://github.com/NorthAdb/LinkForge/actions/runs/41229481902) | **success** | `1aa2287` |
 | main 合并 | [41229903727](https://github.com/NorthAdb/LinkForge/actions/runs/41229903727) | **success** | `c961d0a` |
+| main tip 记账 | [41230348027](https://github.com/NorthAdb/LinkForge/actions/runs/41230348027) | **success** | `c7abd77` |
 
 **口径**：功能绿以竞态修复 v2 `41225181075`（315 全量）为准；「分支终态 / main 合并」两行由收尾 docs 提交回填（C2/C3 先例）。**轮内中间 failure 皆为诚实记账链**：41222907515（A 绿首推漏提交迁移后的测试类，staging 失误）、41223431052 与 41223877773（同一跨上下文 relay 竞态，根因见实现注记 7）、41224568503（包名笔误）；四次记账后 `41225181075` 收敛绿，同时充当 A 块与 B 块的最终绿证据。
 
@@ -1539,3 +1540,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 - **315 = surefire 147 + failsafe 166 + tz fork 2**（C4 净增 +8：UT +3【ShortLinkServiceRedisFailopenTest】，IT +5【AbSplitIT +2：S1 整单回滚、delete 清 variant；WebhookRebindingIT +3：toctou、pinned block、request timeout】）
 - 连接预算 27×10+15×4 = **330**（42 个 \*IT、15 个显式 `hikari.maximum-pool-size=4`；C4 新增 WebhookRebindingIT 钉 4），天花板 = 共享容器 `--max-connections=500`，余量 170。**注**：三个 relay-enabled IT（WebhookAggregateIT/WebhookDeliveryIT/WebhookRebindingIT）钉 `@DirtiesContext(AFTER_CLASS)`，类结束即关上下文，实际峰值低于纸面
 - 本地每提交 `mvn -B verify -DskipITs` 退出码显式 0
+
+## 收口 C5 点击记账 fail-open + C4 nit + Compose 手验（feat/deepen-c5-closeout，发车基线 main@c7abd77，2026-11-01）
+
+> 交接单：`记录追踪/05-阶段交接/LinkForge-phase-C5-closeout-handoff.md`。开放问题 Q1–Q6 **已全部确认 A**（t121s638，2026-11-01）。**合入后功能冻结**，本章随开发推进补全。
