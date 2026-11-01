@@ -1544,7 +1544,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 ## 收口 C5 点击记账 fail-open + C4 nit + Compose 手验（feat/deepen-c5-closeout，发车基线 main@c7abd77，2026-11-01）
 
 > 交接单：`记录追踪/05-阶段交接/LinkForge-phase-C5-closeout-handoff.md`。开放问题 Q1–Q6 **已全部确认 A**（t121s638，2026-11-01）；C4-S1/N1/N2/N3 捆入本波；本章已随收口 docs 提交补全（红先证据、CI conclusion 表、改动清单、验收勾选、Compose 手验证据、例数与连接预算）。**C5 审计通过后功能冻结**（D-C5-28）。
-> **红先完成（S1+N2 一块收口）**：红提交 `e8d460f` 只含测试 → run [41268891231](https://github.com/NorthAdb/LinkForge/actions/runs/41268891231) **failure**（32s，surefire 3 红：redirectSurvivesClickRecordFailure、absentClear/absentMark 两 meter 用例；skip 守卫 skipPathNeverTouchesClickRecording 与 C4 旧例保持绿——skip 不记点击在无实现树上本就成立），实现 `e0c567c` 翻绿（319 = 151+166+2）。docs 收口提交与 merge 尚未发生：CI 表「分支终态（本提交）」「main 合并」「main tip 记账」三行 run=待 / conclusion=待回填（C2/C3/C4 先例）。run/conclusion 全景见下表。
+> **红先完成（S1+N2 一块收口）**：红提交 `e8d460f` 只含测试 → run [41268891231](https://github.com/NorthAdb/LinkForge/actions/runs/41268891231) **failure**（32s，surefire 3 红：redirectSurvivesClickRecordFailure、absentClear/absentMark 两 meter 用例；skip 守卫 skipPathNeverTouchesClickRecording 与 C4 旧例保持绿——skip 不记点击在无实现树上本就成立），实现 `e0c567c` 翻绿（319 = 151+166+2）。「分支终态 / main 合并 / main tip 记账」三行已随收尾 docs 提交与 merge 回填（41271033439 / 41271350329 / 41271735356 全 success，C5-N1 补 tip 行）。run/conclusion 全景见下表。
 
 ### 决策记录（D-C5 落地）
 
@@ -1594,12 +1594,11 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | 绿（S1 fail-open + N2 absent meter 实现） | [41268895332](https://github.com/NorthAdb/LinkForge/actions/runs/41268895332) | **success**（surefire 151 + failsafe 166 + tz fork 2 = **319**） | `e0c567c` |
 | 分支终态（docs 收口提交） | [41271033439](https://github.com/NorthAdb/LinkForge/actions/runs/41271033439) | **success** | `ffa886e` |
 | main 合并 | [41271350329](https://github.com/NorthAdb/LinkForge/actions/runs/41271350329) | **success** | `e9ffff4` |
+| main tip 记账 | [41271735356](https://github.com/NorthAdb/LinkForge/actions/runs/41271735356) | **success** | `f955313` |
 
-**口径**：回填提交自身的 run 无法在本提交树内自引用（C3/C4 的 tip 行由下一波补记；C5 为冻结波，回填 run id 随收尾自报 §9 携带）。
+**口径**：功能绿以 `41268895332`（319 全量）为准；「分支终态 / main 合并 / main tip 记账」三行由收尾 docs 提交与 merge 后回填（C2/C3/C4 先例；`41271735356`@`f955313` 即终态回填提交的 run，C5-N1 补记）。本轮无中间 failure：一红一绿直收。
 
-**口径**：功能绿以 `41268895332`（319 全量）为准；「分支终态（本提交）/ main 合并 / main tip 记账」三行由收尾 docs 提交与 merge 后回填（C2/C3/C4 先例）。本轮无中间 failure：一红一绿直收。
-
-### 改动清单（2 提交 + 本 docs 提交）
+### 改动清单（2 提交 + docs 收口 `ffa886e` + 终态回填 `f955313`）
 
 | 提交 | 内容 |
 |------|------|
@@ -1623,13 +1622,13 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 - [x] **C5-12** 本章含 D-C5 决策表（1..28）、红先证据、CI conclusion 列、改动清单、Compose 手验专节、例数构成与连接预算
 - [x] **C5-13** backlog C5 闭环备注 + **功能冻结声明**（C5 审计通过后不再开产品能力轮；B10/Geo/端口白名单/出口代理仍开但「无萧北指令不开」）；本章同声明（D-C5-28）
 - [x] **C5-14** 全量 verify 绿 = run [41268895332](https://github.com/NorthAdb/LinkForge/actions/runs/41268895332)（surefire 151 + failsafe 166 + tz 2 = 319，Too many connections=0）；「分支终态 / main 合并 / main tip 记账」三行由收尾 docs 提交回填（均 success，cf. `4435517` 先例）
-- [x] **C5-15** pom 仍 2.0.0；合 main → push 待 coordinator 收尾（不开 PR，沿 C1–C4），tip 全 SHA 随收尾自报
+- [x] **C5-15** pom 仍 2.0.0；已合 main → push（merge `e9ffff4`，run `41271350329` success，不开 PR，沿 C1–C4），tip 全 SHA `f955313…` 随收尾自报
 - [x] **C5-16** 范围外未做：B10 / Geo / 自定义域名 / ES·CDC·云 / RedisBloom / 端口白名单产品化 / 出口代理 / 新产品能力 / 改 V1–V10
 
 ### Compose 手验证据（C4-N3，D-C5-14..17）
 
 - **日期与环境**：2026-11-01 Asia/Shanghai；实跑于分支代码终态 tip **`e0c567c`**（jar = `mvn -B -DskipTests clean package` 产物 `target/linkforge-2.0.0.jar`；`docker compose up -d` 后 mysql / redis / rabbitmq 均 healthy，compose 栈同 C4）。**口径**：docs 收口提交与 merge 不改代码/脚本，本证据对 C5 代码终态持续有效。
-- **`bash scripts/smoke.sh` → `SMOKE OK`，exit 0**。PASS 行原文：
+- **`bash scripts/smoke.sh` → `SMOKE OK`，exit 0（8 PASS）**。PASS 行原文：
   - `PASS health`
   - `PASS login user=admin tenant=demo`
   - `PASS create code=MYgYfre`
@@ -1638,7 +1637,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
   - `PASS register tenant=smoke-1793503680`
   - `PASS lifecycle create/detail/update code=k2MjWdq`
   - `PASS lifecycle disable -> redirect 404 code=k2MjWdq`
-- **`bash scripts/fault-drill.sh` → `FAULT DRILL OK`，exit 0**。PASS 行原文：
+- **`bash scripts/fault-drill.sh` → `FAULT DRILL OK`，exit 0（7 PASS）**。PASS 行原文：
   - `PASS redis: redirect 302 with redis down (L2 fail-open)`
   - `PASS redis: create survives redis down (idempotency fail-open)`
   - `PASS redis: self-heals after redis returns`
