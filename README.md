@@ -194,6 +194,8 @@ PowerShell 里通常没有 `bash`（Git 默认只把 `Git\cmd` 放进 PATH）。
 
 ### 面试 Demo 五步（可照读）
 
+10–15 分钟现场口播（计时、每步说什么、失败了怎么收、哪些数字不要报）见 [docs/demo-talk.md](docs/demo-talk.md)。简历粘贴稿见 [docs/resume.md](docs/resume.md)。
+
 前置同上：compose 三件套 healthy、应用已起、`$TOKEN` 是登录拿到的 JWT。每步 30 秒量级，讲完一步再走下一步。
 
 1. **建链 + 跳转 302**。`POST /api/links` 建 `https://example.com`，然后 `curl -s -D - -o /dev/null http://localhost:8080/r/CODE`，指给面试官看 `302` 与 `Location`。口播：五层读路径（限流→Bloom→空值缓存→L1/L2→行读）；坚持每请求读 DB 行，禁用/过期永不被旧缓存遮蔽。
