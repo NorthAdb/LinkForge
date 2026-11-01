@@ -1653,3 +1653,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 - **319 = surefire 151 + failsafe 166 + tz fork 2**（C5 净增 +4：UT +4【ShortLinkServiceRedisFailopenTest：redirectSurvivesClickRecordFailure、skipPathNeverTouchesClickRecording、absentClearMetersFailOpenOnCreate、absentMarkMetersFailOpenOnMissingRow】；IT 零新增）
 - 连接预算 27×10+15×4 = **330**（42 个 \*IT、15 个显式 `hikari.maximum-pool-size=4`；C5 零新 IT，构成不变），天花板 = 共享容器 `--max-connections=500`，余量 170。**注**：三个 relay-enabled IT（WebhookAggregateIT/WebhookDeliveryIT/WebhookRebindingIT）钉 `@DirtiesContext(AFTER_CLASS)`，类结束即关上下文，实际峰值低于纸面
 - 本地每提交 `mvn -B verify -DskipITs` 退出码显式 0
+
+## 面试材料加厚（docs-only，2026-11-01）
+
+功能冻结之后只加厚口述材料，**不开新功能波**。`docs/resume.md` 按春招简历口径扩写，仍是 C5 能力：A/B 权重分流、批量 CSV、httpclient5 DnsResolver 钉死 DNS rebinding、`fault-drill.sh`、Redis L2 fail-open、点击记账 fail-open；例数 **319 = 151 UT + 166 IT + 2 tz**；pom **2.0.0**；不发明 B10 / Geo 数字。新增 `docs/demo-talk.md`（10–15 分钟 Demo 讲稿）。README「面试 Demo 五步」加上讲稿链接。未改 Java、测试、Flyway、pom、CI。本轮未复跑 Compose；讲稿里的 `SMOKE OK` / `FAULT DRILL OK` 仍引用本章手验（tip `e0c567c`，smoke 8 PASS，fault-drill 7 PASS）。
