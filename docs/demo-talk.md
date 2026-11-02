@@ -2,6 +2,7 @@
 
 > **用途**：春招现场照着说。默认 **12 分钟**，卡点可以收到 10 分钟，追问多就用到 15 分钟。  
 > **对齐**：能力是 C5 收口 `f955313`（合并 `e9ffff4`，跳转代码 `e0c567c`）。`d1e94b2` 只补了 progress 里的 CI / PASS 计数，没有新行为。命令以仓库 README「五步跑通」和「面试 Demo 五步」为准。简历口径见 [`docs/resume.md`](resume.md)。  
+> **终端**：提示符是 `PS` 时只贴 PowerShell 代码块。bash 块贴进去会报 `is not recognized`。  
 > **数字**：只报 **319 = 151 UT + 166 IT + 2 tz**。pom **2.0.0**。  
 > **本文件没有新的 Compose 实测。** `SMOKE OK` / `FAULT DRILL OK` 的原文在 [`docs/progress.md`](progress.md) C5 章，实跑日 2026-11-01 Asia/Shanghai，代码 tip **`e0c567c`**（smoke **8** PASS，fault-drill **7** PASS，无 SKIP）。现场要跑就现场跑；没跑就说「证据在 progress，我今天不临时改口」。
 
@@ -60,9 +61,9 @@
 
 - [ ] 仓库根目录有 `.env`（从 `.env.example` 来，口令不进 git）
 - [ ] `docker compose ps` 里 mysql、redis、rabbitmq 都是 healthy。MySQL 第一次初始化可能要几分钟，别在面试官看着的时候等初始化
-- [ ] `java -jar target/linkforge-2.0.0.jar` 已经在 **8080** 前台或另一个终端里跑着。应用不读 `.env` 文件，启动那个窗口要先 `source .env`
-- [ ] 终端字号够大。Windows 上请求用 `curl.exe`，bash 脚本用 Git Bash
-- [ ] 下面的 `/tmp/links-demo.csv` 可以现场 `cat`，也可以提前放好
+- [ ] `java -jar target/linkforge-2.0.0.jar` 已经在 **8080** 前台或另一个终端里跑着。应用不读 `.env` 文件。启动那个窗口要先导入 `.env`。bash 用 `set -a && source .env && set +a`。Windows PowerShell 用 README 第 3 步的 `Get-Content` 循环，不要用 `source`
+- [ ] 终端字号够大。提示符是 `PS` 时，只贴下面标了 PowerShell 的代码块。`TOKEN=$(...)`、行末 `\`、`source`、`echo "${#TOKEN}"` 都是 bash，贴进 PowerShell 会把整段当成程序名，报 `is not recognized`。请求写 `curl.exe`。`scripts/*.sh` 用 Git Bash 跑
+- [ ] CSV 可以现场生成。PowerShell 写到 `$env:TEMP\links-demo.csv`。bash 写到 `/tmp/links-demo.csv`
 - [ ] 默念：319 · pom 2.0.0 · 不报 B10 · 不说 Geo · SSRF 只口播
 - [ ] fault-drill **要么开场前自己跑通过，要么改口播**。不要在面试里第一次调试这个脚本
 - [ ] 若准备实跑 fault-drill：机器上要有 `powershell.exe`（Webhook 的 5xx 桩）和 `.env` 里的 `MYSQL_ROOT_PASSWORD`。Linux 上常常没有 PowerShell，脚本会打印 `SKIP webhook`，那是设计，不是失败
@@ -81,7 +82,15 @@
 
 ## 1. 环境就绪（约 45 秒；已经起来就只指）
 
-README 的 bash 是这三行。PowerShell 用 `Copy-Item .env.example .env`，compose 命令相同。
+提示符是 `PS` 时用这一段。`.env` 已经存在就不要覆盖。
+
+```powershell
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+docker compose up -d
+docker compose ps
+```
+
+提示符不是 `PS` 时用 bash。不要把下面三行贴进 PowerShell。
 
 ```bash
 test -f .env || cp .env.example .env
@@ -89,7 +98,22 @@ docker compose up -d
 docker compose ps
 ```
 
-**你说：** 三行都是 healthy 就可以往后走。应用不是 compose 起来的，是宿主机上的 jar。看 README 第 3 步，这个窗口要先把 `.env` 导进环境再启动：
+**你说：** mysql、redis、rabbitmq 三行都是 healthy 就可以往后走。`up 3/3` 是对的。应用不是 compose 起来的，是宿主机上的 jar。Prometheus 和 Grafana 要另加 observability profile，这一步不要求它们。
+
+启动应用的窗口要先导入 `.env`，再执行 `java -jar`。应用不读 `.env` 文件。已经在 8080 跑着就不要再起一个。
+
+PowerShell：
+
+```powershell
+Get-Content .env | ForEach-Object {
+  if ($_ -match '^\s*#' -or $_ -notmatch '=') { return }
+  $name, $value = $_.Split('=', 2)
+  Set-Item -Path "Env:$($name.Trim())" -Value $value
+}
+java -jar target/linkforge-2.0.0.jar
+```
+
+bash。不要把 `source` 贴进 PowerShell。
 
 ```bash
 set -a
@@ -98,23 +122,42 @@ set +a
 java -jar target/linkforge-2.0.0.jar
 ```
 
-已经在跑就不要再起一个，8080 会被占。
+健康检查在另一个窗口做。期望正文里有 `"status":"UP"`。这个新窗口也要先导入 `.env`，导入不会生成 token。
 
-健康检查（README 第 4 步）期望正文里有 `"status":"UP"`：
-
-```bash
-curl -s http://localhost:8080/actuator/health
+```powershell
+curl.exe -s http://localhost:8080/actuator/health
 ```
 
-冒烟（README 第 5 步）。时间紧就跳过，说「开场前已对过 progress 里的 8 行 PASS」：
+冒烟脚本是 bash。时间紧就跳过，说「开场前已对过 progress 里的 8 行 PASS」。PowerShell 里通常没有 `bash` 这个命令，用 Git Bash 的可执行文件：
+
+```powershell
+& "C:\Program Files\Git\bin\bash.exe" scripts/smoke.sh
+```
+
+Git Bash、macOS、Linux 可以直接：
 
 ```bash
 bash scripts/smoke.sh
 ```
 
-期望最后一行是 `SMOKE OK`，退出码 0。脚本自己会登录、建链、看 302、看 Redis、再走一遍禁用后 404。它每轮还会注册用户；注册限流默认 5 次 / 600 秒，**不要连跑**。
+期望最后一行是 `SMOKE OK`，退出码 0。脚本自己会登录、建链、看 302、看 Redis，再走一遍禁用后 404。它每轮还会注册用户。注册限流默认 10 分钟内 5 次，不要连跑。
 
-**登录，后面的 curl 都用这个 TOKEN**（README 第 4 步；没有 `python3` 就改成 `python`）：
+**登录。** 后面的请求都用这个 token。先确认这个窗口已经导入 `.env`。只看长度，不要把 token 留在共享屏幕上。长度应是一百多。
+
+PowerShell：
+
+```powershell
+$body = @{
+  tenantName = $env:LINKFORGE_BOOTSTRAP_TENANT
+  username   = $env:LINKFORGE_BOOTSTRAP_USERNAME
+  password   = $env:LINKFORGE_BOOTSTRAP_PASSWORD
+} | ConvertTo-Json
+$login = curl.exe -s -X POST http://localhost:8080/api/auth/login -H "Content-Type: application/json" -d $body | ConvertFrom-Json
+$token = $login.data.token
+$token.Length
+```
+
+bash。没有 `python3` 就改成 `python`。`echo "${#TOKEN}"` 只在 bash 里表示长度。
 
 ```bash
 TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
@@ -124,13 +167,12 @@ TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
 echo "${#TOKEN}"
 ```
 
-`echo` 的长度应该是一大截，不要把 token 本身投到共享屏幕上停留太久。Windows PowerShell 用 README 里的 `curl.exe` + `ConvertFrom-Json`，不要粘贴 `source` 和行末反斜杠。
-
 **失败了：**
 
 | 现象 | 你怎么处理、怎么说 |
 |------|-------------------|
-| `TOKEN` 为空 | 把登录 JSON 打出来看，不要念密码。多半是这个窗口没 `source .env`，或 bootstrap 口令不对。 |
+| `is not recognized`，整段以 `TOKEN=$(curl` 开头 | bash 贴进了 PowerShell。提示符是 `PS` 就改贴 PowerShell 段。 |
+| `$token` 或 `TOKEN` 为空 | 把登录 JSON 打出来看，不要念密码。多半是这个窗口没导入 `.env`，或 bootstrap 口令不对。导入不会生成 token，导入之后还要再跑登录。 |
 | compose 不是 healthy | 不要现拉镜像。改口播，并说依赖没就绪，Demo 改讲设计和 progress 里的证据。 |
 | 8080 拒绝连接 | jar 没起来，或起在了别的端口。`fault-drill.sh` 自己占用的是 **8083**，不要跟 8080 搞混。 |
 | `SMOKE FAIL` | 读它打印的那一行原因。连跑注册会 429。不要说「测试套件挂了」——这是冒烟脚本，和 319 个 `mvn verify` 不是同一次。 |
@@ -140,7 +182,19 @@ echo "${#TOKEN}"
 
 ## 2. 步 1 · 建链 + 跳转 302（约 90 秒）
 
-**操作**（在 README 第 4 步的 curl 上把短码接出来，避免手抄错）：
+**操作。** README 第 4 步已经会用 `data.code` 跳转。现场仍跑下面这一段，因为它会打印 `CODE=`，方便指给面试官。提示符是 `PS` 时用 PowerShell，变量是 `$token` 和 `$code`。
+
+```powershell
+$link = @{ originalUrl = "https://example.com" } | ConvertTo-Json
+$raw = curl.exe -s -X POST http://localhost:8080/api/links -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d $link
+$raw
+$created = $raw | ConvertFrom-Json
+$code = $created.data.code
+"CODE=$code"
+curl.exe -s -D - -o NUL "http://localhost:8080/r/$code"
+```
+
+bash 用 `$TOKEN` 和 `$CODE`。不要把 `CREATE=$(` 贴进 PowerShell。
 
 ```bash
 CREATE=$(curl -s -X POST http://localhost:8080/api/links \
@@ -155,7 +209,11 @@ curl -s -D - -o /dev/null "http://localhost:8080/r/$CODE"
 
 **你说：**
 
-先看创建。HTTP 是 200，包体是 `{code, message, data}`，业务 `code` 为 0 才是成功。短码在 `data.code`，另外还有 `data.shortPath`。这不是裸 JSON 顶上就一个 code。
+先看创建。HTTP 是 200，包体是 `{code, message, data}`，业务 `code` 为 0 才是成功。短码在 `data.code`，另外还有 `data.shortPath`。这不是裸 JSON 顶上就一个 code。一次本机成功的包体如下。`id` 和 `data.code` 每次不同，指字段，不要背这个短码。
+
+```json
+{"code":0,"message":"ok","data":{"id":961,"code":"M0OKvbe","originalUrl":"https://example.com","shortPath":"/r/M0OKvbe"}}
+```
 
 再看跳转。我用的是 GET，带响应头，丢掉 body。第一行应是 `HTTP/1.1 302`，`Location` 是 `https://example.com`。不要用 `curl -I`，那是 HEAD。HEAD 可以探测，但**不记点击**；等下讲 A/B 统计时如果用了 HEAD，桶是空的，不是 bug。
 
@@ -167,9 +225,9 @@ curl -s -D - -o /dev/null "http://localhost:8080/r/$CODE"
 
 | 现象 | 你怎么处理、怎么说 |
 |------|-------------------|
-| 401 | TOKEN 过期或没带上。重新登录，不要改代码。 |
+| 401 | `TOKEN` 没带上。这个窗口只导入了 `.env`、还没登录时也会这样。重新登录，不要改代码。 |
 | 400，URL 不合法 | 必须 `http://` 或 `https://`。`example.com` 不加协议会失败，这是校验，不是服务挂了。 |
-| 404 | 短码抄错，或抄进了保留字。用上面的 `CODE=` 那一行。 |
+| 404 | 短码抄错，或抄进了保留字，或地址仍是 `/r/CODE`。用上面打印的 `CODE=`。 |
 | 429 | 创建默认 30 次/60 秒，跳转默认 300 次/60 秒。停一下，说限流是 ZSET 滑窗，响应带 `Retry-After`。 |
 | 500 | 不要现场翻栈改代码。看 jar 那个终端的最后一屏，多半是 MySQL/Redis 没连上。改口播步 1 的设计。 |
 
@@ -179,7 +237,26 @@ curl -s -D - -o /dev/null "http://localhost:8080/r/$CODE"
 
 ## 3. 步 2 · A/B 权重分流（约 2 分 30 秒，必做）
 
-**操作：**
+**操作。** 提示符是 `PS` 时用这一段。`-Depth 5` 要留着，否则嵌套的 `variants` 会被折成类型名，创建会失败。
+
+```powershell
+$abBody = @{
+  originalUrl = "https://example.com/default"
+  variants = @(
+    @{ key = "a"; url = "https://example.com/a"; weight = 1 }
+    @{ key = "b"; url = "https://example.com/b"; weight = 3 }
+  )
+} | ConvertTo-Json -Depth 5
+$abRaw = curl.exe -s -X POST http://localhost:8080/api/links -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d $abBody
+$abRaw
+$abCode = ($abRaw | ConvertFrom-Json).data.code
+"AB_CODE=$abCode"
+1..6 | ForEach-Object {
+  curl.exe -s -D - -o NUL "http://localhost:8080/r/$abCode" | Select-String -Pattern '^Location:'
+}
+```
+
+bash。不要把 `AB=$(` 或 `for i in` 贴进 PowerShell。
 
 ```bash
 AB=$(curl -s -X POST http://localhost:8080/api/links \
@@ -210,6 +287,15 @@ done
 
 **然后等统计。** 302 当时写的是点击明细和 outbox；`dim=variant` 这一桶是消费端写的。outbox relay 默认初始延迟 3 秒、之后每 2 秒一轮。先停 5 秒再查，不要指着空数组说「统计坏了」。
 
+PowerShell：
+
+```powershell
+Start-Sleep -Seconds 5
+curl.exe -s -H "Authorization: Bearer $token" "http://localhost:8080/api/links/$abCode/stats/breakdown?dim=variant"
+```
+
+bash：
+
 ```bash
 sleep 5
 curl -s -H "Authorization: Bearer $TOKEN" \
@@ -221,6 +307,14 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 响应还是包在 `data` 里。有点击进来之后，应能看到 `a` 和 `b` 两行，至少能看到你刷到过的那个 key。没有抽中的 key 不会为了「展示完整」去补一行零。没挂 variant 的链不会写这个维度。
 
 非法维度直接 400，例如 Geo。白名单只有 `device`、`referer_host`、`os`、`browser`、`variant`。
+
+PowerShell：
+
+```powershell
+curl.exe -s -D - -o NUL -w "HTTP %{http_code}`n" -H "Authorization: Bearer $token" "http://localhost:8080/api/links/$abCode/stats/breakdown?dim=geo"
+```
+
+bash：
 
 ```bash
 curl -s -D - -o /dev/null -w 'HTTP %{http_code}\n' \
@@ -247,7 +341,23 @@ curl -s -D - -o /dev/null -w 'HTTP %{http_code}\n' \
 
 ## 4. 步 3 · CSV 导入部分成功（约 90 秒）
 
-**操作**（仓库外的临时文件即可）：
+**操作。** 文件放在系统临时目录，不进仓库。编码用 ASCII，避免表头前面多一个 BOM，列名对不上就会整单 400。
+
+PowerShell：
+
+```powershell
+$csvPath = Join-Path $env:TEMP 'links-demo.csv'
+@'
+original_url,title
+https://example.com/ok-1,one
+https://example.com/ok-2,two
+not-a-url,bad
+'@ | Set-Content -Encoding ascii -Path $csvPath
+Get-Content $csvPath
+curl.exe -s -w "`nHTTP %{http_code}`n" -H "Authorization: Bearer $token" -F "file=@$csvPath" http://localhost:8080/api/links/import
+```
+
+bash。`cat > /tmp/... <<'CSV'` 不要贴进 PowerShell。
 
 ```bash
 cat > /tmp/links-demo.csv <<'CSV'
@@ -279,7 +389,7 @@ curl -s -w '\nHTTP %{http_code}\n' -H "Authorization: Bearer $TOKEN" \
 | 现象 | 你怎么处理、怎么说 |
 |------|-------------------|
 | 整单 400 | 看 message。常见是列名不是 `original_url`，或文件没传到（字段必须叫 `file`）。 |
-| `row` 不是 4 | 把 cat 出来的文件念一遍行号。多了空行，行号会变。 |
+| `row` 不是 4 | 把刚打印出来的文件念一遍行号。多了空行，行号会变。 |
 | 429 | import 限流。说「这是专用窗口，不是创建配额被 100 行打爆」。等窗口，不要改配置。 |
 | 成功 0 失败 0 | 看是不是传成了空文件。curl 的 `@` 不能丢。 |
 
@@ -290,6 +400,14 @@ curl -s -w '\nHTTP %{http_code}\n' -H "Authorization: Bearer $TOKEN" \
 ## 5. 步 4 · 故障演练（约 2 分钟；可实跑，也可口播）
 
 ### 5.1 优先：有准备就实跑
+
+PowerShell 里没有 `bash` 命令时，用 Git Bash：
+
+```powershell
+& "C:\Program Files\Git\bin\bash.exe" scripts/fault-drill.sh
+```
+
+Git Bash、macOS、Linux：
 
 ```bash
 bash scripts/fault-drill.sh
@@ -336,6 +454,17 @@ bash scripts/fault-drill.sh
 ### 5.3 可选的 20 秒替代（只演 Redis，演完必须拉起来）
 
 只在 8080 的应用已经起来、而且你确定能马上 `start` 的时候用：
+
+PowerShell。短码用步 1 留下的 `$code`。
+
+```powershell
+docker compose stop redis
+curl.exe -s -D - -o NUL -w "HTTP %{http_code}`n" "http://localhost:8080/r/$code"
+docker compose start redis
+docker compose ps
+```
+
+bash：
 
 ```bash
 docker compose stop redis
@@ -457,10 +586,53 @@ L2 的读写删、空值标记、幂等这几处把连接失败接住，打 `lin
 
 ## 11. 现场可复制的最短命令串
 
-依赖和应用已经按 README 起来之后，从登录到 CSV 用这一串。fault-drill 和 SSRF 不要塞进同一串里自动跑。
+依赖和应用已经按 README 起来之后，从登录到 CSV 用这一串。fault-drill 和 SSRF 不要塞进同一串里自动跑。提示符是 `PS` 时只贴 PowerShell。窗口要先按第 1 节导入 `.env`。
+
+```powershell
+curl.exe -s http://localhost:8080/actuator/health
+
+$body = @{
+  tenantName = $env:LINKFORGE_BOOTSTRAP_TENANT
+  username   = $env:LINKFORGE_BOOTSTRAP_USERNAME
+  password   = $env:LINKFORGE_BOOTSTRAP_PASSWORD
+} | ConvertTo-Json
+$login = curl.exe -s -X POST http://localhost:8080/api/auth/login -H "Content-Type: application/json" -d $body | ConvertFrom-Json
+$token = $login.data.token
+
+$link = @{ originalUrl = "https://example.com" } | ConvertTo-Json
+$raw = curl.exe -s -X POST http://localhost:8080/api/links -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d $link
+$created = $raw | ConvertFrom-Json
+$code = $created.data.code
+curl.exe -s -D - -o NUL "http://localhost:8080/r/$code"
+
+$abBody = @{
+  originalUrl = "https://example.com/default"
+  variants = @(
+    @{ key = "a"; url = "https://example.com/a"; weight = 1 }
+    @{ key = "b"; url = "https://example.com/b"; weight = 3 }
+  )
+} | ConvertTo-Json -Depth 5
+$abRaw = curl.exe -s -X POST http://localhost:8080/api/links -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d $abBody
+$abCode = ($abRaw | ConvertFrom-Json).data.code
+1..6 | ForEach-Object {
+  curl.exe -s -D - -o NUL "http://localhost:8080/r/$abCode" | Select-String -Pattern '^Location:'
+}
+Start-Sleep -Seconds 5
+curl.exe -s -H "Authorization: Bearer $token" "http://localhost:8080/api/links/$abCode/stats/breakdown?dim=variant"
+
+$csvPath = Join-Path $env:TEMP 'links-demo.csv'
+@'
+original_url,title
+https://example.com/ok-1,one
+https://example.com/ok-2,two
+not-a-url,bad
+'@ | Set-Content -Encoding ascii -Path $csvPath
+curl.exe -s -H "Authorization: Bearer $token" -F "file=@$csvPath" http://localhost:8080/api/links/import
+```
+
+bash 整串在下面。不要贴进 PowerShell。窗口里要先 `set -a && source .env && set +a`。没有 `python3` 就改成 `python`。
 
 ```bash
-# 窗口里已经 set -a && source .env && set +a
 curl -s http://localhost:8080/actuator/health
 
 TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
@@ -491,7 +663,14 @@ CSV
 curl -s -H "Authorization: Bearer $TOKEN" -F file=@/tmp/links-demo.csv http://localhost:8080/api/links/import
 ```
 
-冒烟和故障演练仍用 README 原文：
+冒烟和故障演练仍是 bash 脚本。PowerShell：
+
+```powershell
+& "C:\Program Files\Git\bin\bash.exe" scripts/smoke.sh
+& "C:\Program Files\Git\bin\bash.exe" scripts/fault-drill.sh
+```
+
+Git Bash、macOS、Linux：
 
 ```bash
 bash scripts/smoke.sh

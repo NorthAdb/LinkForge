@@ -57,11 +57,15 @@
 
 ### 五步跑通
 
-下面每一步都给了 PowerShell 和 bash 两段。Windows 上的 Cursor 终端、Windows PowerShell、PowerShell 7 用 PowerShell 段。macOS、Linux、Git Bash 用 bash 段。`docker compose` 两边相同。cmd.exe 只把第一步的复制换成 `copy .env.example .env`，后面的 `docker`、`mvn`、`java` 与 PowerShell 相同，但不要用 bash 的 `source` 和 `$TOKEN`。
+做完这五步，本机有三个依赖容器，一个占着 8080 的 Java 进程，并且你亲手建出一条短链、看到它 302 跳走。Java 进程在宿主机上跑，不在 Compose 的服务列表里。
 
-PowerShell 里的 `curl` 是 `Invoke-WebRequest` 的别名，请求请写 `curl.exe`。PowerShell 用反引号续行，不认识 bash 的行末 `\`。
+用两个终端窗口。窗口 A 停在第 3 步，让应用一直跑。窗口 B 做第 4 步和第 5 步。关掉窗口 A，或者在窗口 A 按 Ctrl+C，8080 上的进程就没了，后面的 curl 会连接失败。
 
-**1. 启动依赖**（仓库根目录）。Compose 自己读 `.env`，只替换 `docker-compose.yml` 里的 `${...}`。`SPRING_*`、`JWT_SECRET`、`LINKFORGE_*` 不会进容器。`.env` 已在 `.gitignore` 里，不要提交。文件已存在时不要覆盖，否则会冲掉你改过的口令。
+Windows 上的 Cursor 终端、Windows PowerShell、PowerShell 7 用 PowerShell 段。macOS、Linux、Git Bash 用 bash 段。`docker compose` 两边相同。cmd.exe 只把第一步的复制换成 `copy .env.example .env`。后面的 `docker`、`mvn`、`java` 与 PowerShell 相同。cmd.exe 不认识 bash 的 `source` 和 `$TOKEN`。
+
+PowerShell 里的 `curl` 是 `Invoke-WebRequest` 的别名。请求写 `curl.exe`。PowerShell 用反引号续行，不认识 bash 的行末 `\`，也不认识 `TOKEN=$(...)`。把 bash 段粘进 PowerShell，会得到 `is not recognized`。
+
+**1. 启动依赖。** 在仓库根目录执行。这一步只启动 MySQL、Redis、RabbitMQ。它不编译，也不启动应用。
 
 PowerShell：
 
@@ -79,13 +83,25 @@ docker compose up -d
 docker compose ps
 ```
 
-`docker compose ps` 里 mysql、redis、rabbitmq 都应为 healthy。MySQL 第一次初始化大约 5 分钟。
+三条命令各做一件事。
 
-**2. 编译**。这一步只生成 jar，不启动应用。PowerShell 里给 `-D` 参数加引号，避免被当成 PowerShell 参数。
+- 第一行只在没有 `.env` 时，从 `.env.example` 复制一份。文件已经存在就什么都不改。覆盖会冲掉你改过的口令。`.env` 在 `.gitignore` 里，不要提交。
+- `docker compose up -d` 按 `docker-compose.yml` 在后台启动容器。Compose 自己读 `.env`，只替换这个文件里的 `${...}`。`SPRING_*`、`JWT_SECRET`、`LINKFORGE_*` 不会进容器。`-d` 让命令自己返回，容器继续跑。
+- `docker compose ps` 打印当前状态。你要看的是 mysql、redis、rabbitmq 三行都是 `healthy`。
+
+默认这次 `up` 的汇总是 `up 3/3`。这是对的。Prometheus 和 Grafana 在 `observability` profile 里，这次命令不会启动它们。以前用 `docker compose --profile observability up -d` 起过的话，`ps` 仍会列出那两个容器，汇总可以是 5 行。五个容器不是这一步的通过条件。通过条件是三个依赖都 `healthy`。
+
+MySQL 第一次初始化大约 5 分钟。这期间 `ps` 里 mysql 还不是 `healthy`。等到 `healthy` 再做第 3 步。提前启动应用，日志里会是数据源连接失败。
+
+**2. 编译。** 这一步只生成 jar，不启动应用，也不连数据库。
+
+有本机 Maven 时用这一条。PowerShell 里给 `-D` 加引号，否则 PowerShell 会把它当成自己的参数。
 
 ```powershell
 mvn -q "-DskipTests" package
 ```
+
+`-q` 把 Maven 的普通日志藏起来，所以成功时窗口往往只有光标回到提示符。`package` 编译并打 jar。`-DskipTests` 跳过测试。测试在第 5 步和 CI 里跑。
 
 没有本机 Maven 时用镜像编译。PowerShell：
 
@@ -102,7 +118,9 @@ MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD":/app -v linkforge_m2:/root/.m2 -w /
 
 产物是 `target/linkforge-2.0.0.jar`。JDK 17 或更高版本都能编。JDK 21 会按 `pom.xml` 的 `java.version=17` 生成字节码，不必再装一套 JDK 17。
 
-**3. 运行**。应用不读 `.env` 文件。先把变量放进当前窗口，再启动。换一个窗口就要再导一次。
+看不到 jar，或 PowerShell 把 `-DskipTests` 报成参数错误时，先确认命令带了引号，并且当前目录是仓库根目录。
+
+**3. 运行。** 在窗口 A 执行。应用不读 `.env` 文件。先把变量放进这个窗口，再启动。换一个窗口就要再导一次。只导入、不执行 `java -jar`，应用不会起来。
 
 PowerShell：
 
@@ -124,13 +142,36 @@ set +a
 java -jar target/linkforge-2.0.0.jar
 ```
 
-不想先打 jar 时，在同一个已经导出变量的窗口里执行 `mvn spring-boot:run`。它会先编译，再从 `target/classes` 启动，不读上面那个 jar。默认端口 8080，Spring profile 是 `dev`。前台进程用 Ctrl+C 停止。
+导入那段把 `.env` 里的每一行放进当前窗口的环境变量。它跳过空行和 `#` 注释。这些变量只活在这个窗口里。`java -jar` 启动第 2 步打出来的包，占住这个窗口。默认端口 8080，Spring profile 是 `dev`。
 
-**4. 冒烟**。新开的窗口要先重复第 3 步的导入。把最后一条命令里的 `CODE` 换成创建接口返回的短码。健康检查期望正文里有 `"status":"UP"`。跳转期望 `302` 和 `Location`。
+日志里同时出现这两行，才算起来了。
+
+```text
+Tomcat started on port 8080 (http)
+Started LinkForgeApplication
+```
+
+旁边还会有 Flyway 的 `Schema linkforge is up to date`，以及 `bloom seeded`。这是迁移和短码过滤器就绪，不是失败。
+
+`Using generated security password` 是一条 WARN。Spring Security 发现项目没有提供 `UserDetailsService`，就打印了一个内存用户的开发口令。登录不用这串口令。登录用的是 `.env` 里的 `LINKFORGE_BOOTSTRAP_TENANT`、`LINKFORGE_BOOTSTRAP_USERNAME`、`LINKFORGE_BOOTSTRAP_PASSWORD`。
+
+不想先打 jar 时，在同一个已经导出变量的窗口里执行 `mvn spring-boot:run`。它会先编译，再从 `target/classes` 启动，不读上面那个 jar。前台进程用 Ctrl+C 停止。
+
+窗口 A 停在日志上是正常的。开窗口 B 做第 4 步。不要在窗口 A 里粘贴 curl。
+
+**4. 冒烟。** 在窗口 B 执行。应用必须已经在窗口 A 里跑着。这个窗口还没有第 3 步的环境变量，所以要先再导入一次 `.env`。导入只填充 `$env:LINKFORGE_*`。它不会创建 `$token`。`$token` 来自后面的登录响应。导入之后如果直接建链，响应是 `{"code":401,"message":"unauthorized","data":null}`。
+
+把下面整段一次粘进去，等提示符回来。中途按回车会把还没赋值的 `$token` 拿去发请求。
 
 PowerShell：
 
 ```powershell
+Get-Content .env | ForEach-Object {
+  if ($_ -match '^\s*#' -or $_ -notmatch '=') { return }
+  $name, $value = $_.Split('=', 2)
+  Set-Item -Path "Env:$($name.Trim())" -Value $value
+}
+
 curl.exe -s http://localhost:8080/actuator/health
 
 $body = @{
@@ -142,13 +183,43 @@ $login = curl.exe -s -X POST http://localhost:8080/api/auth/login -H "Content-Ty
 $token = $login.data.token
 
 $link = @{ originalUrl = "https://example.com" } | ConvertTo-Json
-curl.exe -s -X POST http://localhost:8080/api/links -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d $link
-curl.exe -s -D - -o NUL http://localhost:8080/r/CODE
+$raw = curl.exe -s -X POST http://localhost:8080/api/links -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d $link
+$raw
+$created = $raw | ConvertFrom-Json
+curl.exe -s -D - -o NUL "http://localhost:8080/r/$($created.data.code)"
 ```
 
-bash：
+这段里的命令按顺序做四件事。
+
+- 导入 `.env`，让登录请求带上 bootstrap 租户、用户名和口令。
+- `GET /actuator/health` 问应用和三个依赖是否都活着。
+- `POST /api/auth/login` 用 bootstrap 账号换 JWT，放进 `$token`。
+- `POST /api/links` 建一条指向 `https://example.com` 的短链。最后一条用响应里的 `data.code` 去访问 `/r/{code}`。`-D -` 打印响应头，`-o NUL` 丢掉空正文。
+
+健康检查的正文里要有 `"status":"UP"`，并且 `db`、`redis`、`rabbit` 各自也是 `"status":"UP"`。磁盘数字每次不同，可以忽略。
+
+建链的一次本机成功响应如下。最外层的 `"code":0` 表示业务成功。短码在 `data.code`，不在最外层的 `code`。`id` 和 `data.code` 每次创建都不同。你的响应里这两处换成自己的值即可。
+
+```json
+{"code":0,"message":"ok","data":{"id":961,"code":"M0OKvbe","originalUrl":"https://example.com","shortPath":"/r/M0OKvbe"}}
+```
+
+跳转要看到这两行。其余的 `X-Frame-Options`、`Cache-Control` 之类是安全响应头，留着即可。
+
+```text
+HTTP/1.1 302
+Location: https://example.com
+```
+
+地址写成 `/r/CODE` 时，`CODE` 只是旧说明里的占位词，库里没有这个短码，响应是 `HTTP/1.1 404`。用创建响应里的 `data.code`。
+
+bash。没有 `python3` 时把下面两处换成 `python`。Windows 上常见的是 `python`。
 
 ```bash
+set -a
+source .env
+set +a
+
 curl -s http://localhost:8080/actuator/health
 
 TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
@@ -156,14 +227,20 @@ TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
   -d '{"tenantName":"'"${LINKFORGE_BOOTSTRAP_TENANT:-demo}"'","username":"'"${LINKFORGE_BOOTSTRAP_USERNAME:-admin}"'","password":"'"${LINKFORGE_BOOTSTRAP_PASSWORD}"'"}' \
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["token"])')
 
-curl -s -X POST http://localhost:8080/api/links -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' -d '{"originalUrl":"https://example.com"}'
-curl -s -D - -o /dev/null http://localhost:8080/r/CODE
+CREATE=$(curl -s -X POST http://localhost:8080/api/links -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"originalUrl":"https://example.com"}')
+printf '%s\n' "$CREATE"
+CODE=$(printf '%s' "$CREATE" | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["code"])')
+curl -s -D - -o /dev/null "http://localhost:8080/r/$CODE"
 ```
 
-没有 `python3` 的环境把最后那个解析换成 `python`。Windows 上常见的是 `python`。
+**5. 验证脚本。** 仍在窗口 B，应用仍在窗口 A 跑着。这四个文件是 bash，会自己读 `.env`，所以这里不用再导环境变量。第一次只跑 `scripts/smoke.sh`。它自己做健康检查、登录、建链和 302，成功的最后一行是 `SMOKE OK`。
 
-**5. 验证脚本**。这四个文件是 bash，会自己读 `.env`。期望 `scripts/smoke.sh` 输出 `SMOKE OK`。`mq-drill.sh` 在 sync 开着时断开 RabbitMQ 再追平。`outbox-drill.sh` 在 sync 关着时做同样的事，并自己另起一个 8082 端口的实例。`fault-drill.sh`（C4 故障演练，依赖第 2 步的 jar 与 compose 三件套）分 redis 停服 / webhook 5xx·超时 / mysql 只读三段，全文成功输出 `FAULT DRILL OK`；webhook 段的 5xx 桩用 PowerShell HttpListener（无 powershell）、mysql-ro 段缺 `MYSQL_ROOT_PASSWORD` 时对应段诚实 SKIP；只读态主探针是 GET `/r/{code}` 期望 302——点击记账 fail-open（C5），只读库写不了明细/Outbox 也不再拖垮跳转，HEAD 探针保留作次要断言。脚本每轮注册 2 个用户，注册限流默认 5 次/10 分钟，短时间连跑多轮会撞限流。
+另外三个会停容器，或再启动一个 Java 进程。`smoke.sh` 通过之后再跑。
+
+- `mq-drill.sh` 在同步写点击开着时停掉 RabbitMQ，确认跳转仍是 302，再启动 RabbitMQ 并等统计追平。
+- `outbox-drill.sh` 用第 2 步的 jar 另起一个 8082 端口的实例，并关掉同步写。它停掉 RabbitMQ，确认点击留在 `lf_outbox`，恢复后再追平。
+- `fault-drill.sh` 是故障演练，同样依赖第 2 步的 jar 和三个依赖容器。它分三段。Redis 停服，Webhook 返回 5xx 或超时，MySQL 只读。全文成功的最后一行是 `FAULT DRILL OK`。Webhook 那段的 5xx 桩用 PowerShell 的 HttpListener。机器上没有 `powershell` 时，这一段会跳过。MySQL 只读那段缺 `MYSQL_ROOT_PASSWORD` 时也会跳过。只读态的主探针是 `GET /r/{code}`，期望 302。点击记账失败时跳转仍然成功。HEAD 探针是次要断言。
 
 bash：
 
@@ -174,18 +251,21 @@ bash scripts/outbox-drill.sh
 bash scripts/fault-drill.sh
 ```
 
-PowerShell 里通常没有 `bash`（Git 默认只把 `Git\cmd` 放进 PATH）。打开 Git Bash 跑上面四行，或显式调用 bash：
+PowerShell 里通常没有 `bash`。Git 默认只把 `Git\cmd` 放进 PATH。打开 Git Bash 跑上面四行，或显式调用 bash：
 
 ```powershell
 & "C:\Program Files\Git\bin\bash.exe" scripts/smoke.sh
 ```
 
-浏览器入口是 `http://localhost:8080/` 极简控制台（登录、注册、建链、列表、启停、删除、统计、CSV 导出、CSV 导入、访问密码、API Key、点击 Webhook。控制台是可选入口，走的是下面同一套 API，不另开接口）。接口文档是 `http://localhost:8080/swagger-ui/index.html`（springdoc 生成，prod 下关闭）。
+脚本每轮注册 2 个用户。注册限流默认 5 次 / 10 分钟。短时间连跑多轮会撞限流，脚本会失败。等窗口过去再跑。
+
+浏览器入口是 `http://localhost:8080/`。那是一个极简控制台，能登录、注册、建链、看列表、启停、删除、看统计、导入导出 CSV、设访问密码、管 API Key 和点击 Webhook。控制台走的是同一套 API，没有另一套接口。接口文档是 `http://localhost:8080/swagger-ui/index.html`。springdoc 生成这个页面，prod profile 下关闭。
 
 ### 常见坑
 
 - **必填环境变量缺失起不来**：`LINKFORGE_BOOTSTRAP_PASSWORD`、`SPRING_DATASOURCE_PASSWORD`、`SPRING_RABBITMQ_PASSWORD`、`JWT_SECRET`（至少 32 字符）没有默认值，Spring 占位符解析失败即退出。
-- **PowerShell 不要粘贴 bash 导出**：`source`、`set -a`、行末 `\` 都会失败。用第 3 步的 `Get-Content` 循环。请求用 `curl.exe`。
+- **PowerShell 不要粘贴 bash 导出**：`source`、`set -a`、行末 `\`、`TOKEN=$(...)` 都会失败。用第 3 步的 `Get-Content` 循环。请求用 `curl.exe`。
+- **新窗口直接建链会 401**：第 4 步在另一个窗口做。先导入 `.env`，再登录。导入不会生成 `$token`。`$token` 为空时，`POST /api/links` 返回 `{"code":401,"message":"unauthorized","data":null}`。跳转地址要用创建响应里的 `data.code`。写成 `/r/CODE` 会得到 `HTTP/1.1 404`。
 - **MySQL 口令写在数据卷里**：`MYSQL_PASSWORD` 只在卷 `linkforge_mysql_data` 第一次初始化时创建账号。之后只改 `.env`，应用仍会报 `Access denied for user 'linkforge'`（1045，`using password: YES`）。让 `SPRING_DATASOURCE_PASSWORD` 与当初的口令一致。确认可以清空数据时，再执行 `docker compose down -v` 然后重新 `up`。`docker compose stop` 只停容器，卷还在。
 - **Linux 上 Prometheus 抓不到宿主机应用**：Compose 已为 Prometheus 配 `host.docker.internal:host-gateway`；自己起容器跑应用/测试时用 `--network host` 并把连接变量指向 `127.0.0.1`。
 - **scrape-token 文件权限**（Linux 踩坑实录）：Prometheus 容器内进程（`prom/prometheus` 以 nobody 运行）必须能读 `/etc/linkforge/scrape-token`。宿主机上该文件若是 `600` 且属主是登录用户，容器内读取被拒、target 永久 down。Linux 下 `chmod 644 ops/observability/scrape-token`（Windows / Docker Desktop 不校验 Unix 权限位，无此坑）。文件内容须与 `.env` 的 `LINKFORGE_METRICS_SCRAPE_TOKEN` 逐字一致，末尾不要换行。bash 用 `printf '%s' "$token" > ops/observability/scrape-token`。PowerShell 用 `Set-Content -NoNewline -Path ops/observability/scrape-token -Value $token`。
@@ -198,7 +278,7 @@ PowerShell 里通常没有 `bash`（Git 默认只把 `Git\cmd` 放进 PATH）。
 
 前置同上：compose 三件套 healthy、应用已起、`$TOKEN` 是登录拿到的 JWT。每步 30 秒量级，讲完一步再走下一步。
 
-1. **建链 + 跳转 302**。`POST /api/links` 建 `https://example.com`，然后 `curl -s -D - -o /dev/null http://localhost:8080/r/CODE`，指给面试官看 `302` 与 `Location`。口播：五层读路径（限流→Bloom→空值缓存→L1/L2→行读）；坚持每请求读 DB 行，禁用/过期永不被旧缓存遮蔽。
+1. **建链 + 跳转 302**。`POST /api/links` 建 `https://example.com`，用响应里的 `data.code` 请求 `GET /r/{code}`，指给面试官看 `302` 与 `Location`。口播：五层读路径（限流→Bloom→空值缓存→L1/L2→行读）；坚持每请求读 DB 行，禁用/过期永不被旧缓存遮蔽。
 2. **A/B 权重分流**。建链请求体带 `variants`（如 `a`/`b` 两条，weight 1 和 3），连刷几次 `GET /r/{code}`，`Location` 在两个目标间按权重变化；再 `GET /api/links/{code}/stats/breakdown?dim=variant` 看两桶计数。口播：门禁/密码/UTM 全留在链层，抽签发生在全部门禁通过后；点击按所抽 key 进 `dim=variant` 分桶。
 3. **CSV 导入部分成功**。造 3 行 CSV（两行合法 URL + 一行坏 URL），`curl -H "Authorization: Bearer $TOKEN" -F file=@links.csv http://localhost:8080/api/links/import`，响应里 `successCount=2`、`failures` 带 `row`（文件行号）与 `reason`。口播：逐行走与单链创建同一路径，结构性拒绝先于任何写入，专用 import 限流不占创建配额。
 4. **故障演练**（或口播）。`bash scripts/fault-drill.sh`：redis 段停服下跳转仍 302、恢复自愈；webhook 段重试期主链路照常 302；mysql-ro 段只读库下 GET 仍 302——点击记账 fail-open。逐行 `PASS …`，终行 `FAULT DRILL OK`。口播口径一句话：主链路 302 不依赖 Redis / 点击写 / Webhook 任一侧写成功。
