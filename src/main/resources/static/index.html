@@ -5,45 +5,155 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LinkForge</title>
 <style>
-  :root { --line: #e2e5ea; --muted: #6b7280; --accent: #2563eb; --bg: #f7f8fa; }
+  :root {
+    --brand: #2563eb;
+    --brand-deep: #1d4ed8;
+    --brand-soft: #dbeafe;
+    --brand-grad: linear-gradient(120deg, #2563eb, #1e40af);
+    --danger: #dc2626;
+    --danger-soft: #fef2f2;
+    --ok: #059669;
+    --ok-soft: #ecfdf5;
+    --ok-line: #a7f3d0;
+    --warn: #92400e;
+    --warn-soft: #fffbeb;
+    --warn-line: #fcd34d;
+    --ink: #111827;
+    --muted: #6b7280;
+    --line: #e2e5ea;
+    --bg: #f4f6f9;
+    --card: #ffffff;
+    --on-brand: #ffffff;
+    --on-brand-faint: rgba(255, 255, 255, .16);
+    --scrim: rgba(17, 24, 39, .45);
+    --chip: #f3f4f6;
+    --shadow: 0 1px 2px rgba(17, 24, 39, .06), 0 2px 12px rgba(17, 24, 39, .05);
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; font: 14px/1.6 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; background: var(--bg); color: #111827; }
-  header { background: #fff; border-bottom: 1px solid var(--line); padding: 14px 24px; display: flex; justify-content: space-between; align-items: center; }
-  header h1 { font-size: 18px; margin: 0; }
-  header .who { color: var(--muted); }
-  main { max-width: 960px; margin: 24px auto; padding: 0 16px; display: flex; flex-direction: column; gap: 20px; }
-  .card { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 16px 20px; }
+  body { margin: 0; font: 14px/1.6 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--ink); }
+  header { background: var(--brand-grad); color: var(--on-brand); padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; gap: 12px; box-shadow: var(--shadow); flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand .logo { width: 30px; height: 30px; }
+  .brand-name { font-size: 18px; font-weight: 700; letter-spacing: .3px; }
+  .tagline { font-size: 12px; opacity: .85; }
+  .who-box { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .who { color: var(--on-brand); opacity: .9; font-size: 13px; }
+  header button { background: transparent; border-color: var(--on-brand); color: var(--on-brand); }
+  header button:hover:not(:disabled) { background: var(--on-brand-faint); }
+  main { max-width: 1040px; margin: 24px auto 60px; padding: 0 16px; display: flex; flex-direction: column; gap: 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px 20px; box-shadow: var(--shadow); }
   .card h2 { font-size: 15px; margin: 0 0 12px; }
   label { display: block; color: var(--muted); font-size: 12px; margin: 8px 0 2px; }
-  input, select { width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
-  button { padding: 7px 14px; border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 6px; cursor: pointer; font: inherit; }
-  button.ghost { background: #fff; color: var(--accent); }
-  button.danger { border-color: #dc2626; background: #fff; color: #dc2626; }
+  input, select { width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; font: inherit; background: var(--card); color: var(--ink); }
+  input:focus, select:focus { outline: 2px solid var(--brand-soft); border-color: var(--brand); }
+  button { padding: 7px 14px; border: 1px solid var(--brand); background: var(--brand); color: var(--on-brand); border-radius: 6px; cursor: pointer; font: inherit; }
+  button:hover:not(:disabled) { background: var(--brand-deep); border-color: var(--brand-deep); }
+  button.ghost { background: var(--card); color: var(--brand); }
+  button.ghost:hover:not(:disabled) { background: var(--brand-soft); }
+  button.danger { border-color: var(--danger); background: var(--card); color: var(--danger); }
+  button.danger:hover:not(:disabled) { background: var(--danger-soft); }
+  button.sm { padding: 3px 8px; font-size: 12px; }
   button:disabled { opacity: .5; cursor: default; }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; word-break: break-all; }
   th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  tbody tr:hover td { background: var(--bg); }
   .row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
   .row-actions button { padding: 3px 8px; font-size: 12px; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
   .msg { margin-top: 10px; font-size: 13px; white-space: pre-line; }
-  .msg.err { color: #dc2626; }
-  .msg.ok { color: #059669; }
+  .msg.err { color: var(--danger); }
+  .msg.ok { color: var(--ok); }
   .stats-line { color: var(--muted); font-size: 12px; }
-  a { color: var(--accent); }
-  code { font: 12px/1.4 ui-monospace, Consolas, monospace; background: #f3f4f6; padding: 0 4px; border-radius: 4px; }
-  .secret { margin-top: 8px; font: 13px/1.5 ui-monospace, Consolas, monospace; background: #ecfdf5; border: 1px solid #a7f3d0; padding: 8px 10px; border-radius: 6px; word-break: break-all; }
+  a { color: var(--brand); }
+  code { font: 12px/1.4 ui-monospace, Consolas, monospace; background: var(--chip); padding: 0 4px; border-radius: 4px; }
+  .secret { margin-top: 8px; font: 13px/1.6 ui-monospace, Consolas, monospace; background: var(--ok-soft); border: 1px solid var(--ok-line); padding: 8px 10px; border-radius: 6px; word-break: break-all; }
+  .secret .secret-note { font: 12px/1.5 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; color: var(--ok); margin-bottom: 4px; }
+  .secret .secret-text { display: block; }
+  .secret button { font: 12px/1.4 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; padding: 3px 10px; margin-top: 6px; }
+  .secret.warn-card { background: var(--warn-soft); border-color: var(--warn-line); }
+  .secret.warn-card .secret-note { color: var(--warn); }
+  .action-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  .warn-box { background: var(--warn-soft); border: 1px solid var(--warn-line); color: var(--warn); border-radius: 6px; padding: 8px 10px; font-size: 13px; margin: 8px 0; }
+  .csv-help { margin-top: 10px; font-size: 13px; }
+  .csv-help summary { cursor: pointer; color: var(--brand); }
+  .import-result { margin-top: 8px; }
+  .fail-scroll { max-height: 160px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; background: var(--card); }
+  .fail-line { font-size: 12px; color: var(--danger); padding: 2px 0; border-bottom: 1px dashed var(--line); }
+  .fail-line:last-child { border-bottom: 0; }
+  .empty { display: flex; align-items: center; gap: 8px; color: var(--muted); padding: 14px 8px; font-size: 13px; }
+  .empty svg { width: 20px; height: 20px; flex: none; }
+  .pill { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 11px; line-height: 1.6; background: var(--brand-soft); color: var(--brand-deep); vertical-align: middle; }
+  .pill-admin { background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn-line); }
+  .pill-ok { background: var(--ok-soft); color: var(--ok); }
+  .pill-off { background: var(--chip); color: var(--muted); }
+  .pill-warn { background: var(--warn-soft); color: var(--warn); }
+  .cell-trunc { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cell-ua { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .v-row { display: grid; grid-template-columns: 140px 1fr 110px auto; gap: 8px; margin-top: 6px; align-items: center; }
+  .v-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
+  .overlay { position: fixed; inset: 0; background: var(--scrim); display: flex; align-items: flex-start; justify-content: center; padding: 30px 16px; overflow: auto; z-index: 50; }
+  .dialog { background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); width: 860px; max-width: 100%; }
+  .dialog-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 20px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--card); border-radius: 12px 12px 0 0; z-index: 2; }
+  .dialog-title { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .d-code { font: 600 16px/1.4 ui-monospace, Consolas, monospace; color: var(--brand-deep); }
+  .dialog-body { padding: 4px 20px 20px; }
+  .d-sec { padding: 14px 0; border-bottom: 1px solid var(--line); }
+  .d-sec:last-child { border-bottom: 0; }
+  .d-sec h3 { font-size: 14px; margin: 0 0 10px; }
+  .sec-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  .sec-head h3 { margin: 0; }
+  .inline-label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; margin: 0; }
+  .inline-label select, .inline-label input { width: auto; }
+  .kv { display: grid; grid-template-columns: 100px 1fr; gap: 4px 10px; font-size: 13px; padding: 2px 0; }
+  .kv-k { color: var(--muted); font-size: 12px; }
+  .kv-v { word-break: break-all; }
+  .hint { margin-top: 10px; font-size: 12px; color: var(--muted); background: var(--chip); border-radius: 6px; padding: 6px 10px; }
+  .num-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .num-block { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; }
+  .num { font-size: 26px; font-weight: 700; color: var(--brand-deep); line-height: 1.2; }
+  .num-cap { color: var(--muted); font-size: 12px; }
+  .dim-title { font-size: 12px; color: var(--muted); margin: 10px 0 6px; font-weight: 600; }
+  .dim-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 6px 24px; margin-top: 6px; }
+  .bar-row { display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 12px; }
+  .bar-label { flex: none; width: 46px; color: var(--muted); }
+  .bar-label-wide { width: 104px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar-track { flex: 1; height: 8px; background: var(--chip); border-radius: 4px; overflow: hidden; }
+  .bar { height: 100%; background: var(--brand); border-radius: 4px; }
+  .bar-val { flex: none; color: var(--muted); min-width: 70px; text-align: right; }
+  .pager-line { margin-top: 8px; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .qr-params { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 10px; }
+  .qr-params .qf { display: flex; flex-direction: column; }
+  .qr-params label { margin: 0 0 2px; }
+  .qr-params input, .qr-params select { width: 110px; }
+  #qrImg { width: 180px; height: 180px; border: 1px solid var(--line); border-radius: 8px; background: var(--chip); object-fit: contain; display: none; }
+  #qrImg.has { display: block; }
+  /* 工具类放样式表末尾：.pill/.overlay 等自带 display 的规则排前面，hidden 必须恒胜 */
   .hidden { display: none; }
 </style>
 </head>
 <body>
 <header>
-  <h1>LinkForge <span style="color:var(--muted);font-size:12px">多租户短链 · 极简控制台</span></h1>
-  <div><span class="who" id="who"></span> <button class="ghost hidden" id="logout" onclick="logout()">退出</button></div>
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M9.5 13.5a4.5 4.5 0 0 0 6.4.4l3-3a4.5 4.5 0 1 0-6.4-6.4l-1.2 1.2"/>
+      <path d="M14.5 10.5a4.5 4.5 0 0 0-6.4-.4l-3 3a4.5 4.5 0 1 0 6.4 6.4l1.2-1.2"/>
+    </svg>
+    <div>
+      <div class="brand-name">LinkForge</div>
+      <div class="tagline">多租户短链</div>
+    </div>
+  </div>
+  <div class="who-box">
+    <span class="who" id="who"></span>
+    <span class="pill pill-admin hidden" id="roleBadge">ADMIN</span>
+    <button class="ghost hidden" id="logout" onclick="logout()">退出</button>
+  </div>
 </header>
 <main>
   <section class="card" id="authCard">
     <h2>登录 / 注册</h2>
+    <div class="stats-line">登录后可用：短链管理、统计与点击明细、QR 与分享链、API Key、点击 Webhook；ADMIN 角色另有 Bloom 重建。</div>
     <div class="grid2">
       <div>
         <label>租户名</label><input id="tenant" placeholder="demo">
@@ -72,6 +182,12 @@
         <input id="accessPassword" type="password" placeholder="留空不设密码" autocomplete="new-password">
       </div>
     </div>
+    <label>分流 variants（可选，A/B 测试；留空创建单目标链）</label>
+    <div id="variantRowsCreate"></div>
+    <div class="v-foot">
+      <button class="ghost sm" onclick="addVariantRow('create')">+ 加一行</button>
+      <span class="stats-line">key：1-32 位字母数字 _ -；weight：1-10000 整数；全部留空的行会被忽略；最多 10 行</span>
+    </div>
     <div class="grid2">
       <div>
         <label>utmSource（可选）</label><input id="utmSource" maxlength="64" oninput="utmHint()">
@@ -84,23 +200,33 @@
         <div class="msg" id="utmMsg"></div>
       </div>
     </div>
-    <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+    <div class="action-row">
       <button onclick="createLink()">创建</button>
-      <a href="#" id="exportLink" onclick="this.href='/api/links/export';return true;">导出 CSV</a>
-      <input type="file" id="importFile" accept=".csv,text/csv" style="width:auto">
-      <button class="ghost" onclick="importCsv()">导入 CSV</button>
+      <input id="idemKey" placeholder="Idempotency-Key（可选，留空自动生成）" style="width:auto;flex:1;min-width:220px">
       <span class="stats-line">幂等：同 Idempotency-Key 重复提交会返回同一短码</span>
     </div>
+    <div class="action-row">
+      <button class="ghost" onclick="exportCsv()">导出 CSV</button>
+      <input type="file" id="importFile" accept=".csv,text/csv" style="width:auto">
+      <button class="ghost" onclick="importCsv()">导入 CSV</button>
+      <button class="ghost" onclick="downloadCsvTemplate()">下载空模板</button>
+    </div>
+    <details class="csv-help">
+      <summary>CSV 列说明 / 模板格式</summary>
+      <div class="warn-box">CSV 不支持 variants 列：无法通过导入创建 A/B 分流。分流请在页面上创建或编辑。</div>
+      <div class="stats-line">列（按顺序）：<code>original_url</code>（必填）、<code>title</code>、<code>custom_code</code>、<code>access_password</code>（留空即公开访问）、<code>utm_source</code>、<code>utm_medium</code>、<code>utm_campaign</code>、<code>utm_term</code>、<code>utm_content</code>、<code>expire_at</code></div>
+    </details>
     <div class="msg" id="createMsg"></div>
+    <div class="import-result hidden" id="importResult"></div>
 
     <h2 style="margin-top:20px">我的短链</h2>
     <table>
-      <thead><tr><th>短码</th><th>目标 / 状态</th><th>过期</th><th>操作</th></tr></thead>
+      <thead><tr><th>短码</th><th>标题</th><th>目标 / 状态</th><th>过期</th><th>操作</th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
-    <div class="stats-line" style="margin-top:8px">
-      <button class="ghost" style="padding:3px 8px;font-size:12px" onclick="loadLinks()">刷新</button>
-      第 <span id="pageNo">1</span> 页 · <button class="ghost" style="padding:3px 8px;font-size:12px" onclick="turnPage(-1)">上一页</button> <button class="ghost" style="padding:3px 8px;font-size:12px" onclick="turnPage(1)">下一页</button>
+    <div class="pager-line" style="margin-top:8px">
+      <button class="ghost sm" onclick="loadLinks()">刷新</button>
+      第 <span id="pageNo">1</span> 页 · <button class="ghost sm" onclick="turnPage(-1)">上一页</button> <button class="ghost sm" onclick="turnPage(1)">下一页</button>
     </div>
     <div class="msg" id="listMsg"></div>
   </section>
@@ -118,8 +244,12 @@
         <label>quotaPerDay（可选）</label><input id="keyPerDay" inputmode="numeric" placeholder="默认 10000">
       </div>
     </div>
-    <div style="margin-top:12px"><button onclick="createKey()">创建 API Key</button></div>
-    <div class="secret hidden" id="keyOnce"></div>
+    <div class="action-row"><button onclick="createKey()">创建 API Key</button></div>
+    <div class="secret hidden" id="keyOnce">
+      <div class="secret-note">只显示一次：关闭或刷新页面后无法再查看，请立即复制保存</div>
+      <span class="secret-text"></span>
+      <button type="button" onclick="copySecret('keyOnce')">复制</button>
+    </div>
     <div class="msg" id="keyMsg"></div>
     <table style="margin-top:12px">
       <thead><tr><th>id / name</th><th>prefix / 配额</th><th>状态</th><th></th></tr></thead>
@@ -148,58 +278,252 @@
     </select>
     <label>聚合窗口秒（15-300）</label><input id="hookWindow" type="number" min="15" max="300" value="60">
     <label>事件阈值</label><input id="hookMaxEvents" type="number" min="1" value="100">
-    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+    <div class="action-row">
       <button onclick="saveWebhook()">保存（PUT /api/webhooks/endpoint）</button>
       <button class="ghost" onclick="rotateWebhook()">轮换 secret</button>
       <button class="danger" onclick="deleteWebhook()">删除</button>
       <button class="ghost" onclick="loadWebhook()">刷新</button>
     </div>
-    <div class="secret hidden" id="hookOnce"></div>
+    <div class="secret hidden" id="hookOnce">
+      <div class="secret-note">只显示一次：关闭或刷新页面后无法再查看，请立即复制保存</div>
+      <span class="secret-text"></span>
+      <button type="button" onclick="copySecret('hookOnce')">复制</button>
+    </div>
     <div class="msg" id="hookMsg"></div>
     <div class="stats-line" id="hookView" style="margin-top:8px"></div>
   </section>
+
+  <section class="card hidden" id="bloomCard">
+    <h2>Bloom 过滤器（管理员）</h2>
+    <p class="stats-line">触发 <code>POST /api/admin/bloom/rebuild</code>，按当前租户全部短码重建。本区仅 ADMIN 角色可见，MEMBER 不渲染此入口。</p>
+    <div class="action-row"><button class="danger" onclick="rebuildBloom()">重建 Bloom</button></div>
+    <div class="msg" id="bloomMsg"></div>
+  </section>
 </main>
+
+<div class="overlay hidden" id="detailOverlay" onclick="if (event.target === this) closeDetail()">
+  <div class="dialog" role="dialog" aria-modal="true">
+    <div class="dialog-head">
+      <div class="dialog-title"><span class="d-code" id="dCode"></span><span id="dPills"></span></div>
+      <button class="ghost sm" onclick="closeDetail()">关闭</button>
+    </div>
+    <div class="dialog-body">
+      <section class="d-sec">
+        <h3>基本信息</h3>
+        <div id="dInfo"></div>
+        <div class="hint" id="dGateHint"></div>
+      </section>
+      <section class="d-sec">
+        <h3>分流 variants</h3>
+        <div id="dVariants"></div>
+      </section>
+      <section class="d-sec">
+        <div class="sec-head">
+          <h3>编辑</h3>
+          <button class="ghost sm" id="editToggleBtn" onclick="toggleEdit()">展开编辑</button>
+        </div>
+        <div id="dEditWrap" class="hidden">
+          <div class="grid2">
+            <div>
+              <label>目标 URL（必填）</label><input id="editUrl" placeholder="https://…">
+              <label>备注（留空=不修改）</label><input id="editTitle">
+              <label>过期时间（留空=不修改；服务端不支持清除过期时间）</label><input id="editExpire" type="datetime-local">
+              <label>访问密码 accessPassword（4-64 位，留空=不修改）</label>
+              <input id="editPw" type="password" autocomplete="new-password" placeholder="留空不修改密码">
+              <label style="display:flex;align-items:center;gap:8px">
+                <input id="editClearPw" type="checkbox" style="width:auto"> 清除密码 clearAccessPassword（与上面互斥）
+              </label>
+            </div>
+            <div>
+              <label>utmSource（详情接口不回显，留空=不修改）</label><input id="editutmSource" maxlength="64">
+              <label>utmMedium</label><input id="editutmMedium" maxlength="64">
+              <label>utmCampaign</label><input id="editutmCampaign" maxlength="64">
+              <label>utmTerm</label><input id="editutmTerm" maxlength="64">
+              <label>utmContent</label><input id="editutmContent" maxlength="64">
+            </div>
+          </div>
+          <label>分流 variants（整集替换：留行即保留，删行即移除）</label>
+          <div id="editVariantRows"></div>
+          <div class="v-foot">
+            <button class="ghost sm" onclick="addVariantRow('edit')">+ 加一行</button>
+            <span class="stats-line">key：1-32 位字母数字 _ -；weight：1-10000 整数；最多 10 行；清空全部行且原链有分流时提交空数组</span>
+          </div>
+          <div class="action-row"><button onclick="saveEdit()">保存修改（PATCH）</button></div>
+          <div class="msg" id="editMsg"></div>
+        </div>
+      </section>
+      <section class="d-sec" id="statsSection">
+        <div class="sec-head">
+          <h3>统计</h3>
+          <label class="inline-label">时间范围
+            <select id="daysSel" onchange="onDaysChange()">
+              <option value="7" selected>近 7 天</option>
+              <option value="30">近 30 天</option>
+              <option value="90">近 90 天</option>
+            </select>
+          </label>
+        </div>
+        <div id="statsBody"></div>
+        <div class="msg" id="statsMsg"></div>
+      </section>
+      <section class="d-sec">
+        <div class="sec-head">
+          <h3>点击明细</h3>
+          <label class="inline-label">每页
+            <select id="clicksSize" onchange="onClicksSizeChange()">
+              <option value="10" selected>10</option>
+              <option value="20">20</option>
+              <option value="50">50</option>
+            </select>
+          </label>
+        </div>
+        <div id="clicksBody"></div>
+      </section>
+      <section class="d-sec">
+        <h3>QR 码</h3>
+        <div class="qr-params">
+          <div class="qf"><label>size（128-1024）</label><input id="qrSize" type="number" min="128" max="1024" value="256"></div>
+          <div class="qf"><label>margin（0-4）</label><input id="qrMargin" type="number" min="0" max="4" value="1"></div>
+          <div class="qf"><label>纠错级别</label>
+            <select id="qrEc"><option value="L">L</option><option value="M" selected>M</option><option value="Q">Q</option><option value="H">H</option></select>
+          </div>
+          <button class="ghost sm" onclick="loadQrPreview()">刷新预览</button>
+          <button class="ghost sm" onclick="downloadQrParams()">下载 PNG</button>
+        </div>
+        <img id="qrImg" alt="QR 预览">
+        <div class="msg" id="qrMsg"></div>
+        <h3 style="margin-top:14px">分享链</h3>
+        <div class="qr-params">
+          <div class="qf"><label>ttlSeconds（可选，留空用服务端默认）</label><input id="shareTtl" inputmode="numeric" placeholder="如 3600"></div>
+          <button class="ghost sm" onclick="fetchShare()">获取分享链</button>
+        </div>
+        <div class="secret warn-card hidden" id="shareOnce">
+          <div class="secret-note">短期有效，无需登录即可打开；泄露可等其过期或删除短链</div>
+          <span class="secret-text"></span>
+          <button type="button" onclick="copySecret('shareOnce')">复制</button>
+        </div>
+        <div class="msg" id="shareMsg"></div>
+      </section>
+    </div>
+  </div>
+</div>
+
 <script>
-let token = '', page = 1, idemSeq = 0, tenantRole = 'MEMBER';
+const state = { token: '', tenantRole: 'MEMBER', page: 1, days: 7, clicksSize: 10, detail: null, variantBadges: new Map(), idemSeq: 0 };
+let qrObjectUrl = '';
 const $ = id => document.getElementById(id);
 const setMsg = (id, text, ok) => { const el = $(id); el.textContent = text || ''; el.className = 'msg ' + (ok ? 'ok' : 'err'); };
+const utmIds = ['utmSource', 'utmMedium', 'utmCampaign', 'utmTerm', 'utmContent'];
+const variantBoxes = { create: 'variantRowsCreate', edit: 'editVariantRows' };
 
-async function api(method, path, body, raw) {
+const ICONS = {
+  link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 13.5a4.5 4.5 0 0 0 6.4.4l3-3a4.5 4.5 0 1 0-6.4-6.4l-1.2 1.2"/><path d="M14.5 10.5a4.5 4.5 0 0 0-6.4-.4l-3 3a4.5 4.5 0 1 0 6.4 6.4l1.2-1.2"/></svg>',
+  cursor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4l6.5 15 2.2-6.3L20 10.5z"/><path d="M13 13l6 6"/></svg>',
+  key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="16.5" r="3.5"/><path d="M10.5 13.5L20 4"/><path d="M16 5l3 3"/></svg>',
+  bolt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z"/></svg>'
+};
+function emptyBlock(icon, text) {
+  return '<div class="empty">' + (ICONS[icon] || '') + '<span>' + esc(text) + '</span></div>';
+}
+function trunc(s, n) { s = s == null ? '' : String(s); return s.length > n ? s.slice(0, n) + '…' : s; }
+
+async function api(method, path, body) {
   const headers = { 'Content-Type': 'application/json' };
-  if (token) headers['Authorization'] = 'Bearer ' + token;
-  if (method === 'POST' && path === '/api/links') headers['Idempotency-Key'] = 'ui-' + Date.now() + '-' + (++idemSeq);
+  if (state.token) headers['Authorization'] = 'Bearer ' + state.token;
+  if (method === 'POST' && path === '/api/links') {
+    const custom = $('idemKey').value.trim();
+    headers['Idempotency-Key'] = custom || 'ui-' + Date.now() + '-' + (++state.idemSeq);
+  }
   const resp = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
   const text = await resp.text();
   let json = {}; try { json = JSON.parse(text); } catch (e) { return { status: resp.status, raw: text, headers: resp.headers }; }
-  if (!resp.ok && !(raw && resp.ok)) return { status: resp.status, error: json.message || text, code: json.code };
+  if (!resp.ok) return { status: resp.status, error: json.message || text, code: json.code };
   return { status: resp.status, data: json.data, raw: text };
+}
+
+async function httpErrorText(resp) {
+  if (resp.status === 401) return '请先登录（HTTP 401）';
+  try { const j = await resp.json(); return j.message || ('HTTP ' + resp.status); } catch (e) { return 'HTTP ' + resp.status; }
+}
+
+// 导出 / QR 是需鉴权的二进制，裸 <a href> 带不上 Bearer 会 401，所以统一 fetch+blob。
+async function fetchBlob(path) {
+  const resp = await fetch(path, { headers: { Authorization: 'Bearer ' + state.token } });
+  if (!resp.ok) throw new Error(await httpErrorText(resp));
+  return resp.blob();
+}
+function saveBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
 }
 
 async function login() {
   const r = await api('POST', '/api/auth/login', { tenantName: $('tenant').value.trim(), username: $('user').value.trim(), password: $('pass').value });
   if (r.error) return setMsg('authMsg', '登录失败：' + r.error, false);
-  token = r.data.token; afterAuth(r.data.username + '@' + r.data.tenantName, r.data.tenantRole);
+  state.token = r.data.token; afterAuth(r.data.username + '@' + r.data.tenantName, r.data.tenantRole);
 }
 async function register() {
   const r = await api('POST', '/api/auth/register', { tenantName: $('tenant').value.trim(), username: $('user').value.trim(), password: $('pass').value });
   if (r.error) return setMsg('authMsg', '注册失败：' + r.error, false);
-  token = r.data.token; afterAuth(r.data.username + '@' + r.data.tenantName, r.data.tenantRole);
+  state.token = r.data.token; afterAuth(r.data.username + '@' + r.data.tenantName, r.data.tenantRole);
 }
 function afterAuth(who, role) {
-  tenantRole = role === 'ADMIN' ? 'ADMIN' : 'MEMBER';
-  if (tenantRole === 'ADMIN') $('keyScope').insertAdjacentHTML('beforeend', '<option value="TENANT">TENANT</option>');
-  $('who').textContent = who; $('logout').classList.remove('hidden');
-  $('authCard').classList.add('hidden'); $('mainCard').classList.remove('hidden');
-  $('keysCard').classList.remove('hidden'); $('hookCard').classList.remove('hidden');
+  state.tenantRole = role === 'ADMIN' ? 'ADMIN' : 'MEMBER';
+  $('who').textContent = who + ' · ' + (state.tenantRole === 'ADMIN' ? '管理员' : '成员');
+  if (state.tenantRole === 'ADMIN') {
+    $('keyScope').insertAdjacentHTML('beforeend', '<option value="TENANT">TENANT</option>');
+    $('roleBadge').classList.remove('hidden');
+    $('bloomCard').classList.remove('hidden');
+  } else {
+    $('bloomCard').remove();
+  }
+  $('logout').classList.remove('hidden');
+  $('authCard').classList.add('hidden');
+  for (const id of ['mainCard', 'keysCard', 'hookCard']) $(id).classList.remove('hidden');
   loadLinks(); loadKeys(); loadWebhook();
 }
-function logout() { token = ''; location.reload(); }
-
-const utmIds = ['utmSource', 'utmMedium', 'utmCampaign', 'utmTerm', 'utmContent'];
+function logout() { state.token = ''; location.reload(); }
 
 function utmHint() {
   const bad = utmIds.filter(id => !/^[A-Za-z0-9._-]{0,64}$/.test($(id).value));
   setMsg('utmMsg', bad.length ? '仅允许字母数字 . _ -，≤64 位：' + bad.join(', ') : '');
+}
+
+function variantRowHtml(r) {
+  return '<div class="v-row">'
+    + '<input class="v-key" maxlength="32" placeholder="key，如 a" value="' + escAttr(r.key) + '">'
+    + '<input class="v-url" placeholder="https:// 目标 URL" value="' + escAttr(r.url) + '">'
+    + '<input class="v-weight" inputmode="numeric" placeholder="权重 1-10000" value="' + escAttr(r.weight) + '">'
+    + '<button type="button" class="ghost sm" onclick="removeVariantRow(this)">删</button>'
+    + '</div>';
+}
+function addVariantRow(which) {
+  const box = $(variantBoxes[which]);
+  if (box.querySelectorAll('.v-row').length >= 10) return setMsg(which === 'create' ? 'createMsg' : 'editMsg', 'variants 最多 10 行', false);
+  box.insertAdjacentHTML('beforeend', variantRowHtml({ key: '', url: '', weight: '' }));
+}
+function removeVariantRow(btn) { btn.closest('.v-row').remove(); }
+function readVariantInputs(which) {
+  return Array.from($(variantBoxes[which]).querySelectorAll('.v-row')).map(row => ({
+    key: row.querySelector('.v-key').value.trim(),
+    url: row.querySelector('.v-url').value.trim(),
+    weight: row.querySelector('.v-weight').value.trim()
+  }));
+}
+function collectVariants(which) {
+  const rows = readVariantInputs(which).filter(r => r.key || r.url || r.weight);
+  for (const r of rows) {
+    if (!r.key || !r.url || !r.weight) return { error: 'key、URL、weight 三项都要填写（或整行留空忽略）' };
+    if (!/^[A-Za-z0-9_-]{1,32}$/.test(r.key)) return { error: 'variant key 不合法：' + r.key };
+    const w = Number(r.weight);
+    if (!Number.isInteger(w) || w < 1 || w > 10000) return { error: 'variant weight 须为 1-10000 的整数：' + r.weight };
+  }
+  return { rows };
 }
 
 async function createLink() {
@@ -209,13 +533,36 @@ async function createLink() {
   if ($('expireAt').value) body.expireAt = $('expireAt').value + ':00';
   if ($('accessPassword').value) body.accessPassword = $('accessPassword').value;
   for (const id of utmIds) if ($(id).value.trim()) body[id] = $(id).value.trim();
+  const vc = collectVariants('create');
+  if (vc.error) return setMsg('createMsg', 'variants 校验失败：' + vc.error, false);
+  // 后端以字段缺失表示「不设置分流」，无有效行时必须整体 omit variants。
+  if (vc.rows.length) body.variants = vc.rows;
   const r = await api('POST', '/api/links', body);
   if (r.error) return setMsg('createMsg', '创建失败：' + r.error + (r.code === 429 ? '（触发限流，稍后再试）' : ''), false);
-  setMsg('createMsg', '已创建：' + location.origin + r.data.shortPath, true);
+  const newCode = r.data && r.data.code;
+  if (newCode) state.variantBadges.set(newCode, vc.rows.length);
+  setMsg('createMsg', '已创建：' + location.origin + r.data.shortPath + (vc.rows.length ? '（含 ' + vc.rows.length + ' 个分流变体）' : ''), true);
   $('url').value = ''; $('customCode').value = ''; $('expireAt').value = ''; $('accessPassword').value = '';
   for (const id of utmIds) $(id).value = '';
   setMsg('utmMsg', '');
+  $(variantBoxes.create).innerHTML = '';
   loadLinks();
+}
+
+async function exportCsv() {
+  try {
+    saveBlob(await fetchBlob('/api/links/export'), 'linkforge-links.csv');
+    setMsg('createMsg', 'CSV 已导出', true);
+  } catch (e) {
+    setMsg('createMsg', '导出失败：' + e.message, false);
+  }
+}
+
+// Excel 需要 BOM 才能把无 BOM 的 CSV 识别为 UTF-8，否则中文列乱码。
+function downloadCsvTemplate() {
+  const csv = '\ufefforiginal_url,title,custom_code,access_password,utm_source,utm_medium,utm_campaign,utm_term,utm_content,expire_at\r\nhttps://example.com/landing,示例备注,,,,,,,,\r\n';
+  saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'linkforge-import-template.csv');
+  setMsg('createMsg', '模板已下载：original_url 必填；密码列留空即公开访问；不支持 variants 列', true);
 }
 
 async function importCsv() {
@@ -223,69 +570,61 @@ async function importCsv() {
   if (!file) return setMsg('createMsg', '导入失败：请先选择 CSV 文件', false);
   const form = new FormData();
   form.append('file', file);
-  const resp = await fetch('/api/links/import', { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: form });
+  const resp = await fetch('/api/links/import', { method: 'POST', headers: { Authorization: 'Bearer ' + state.token }, body: form });
   let json = {}; try { json = await resp.json(); } catch (e) {}
-  if (!resp.ok || json.code !== 0) return setMsg('createMsg', '导入失败：' + (json.message || ('HTTP ' + resp.status)), false);
-  const d = json.data;
-  // setMsg writes textContent, so failure reasons need no esc() (and would double-escape).
-  const lines = ['成功 ' + d.successCount + ' 行，失败 ' + d.failureCount + ' 行'];
-  for (const f of (d.failures || [])) lines.push('第' + f.row + '行：' + f.reason);
-  setMsg('createMsg', lines.join('\n'), d.failureCount === 0);
+  if (!resp.ok || json.code !== 0) return showImportResult(null, '导入失败：' + (json.message || ('HTTP ' + resp.status)));
+  showImportResult(json.data, null);
   loadLinks();
+}
+// 失败原因经 innerHTML 渲染成滚动列表，行内是用户可控内容必须 esc()；setMsg 的 textContent 惯例管不到这里。
+function showImportResult(d, error) {
+  const box = $('importResult');
+  box.classList.remove('hidden');
+  if (error) { box.innerHTML = '<div class="msg err">' + esc(error) + '</div>'; return; }
+  const failures = d.failures || [];
+  const head = '<div class="' + (d.failureCount ? 'msg err' : 'msg ok') + '">成功 ' + d.successCount + ' 行，失败 ' + d.failureCount + ' 行</div>';
+  const lines = failures.map(f => '<div class="fail-line">第 ' + esc(f.row) + ' 行：' + esc(f.reason) + '</div>').join('');
+  box.innerHTML = head + (failures.length ? '<div class="fail-scroll">' + lines + '</div>' : '');
 }
 
 async function loadLinks() {
-  const r = await api('GET', '/api/links?page=' + page + '&size=10');
+  const r = await api('GET', '/api/links?page=' + state.page + '&size=10');
   if (r.error) return setMsg('listMsg', '加载失败：' + r.error, false);
-  const rows = r.data.records.map(l => `<tr>
-    <td><a href="/r/${l.code}" target="_blank">${l.code}</a></td>
-    <td><div>${esc(l.originalUrl)}</div><div class="stats-line">状态 ${l.status === 1 ? '启用' : '禁用'}${l.passwordProtected ? ' · 密码保护' : ''}</div><div class="stats-line" id="st-${l.code}"></div></td>
-    <td>${l.expireAt ? l.expireAt.replace('T', ' ') : '-'}</td>
-    <td><div class="row-actions">
-      <button class="ghost" onclick="copy('${l.code}')">复制</button>
-      <button class="ghost" onclick="showStats('${l.code}')">统计</button>
-      <button class="ghost" onclick="setPassword('${l.code}')">设密码</button>
-      <button class="ghost" onclick="clearPassword('${l.code}')">清密码</button>
-      <button class="ghost" onclick="toggle('${l.code}', ${l.status === 1})">${l.status === 1 ? '禁用' : '启用'}</button>
-      <button class="ghost" onclick="downloadQr('${l.code}')">下载 QR</button>
-      <button class="ghost" onclick="copyShare('${l.code}')">复制分享链</button>
-      <button class="danger" onclick="del('${l.code}')">删除</button>
-    </div></td></tr>`).join('');
-  $('rows').innerHTML = rows || '<tr><td colspan="4" class="stats-line">还没有短链</td></tr>';
-  $('pageNo').textContent = page;
+  const rows = r.data.records.map(l => {
+    const n = state.variantBadges.get(l.code);
+    const badge = n > 0 ? ' <span class="pill">A/B ×' + n + '</span>' : '';
+    return '<tr>'
+      + '<td><a href="/r/' + l.code + '" target="_blank" rel="noopener">' + l.code + '</a>' + badge + '</td>'
+      + '<td class="cell-trunc" title="' + escAttr(l.title || '') + '">' + (l.title ? esc(l.title) : '<span class="stats-line">-</span>') + '</td>'
+      + '<td><div>' + esc(l.originalUrl) + '</div><div class="stats-line">状态 ' + (l.status === 1 ? '启用' : '禁用') + (l.passwordProtected ? ' · 密码保护' : '') + '</div></td>'
+      + '<td>' + (l.expireAt ? l.expireAt.replace('T', ' ') : '-') + '</td>'
+      + '<td><div class="row-actions">'
+      + '<button class="ghost" onclick="openDetail(\'' + l.code + '\')">详情</button>'
+      + '<button class="ghost" onclick="showStats(\'' + l.code + '\')">统计</button>'
+      + '<button class="ghost" onclick="downloadQr(\'' + l.code + '\')">QR</button>'
+      + '<button class="ghost" onclick="copy(\'' + l.code + '\')">复制</button>'
+      + '<button class="ghost" onclick="setPassword(\'' + l.code + '\')">设密码</button>'
+      + '<button class="ghost" onclick="clearPassword(\'' + l.code + '\')">清密码</button>'
+      + '<button class="ghost" onclick="toggle(\'' + l.code + '\', ' + (l.status === 1) + ')">' + (l.status === 1 ? '禁用' : '启用') + '</button>'
+      + '<button class="ghost" onclick="copyShare(\'' + l.code + '\')">复制分享链</button>'
+      + '<button class="danger" onclick="del(\'' + l.code + '\')">删除</button>'
+      + '</div></td></tr>';
+  }).join('');
+  $('rows').innerHTML = rows || '<tr><td colspan="5">' + emptyBlock('link', '还没有短链，在上面创建第一条') + '</td></tr>';
+  $('pageNo').textContent = state.page;
 }
-function turnPage(d) { page = Math.max(1, page + d); loadLinks(); }
+function turnPage(d) { state.page = Math.max(1, state.page + d); loadLinks(); }
 
-async function showStats(code) {
-  const el = $('st-' + code);
-  el.textContent = '统计加载中…';
-  const [r, dev, ref, os, browser, variant] = await Promise.all([
-    api('GET', `/api/links/${code}/stats?days=7`),
-    api('GET', `/api/links/${code}/stats/breakdown?dim=device&days=7`),
-    api('GET', `/api/links/${code}/stats/breakdown?dim=referer_host&days=7`),
-    api('GET', `/api/links/${code}/stats/breakdown?dim=os&days=7`),
-    api('GET', `/api/links/${code}/stats/breakdown?dim=browser&days=7`),
-    api('GET', `/api/links/${code}/stats/breakdown?dim=variant&days=7`)
-  ]);
-  if (r.error) { el.textContent = '统计加载失败'; return; }
-  const days = r.data.daily.slice(-7).map(d => `${d.date.slice(5)}:${d.clicks}/UV${d.uv}`).join('  ');
-  const fmt = b => b.error ? '—' : b.data.slice(0, 5).map(x => `${esc(x.dimValue)} ${x.clicks}`).join(' · ');
-  el.innerHTML = `总点击 ${r.data.totalClicks} · 总 UV ${r.data.totalUv} | ${days}`
-    + `<br>设备：${fmt(dev)}`
-    + `<br>来源：${fmt(ref)}`
-    + `<br>系统：${fmt(os)}`
-    + `<br>浏览器：${fmt(browser)}`
-    + `<br>分流：${fmt(variant)}`;
-}
 async function toggle(code, isActive) {
-  const r = await api('POST', `/api/links/${code}/${isActive ? 'disable' : 'enable'}`);
+  const r = await api('POST', '/api/links/' + code + '/' + (isActive ? 'disable' : 'enable'));
   if (r.error) return setMsg('listMsg', (isActive ? '禁用' : '启用') + '失败：' + r.error, false);
   loadLinks();
 }
 async function del(code) {
   if (!confirm('删除 ' + code + '？短码将永久保留不可复用。')) return;
-  const r = await api('DELETE', `/api/links/${code}`);
+  const r = await api('DELETE', '/api/links/' + code);
   if (r.error) return setMsg('listMsg', '删除失败：' + r.error, false);
+  state.variantBadges.delete(code);
   loadLinks();
 }
 async function setPassword(code) {
@@ -304,12 +643,272 @@ async function clearPassword(code) {
   loadLinks();
 }
 
-function showOnce(id, text) {
-  const el = $(id);
-  el.textContent = text;
-  el.classList.remove('hidden');
+async function openDetail(code, anchor) {
+  const st = { code: code, clicksPage: 1, hadVariants: false };
+  state.detail = st;
+  $('dCode').textContent = code;
+  resetDetailUi();
+  $('detailOverlay').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  if (anchor) requestAnimationFrame(() => { if (state.detail === st) $(anchor).scrollIntoView({ block: 'start' }); });
+  const r = await api('GET', '/api/links/' + code);
+  if (state.detail !== st) return;
+  if (r.error) { $('dInfo').innerHTML = emptyBlock('link', '详情加载失败：' + r.error); return; }
+  const d = r.data || {};
+  st.hadVariants = Array.isArray(d.variants) && d.variants.length > 0;
+  // 徽标缓存只由 detail / 创建 / 编辑响应驱动，列表渲染绝不为此批量打 detail。
+  state.variantBadges.set(code, st.hadVariants ? d.variants.length : 0);
+  renderDetailInfo(d);
+  renderDetailVariants(d);
+  prefillEditForm(d);
+  loadStats();
+  loadClicks(1);
+  loadQrPreview();
 }
-function hideOnce(id) { $(id).classList.add('hidden'); $(id).textContent = ''; }
+function refreshDetail() {
+  const st = state.detail;
+  if (!st) return Promise.resolve();
+  return api('GET', '/api/links/' + st.code).then(r => {
+    if (state.detail !== st) return;
+    if (r.error) return setMsg('editMsg', '刷新失败：' + r.error, false);
+    const d = r.data || {};
+    st.hadVariants = Array.isArray(d.variants) && d.variants.length > 0;
+    state.variantBadges.set(st.code, st.hadVariants ? d.variants.length : 0);
+    renderDetailInfo(d);
+    renderDetailVariants(d);
+    prefillEditForm(d);
+    setMsg('editMsg', '已保存，以上为最新内容', true);
+    loadLinks();
+  });
+}
+function closeDetail() {
+  if ($('detailOverlay').classList.contains('hidden')) return;
+  state.detail = null;
+  if (qrObjectUrl) { URL.revokeObjectURL(qrObjectUrl); qrObjectUrl = ''; }
+  $('detailOverlay').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+function resetDetailUi() {
+  $('dPills').innerHTML = '';
+  $('dInfo').innerHTML = '<div class="empty">加载中…</div>';
+  $('dVariants').innerHTML = '';
+  $('dGateHint').textContent = '';
+  $('dEditWrap').classList.add('hidden');
+  $('editToggleBtn').textContent = '展开编辑';
+  $('editMsg').textContent = ''; $('editMsg').className = 'msg';
+  $('editUrl').value = ''; $('editTitle').value = ''; $('editExpire').value = '';
+  $('editPw').value = ''; $('editClearPw').checked = false;
+  for (const f of utmIds) $('edit' + f).value = '';
+  $(variantBoxes.edit).innerHTML = '';
+  $('statsBody').innerHTML = '<div class="empty">加载中…</div>';
+  setMsg('statsMsg', '');
+  $('clicksBody').innerHTML = '<div class="empty">加载中…</div>';
+  $('qrImg').classList.remove('has'); $('qrImg').removeAttribute('src');
+  setMsg('qrMsg', '');
+  $('shareTtl').value = '';
+  hideOnce('shareOnce');
+  setMsg('shareMsg', '');
+}
+function renderDetailInfo(d) {
+  $('dPills').innerHTML =
+    (d.status === 1 ? '<span class="pill pill-ok">启用</span>' : '<span class="pill pill-off">禁用</span>')
+    + (d.passwordProtected ? '<span class="pill pill-warn">密码保护</span>' : '');
+  $('dInfo').innerHTML =
+    '<div class="kv"><span class="kv-k">目标 URL</span><span class="kv-v"><a href="' + escAttr(d.originalUrl) + '" target="_blank" rel="noopener">' + esc(d.originalUrl) + '</a></span></div>'
+    + '<div class="kv"><span class="kv-k">备注</span><span class="kv-v">' + (d.title ? esc(d.title) : '-') + '</span></div>'
+    + '<div class="kv"><span class="kv-k">过期时间</span><span class="kv-v">' + (d.expireAt ? esc(String(d.expireAt).replace('T', ' ')) : '不过期') + '</span></div>'
+    + '<div class="kv"><span class="kv-k">创建 / 更新</span><span class="kv-v">' + esc(trunc(String(d.createdAt || ''), 19).replace('T', ' ')) + ' / ' + esc(trunc(String(d.updatedAt || ''), 19).replace('T', ' ')) + '</span></div>';
+  // 门页的 warn/block 行为由服务端 /r 解锁页决定，控制台没有名单管理入口。
+  $('dGateHint').textContent = '打开 /r/' + d.code + ' 时若设置了访问密码，会先进入解锁门页；warn/block 由服务端门页决定，控制台无名单管理。';
+}
+function renderDetailVariants(d) {
+  if (!Array.isArray(d.variants) || d.variants.length === 0) {
+    $('dVariants').innerHTML = emptyBlock('link', '单目标链，未配置分流变体');
+    return;
+  }
+  const rows = d.variants.map(v =>
+    '<tr><td><code>' + esc(v.key) + '</code></td>'
+    + '<td><a href="' + escAttr(v.url) + '" target="_blank" rel="noopener">' + esc(v.url) + '</a></td>'
+    + '<td>' + esc(v.weight) + '</td></tr>').join('');
+  $('dVariants').innerHTML = '<table><thead><tr><th>key</th><th>URL</th><th>weight</th></tr></thead><tbody>' + rows + '</tbody></table>';
+}
+function prefillEditForm(d) {
+  $('editUrl').value = d.originalUrl || '';
+  $('editTitle').value = d.title || '';
+  $('editExpire').value = d.expireAt ? String(d.expireAt).slice(0, 16) : '';
+  $(variantBoxes.edit).innerHTML = (Array.isArray(d.variants) ? d.variants : [])
+    .map(v => variantRowHtml({ key: v.key, url: v.url, weight: String(v.weight) })).join('');
+}
+function toggleEdit() {
+  $('dEditWrap').classList.toggle('hidden');
+  $('editToggleBtn').textContent = $('dEditWrap').classList.contains('hidden') ? '展开编辑' : '收起编辑';
+}
+async function saveEdit() {
+  const st = state.detail;
+  if (!st) return;
+  const pw = $('editPw').value;
+  const clearPw = $('editClearPw').checked;
+  if (pw && clearPw) return setMsg('editMsg', 'accessPassword 与清除密码互斥，只能提交其中一个', false);
+  if (pw && (pw.length < 4 || pw.length > 64)) return setMsg('editMsg', 'accessPassword 须为 4-64 位', false);
+  const body = { originalUrl: $('editUrl').value.trim() };
+  if (!body.originalUrl) return setMsg('editMsg', '目标 URL 必填', false);
+  if ($('editTitle').value.trim()) body.title = $('editTitle').value.trim();
+  if ($('editExpire').value) body.expireAt = $('editExpire').value + ':00';
+  for (const f of utmIds) {
+    const v = $('edit' + f).value.trim();
+    if (!v) continue;
+    if (!/^[A-Za-z0-9._-]{1,64}$/.test(v)) return setMsg('editMsg', f + ' 仅允许字母数字 . _ -，≤64 位', false);
+    body[f] = v;
+  }
+  if (pw) body.accessPassword = pw;
+  if (clearPw) body.clearAccessPassword = true;
+  const vc = collectVariants('edit');
+  if (vc.error) return setMsg('editMsg', 'variants 校验失败：' + vc.error, false);
+  // 行数>0 传整集；行数=0 且原链有分流传 [] 清空；行数=0 且原本无分流 omit（缺失=不动）。
+  if (vc.rows.length) body.variants = vc.rows;
+  else if (st.hadVariants) body.variants = [];
+  const r = await api('PATCH', '/api/links/' + st.code, body);
+  if (r.error) return setMsg('editMsg', '保存失败：' + r.error + (r.code === 429 ? '（触发限流，稍后再试）' : ''), false);
+  state.variantBadges.set(st.code, vc.rows.length);
+  refreshDetail();
+}
+function showStats(code) { openDetail(code, 'statsSection'); }
+
+async function loadStats() {
+  const st = state.detail;
+  if (!st) return;
+  const days = state.days;
+  $('statsBody').innerHTML = '<div class="empty">加载中…</div>';
+  const dims = ['device', 'referer_host', 'os', 'browser', 'variant'];
+  const dimNames = { device: '设备', referer_host: '来源主机', os: '操作系统', browser: '浏览器', variant: '分流 variant' };
+  const results = await Promise.all([
+    api('GET', '/api/links/' + st.code + '/stats?days=' + days),
+    ...dims.map(dim => api('GET', '/api/links/' + st.code + '/stats/breakdown?dim=' + dim + '&days=' + days))
+  ]);
+  if (state.detail !== st) return;
+  const s = results[0];
+  if (s.error) { $('statsBody').innerHTML = emptyBlock('link', '统计加载失败：' + s.error); return; }
+  const d = s.data || {};
+  const daily = d.daily || [];
+  const maxClicks = Math.max(1, ...daily.map(x => x.clicks || 0));
+  const dayRows = daily.slice(-days).map(x =>
+    '<div class="bar-row"><span class="bar-label">' + esc(String(x.date || '').slice(5)) + '</span>'
+    + '<div class="bar-track"><div class="bar" style="width:' + Math.round((x.clicks || 0) / maxClicks * 100) + '%"></div></div>'
+    + '<span class="bar-val">' + (x.clicks || 0) + ' 点击 · UV ' + (x.uv || 0) + '</span></div>').join('');
+  const groups = dims.map((dim, i) => {
+    const b = results[i + 1];
+    const items = b.error ? [] : (b.data || []);
+    const max = Math.max(1, ...items.map(x => x.clicks || 0));
+    const rows = items.slice(0, 8).map(x =>
+      '<div class="bar-row"><span class="bar-label bar-label-wide" title="' + escAttr(x.dimValue || '') + '">' + esc(x.dimValue || '（空）') + '</span>'
+      + '<div class="bar-track"><div class="bar" style="width:' + Math.round((x.clicks || 0) / max * 100) + '%"></div></div>'
+      + '<span class="bar-val">' + (x.clicks || 0) + '</span></div>').join('');
+    return '<div class="dim-group"><div class="dim-title">' + dimNames[dim] + (b.error ? '（加载失败）' : '') + '</div>'
+      + (rows || '<div class="stats-line">暂无数据</div>') + '</div>';
+  }).join('');
+  $('statsBody').innerHTML =
+    '<div class="num-grid">'
+    + '<div class="num-block"><div class="num">' + (d.totalClicks || 0) + '</div><div class="num-cap">总点击（近 ' + days + ' 天）</div></div>'
+    + '<div class="num-block"><div class="num">' + (d.totalUv || 0) + '</div><div class="num-cap">总 UV（近 ' + days + ' 天）</div></div>'
+    + '</div>'
+    + '<div class="dim-title">每日点击</div>'
+    + (dayRows || '<div class="empty">近 ' + days + ' 天没有点击</div>')
+    + '<div class="dim-grid">' + groups + '</div>';
+}
+function onDaysChange() { state.days = Number($('daysSel').value) || 7; loadStats(); }
+
+async function loadClicks(p) {
+  const st = state.detail;
+  if (!st) return;
+  if (p) st.clicksPage = Math.max(1, p);
+  $('clicksBody').innerHTML = '<div class="empty">加载中…</div>';
+  const r = await api('GET', '/api/links/' + st.code + '/clicks?page=' + st.clicksPage + '&size=' + state.clicksSize);
+  if (state.detail !== st) return;
+  if (r.error) { $('clicksBody').innerHTML = emptyBlock('cursor', '明细加载失败：' + r.error); return; }
+  const pg = r.data || {};
+  const records = pg.records || [];
+  if (!records.length) {
+    $('clicksBody').innerHTML = emptyBlock('cursor', st.clicksPage > 1 ? '没有更多了' : '还没有点击记录');
+    return;
+  }
+  const trs = records.map(c =>
+    '<tr><td>' + esc(String(c.clickedAt || '').replace('T', ' ')) + '</td>'
+    + '<td>' + esc(c.ip || '-') + '</td>'
+    + '<td class="cell-ua" title="' + escAttr(c.userAgent || '') + '">' + esc(trunc(c.userAgent, 48) || '-') + '</td>'
+    + '<td class="cell-ua" title="' + escAttr(c.referer || '') + '">' + esc(trunc(c.referer, 40) || '-') + '</td></tr>').join('');
+  const pages = pg.pages || 1;
+  $('clicksBody').innerHTML = '<table><thead><tr><th>时间</th><th>IP</th><th>User-Agent</th><th>Referer</th></tr></thead><tbody>' + trs + '</tbody></table>'
+    + '<div class="pager-line">第 ' + (pg.current || st.clicksPage) + ' / ' + pages + ' 页 · 共 ' + (pg.total || 0) + ' 条'
+    + '<button class="ghost sm" onclick="loadClicks(' + (st.clicksPage - 1) + ')"' + (st.clicksPage <= 1 ? ' disabled' : '') + '>上一页</button>'
+    + '<button class="ghost sm" onclick="loadClicks(' + (st.clicksPage + 1) + ')"' + (st.clicksPage >= pages ? ' disabled' : '') + '>下一页</button>'
+    + '</div>';
+}
+function onClicksSizeChange() { state.clicksSize = Number($('clicksSize').value) || 10; loadClicks(1); }
+
+function readQrParams() {
+  const size = Number($('qrSize').value);
+  const margin = Number($('qrMargin').value);
+  const ec = $('qrEc').value;
+  if (!Number.isInteger(size) || size < 128 || size > 1024) { setMsg('qrMsg', 'size 须为 128-1024 的整数', false); return null; }
+  if (!Number.isInteger(margin) || margin < 0 || margin > 4) { setMsg('qrMsg', 'margin 须为 0-4 的整数', false); return null; }
+  return { size: size, margin: margin, ec: ec };
+}
+async function loadQrPreview() {
+  const st = state.detail;
+  if (!st) return;
+  const p = readQrParams();
+  if (!p) return;
+  try {
+    const blob = await fetchBlob('/api/links/' + st.code + '/qr.png?size=' + p.size + '&margin=' + p.margin + '&ec=' + p.ec);
+    if (state.detail !== st) { URL.revokeObjectURL(URL.createObjectURL(blob)); return; }
+    if (qrObjectUrl) URL.revokeObjectURL(qrObjectUrl);
+    qrObjectUrl = URL.createObjectURL(blob);
+    $('qrImg').src = qrObjectUrl;
+    $('qrImg').classList.add('has');
+    setMsg('qrMsg', '');
+  } catch (e) {
+    $('qrImg').classList.remove('has'); $('qrImg').removeAttribute('src');
+    setMsg('qrMsg', 'QR 预览失败：' + e.message, false);
+  }
+}
+async function downloadQrParams() {
+  const st = state.detail;
+  if (!st) return;
+  const p = readQrParams();
+  if (!p) return;
+  try {
+    saveBlob(await fetchBlob('/api/links/' + st.code + '/qr.png?size=' + p.size + '&margin=' + p.margin + '&ec=' + p.ec), st.code + '-qr-' + p.size + '.png');
+    setMsg('qrMsg', 'QR 已下载', true);
+  } catch (e) {
+    setMsg('qrMsg', 'QR 下载失败：' + e.message, false);
+  }
+}
+async function fetchShare() {
+  const st = state.detail;
+  if (!st) return;
+  const ttlRaw = $('shareTtl').value.trim();
+  const body = {};
+  if (ttlRaw !== '') {
+    const ttl = Number(ttlRaw);
+    if (!Number.isInteger(ttl) || ttl <= 0) return setMsg('shareMsg', 'ttlSeconds 须为正整数（留空用服务端默认）', false);
+    body.ttlSeconds = ttl;
+  }
+  const r = await api('POST', '/api/links/' + st.code + '/qr-share', body);
+  if (r.error) return setMsg('shareMsg', '分享链获取失败：' + r.error, false);
+  showOnce('shareOnce', (r.data && r.data.url) || '');
+  setMsg('shareMsg', '已生成，可在上方结果卡复制', true);
+}
+
+function showOnce(id, text) {
+  $(id).querySelector('.secret-text').textContent = text;
+  $(id).classList.remove('hidden');
+}
+function hideOnce(id) {
+  const el = $(id);
+  el.classList.add('hidden');
+  el.querySelector('.secret-text').textContent = '';
+}
+function copySecret(id) { navigator.clipboard.writeText($(id).querySelector('.secret-text').textContent); }
 
 async function createKey() {
   const body = { name: $('keyName').value.trim() };
@@ -338,13 +937,12 @@ async function createKey() {
 async function loadKeys() {
   const r = await api('GET', '/api/keys');
   if (r.error) return setMsg('keyMsg', '加载失败：' + r.error, false);
-  const rows = (r.data || []).map(k => `<tr>
-    <td>${k.id}<div class="stats-line">${esc(k.name || '')}</div><div class="stats-line">scope ${esc(k.scope || 'USER')} · 创建人 ${k.createdBy ?? '-'}</div></td>
-    <td><code>${esc(k.prefix || '')}</code><div class="stats-line">分 ${k.quotaPerMinute ?? '默认'} · 日 ${k.quotaPerDay ?? '默认'}</div></td>
-    <td>${k.revokedAt ? '已吊销' : '有效'}<div class="stats-line">最近使用 ${k.lastUsedAt ? k.lastUsedAt.replace('T', ' ') : '-'}</div></td>
-    <td>${k.revokedAt ? '' : `<button class="danger" onclick="revokeKey(${k.id})">吊销</button>`}</td>
-  </tr>`).join('');
-  $('keyRows').innerHTML = rows || '<tr><td colspan="4" class="stats-line">还没有 API Key</td></tr>';
+  const rows = (r.data || []).map(k =>
+    '<tr><td>' + k.id + '<div class="stats-line">' + esc(k.name || '') + '</div><div class="stats-line">scope ' + esc(k.scope || 'USER') + ' · 创建人 ' + (k.createdBy == null ? '-' : k.createdBy) + '</div></td>'
+    + '<td><code>' + esc(k.prefix || '') + '</code><div class="stats-line">分 ' + (k.quotaPerMinute == null ? '默认' : k.quotaPerMinute) + ' · 日 ' + (k.quotaPerDay == null ? '默认' : k.quotaPerDay) + '</div></td>'
+    + '<td>' + (k.revokedAt ? '已吊销' : '有效') + '<div class="stats-line">最近使用 ' + (k.lastUsedAt ? k.lastUsedAt.replace('T', ' ') : '-') + '</div></td>'
+    + '<td>' + (k.revokedAt ? '' : '<button class="danger" onclick="revokeKey(' + k.id + ')">吊销</button>') + '</td></tr>').join('');
+  $('keyRows').innerHTML = rows || '<tr><td colspan="4">' + emptyBlock('key', '还没有 API Key，先在上面创建一条') + '</td></tr>';
 }
 async function revokeKey(id) {
   if (!confirm('DELETE /api/keys/' + id + ' ？吊销后下一请求即 401。')) return;
@@ -364,7 +962,8 @@ async function loadWebhook() {
   const r = await api('GET', '/api/webhooks/endpoint');
   if (r.status === 404) {
     $('hookMode').value = 'PER_CLICK'; syncAggregateInputs();
-    $('hookView').textContent = '尚未配置。保存会 PUT /api/webhooks/endpoint ，JSON 字段名是 url 和 enabled。';
+    $('hookView').innerHTML = emptyBlock('bolt', '尚未配置 Webhook 端点')
+      + '<div class="stats-line">填写后点保存，会 PUT /api/webhooks/endpoint ，JSON 字段名是 url 和 enabled。</div>';
     return;
   }
   if (r.error) return setMsg('hookMsg', '读取失败：' + r.error, false);
@@ -372,22 +971,22 @@ async function loadWebhook() {
   $('hookUrl').value = v.url || '';
   $('hookEnabled').checked = v.enabled !== false;
   $('hookMode').value = v.deliveryMode || 'PER_CLICK';
-  $('hookWindow').value = v.aggregateWindowSeconds ?? 60;
-  $('hookMaxEvents').value = v.aggregateMaxEvents ?? 100;
+  $('hookWindow').value = v.aggregateWindowSeconds == null ? 60 : v.aggregateWindowSeconds;
+  $('hookMaxEvents').value = v.aggregateMaxEvents == null ? 100 : v.aggregateMaxEvents;
   syncAggregateInputs();
   const last = v.lastDelivery;
   $('hookView').textContent = '当前 url=' + (v.url || '') + ' · enabled=' + v.enabled
     + ' · secretMasked=' + (v.secretMasked || '（无明文）')
     + ' · 模式=' + (v.deliveryMode || 'PER_CLICK')
-    + ' · 窗口=' + (v.aggregateWindowSeconds ?? '-') + 's'
-    + ' · 阈值=' + (v.aggregateMaxEvents ?? '-')
+    + ' · 窗口=' + (v.aggregateWindowSeconds == null ? '-' : v.aggregateWindowSeconds) + 's'
+    + ' · 阈值=' + (v.aggregateMaxEvents == null ? '-' : v.aggregateMaxEvents)
     + ' · 最近投递=' + (last ? (last.status + '/' + last.eventType + '/' + (last.createdAt || '-')) : '-');
 }
 async function saveWebhook() {
   const url = $('hookUrl').value.trim();
   if (!url) return setMsg('hookMsg', 'url 必填', false);
   hideOnce('hookOnce');
-  const payload = { url, enabled: $('hookEnabled').checked, deliveryMode: $('hookMode').value };
+  const payload = { url: url, enabled: $('hookEnabled').checked, deliveryMode: $('hookMode').value };
   if ($('hookMode').value === 'AGGREGATE') {
     payload.aggregateWindowSeconds = Number($('hookWindow').value) || 60;
     payload.aggregateMaxEvents = Number($('hookMaxEvents').value) || 100;
@@ -421,18 +1020,18 @@ async function deleteWebhook() {
   loadWebhook();
 }
 
+async function rebuildBloom() {
+  if (!confirm('POST /api/admin/bloom/rebuild ？将按当前租户全部短码重建 Bloom 过滤器。')) return;
+  const r = await api('POST', '/api/admin/bloom/rebuild');
+  if (r.error) return setMsg('bloomMsg', '重建失败：' + r.error, false);
+  setMsg('bloomMsg', '重建完成（result=' + ((r.data && r.data.result) || '-') + '），已载入 ' + (r.data ? r.data.codes : '-') + ' 个短码', true);
+}
+
 function copy(code) { navigator.clipboard.writeText(location.origin + '/r/' + code); }
 
 async function downloadQr(code) {
   try {
-    const resp = await fetch(`/api/links/${code}/qr.png`, { headers: { Authorization: 'Bearer ' + token } });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const blob = await resp.blob();
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = code + '.png';
-    a.click();
-    URL.revokeObjectURL(a.href);
+    saveBlob(await fetchBlob('/api/links/' + code + '/qr.png'), code + '.png');
     setMsg('listMsg', code + ' 二维码已下载', true);
   } catch (e) {
     setMsg('listMsg', '二维码下载失败：' + e.message, false);
@@ -440,13 +1039,17 @@ async function downloadQr(code) {
 }
 
 async function copyShare(code) {
-  const r = await api('POST', `/api/links/${code}/qr-share`, {});
+  const r = await api('POST', '/api/links/' + code + '/qr-share', {});
   if (r.error) return setMsg('listMsg', '分享链获取失败：' + r.error, false);
   await navigator.clipboard.writeText(r.data.url);
-  setMsg('listMsg', '分享链已复制（短期有效，打开无需登录）', true);
+  setMsg('listMsg', '分享链已复制（短期有效，打开无需登录；要自定义 ttlSeconds 请在详情弹窗操作）', true);
 }
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+// esc 只转 &<> 不转引号；进 HTML 属性（value/title/href）的值必须再过 escAttr。
+function escAttr(s) { return esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDetail(); });
 </script>
 </body>
 </html>
