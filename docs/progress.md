@@ -1692,7 +1692,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 - [x] FE-13 列表显示 title 列（截断 + title 属性）；徽标 A/B ×2（创建响应写缓存）→ A/B ×3（编辑后刷新），未为徽标批量打 detail
 - [x] FE-14 真服务端响应（1 成 30 败）渲染 30 行 `.fail-line` 于 `.fail-scroll`：scrollHeight 733 / clientHeight 158，滚动生效不撑破
 - [x] FE-15 本节即手点证据（日期/SHA/逐步输出）
-- [ ] FE-16 mvn -B verify 绿；pom 2.0.0；例数 319 —— 本地 `verify -DskipITs` exit 0（16 UT）；**全量 319 见 CI，conclusion 表随收尾提交回填**
+- [x] FE-16 mvn -B verify 绿；pom 2.0.0；例数 319 —— 本地 `verify -DskipITs` exit 0（16 UT）；CI 全量 319（fail=0 err=0 skip=0），conclusion 表见下
 - [x] FE-17 范围外未做：B10/Geo/名单 UI/新后端 API/改 V1–V10/热路径假面板
 - [x] FE-18 resume/demo-talk 本波未改（合入后 docs 对齐）
 - [x] FE-19 无构建链；`cdn|googleapis|unpkg|jsdelivr|fontawesome` 0 命中
@@ -1710,4 +1710,12 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
   3. `loadClicks` 拼 `st.clicksSize`（弹窗局部对象无此字段）→ 服务端收 `size=undefined` 500；修复：改读 `state.clicksSize`。
 - **导入口径**：端到端 curl multipart 实证（1 成 30 败）；UI 渲染路径以页面内同内容 `FormData + fetch` 走 `importCsv` 同款 `showImportResult` 验证——自动化浏览器（IAB）不支持 file chooser，file input 选择一步无法注入，其余全真。
 - **`/r` 抽签口径**：浏览器内 `fetch(redirect:manual)` 读不到 Location（opaque redirect 过滤），改用 curl 十连抽。
-- **CI**：全量 319 由 push 触发，conclusion 表随收尾提交回填（FE-16）。
+- **CI**：全量 319 由 push 触发，conclusion 表如下（例数取自 run 日志 `Tests run` 汇总：319 = fail 0 / err 0 / skip 0）：
+
+| 标签 | run | conclusion | head |
+|------|-----|------------|------|
+| 分支终态 | [41545999315](https://github.com/NorthAdb/LinkForge/actions/runs/41545999315) | success | `0552e0e` |
+| main 合并/tip | [41546778242](https://github.com/NorthAdb/LinkForge/actions/runs/41546778242) | success | `87013c2` |
+
+- **合入**：merge `87013c2`（`git merge --no-ff`，不开 PR，沿 D-FE-4/C1–C5 惯例），main push `911640c..87013c2` 显式 exit 0；pom 仍 2.0.0；Flyway 最高仍 V10（V1–V10 零 diff）；Java 业务 diff 空。
+- **收尾口径**：本回填提交仅改 progress.md；对 CI 已验的代码终态（`87013c2`）无代码改动。
