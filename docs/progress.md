@@ -1657,3 +1657,49 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 ## 面试材料加厚（docs-only，2026-11-01）
 
 功能冻结之后只加厚口述材料，**不开新功能波**。`docs/resume.md` 按春招简历口径扩写，仍是 C5 能力：A/B 权重分流、批量 CSV、httpclient5 DnsResolver 钉死 DNS rebinding、`fault-drill.sh`、Redis L2 fail-open、点击记账 fail-open；例数 **319 = 151 UT + 166 IT + 2 tz**；pom **2.0.0**；不发明 B10 / Geo 数字。新增 `docs/demo-talk.md`（10–15 分钟 Demo 讲稿）。README「面试 Demo 五步」加上讲稿链接。未改 Java、测试、Flyway、pom、CI。本轮未复跑 Compose；讲稿里的 `SMOKE OK` / `FAULT DRILL OK` 仍引用本章手验（tip `e0c567c`，smoke 8 PASS，fault-drill 7 PASS）。
+
+## FE 波：控制台覆盖开放面（FE1+FE2，2026-11-02）
+
+**范围声明**：C5 功能冻结的「仅控制台静态页」例外。只改 `src/main/resources/static/index.html`（+ 本章证据）。Q1–Q7 全 A（widget：FE1+FE2 一并）；决策 D-FE-1…34；验收 FE-1…FE-22；审计 = 实习JAVA_AI 整波冷拉。禁止新业务 API / 改 Service / 改 V1–V10 / 升 pom / Vue·React·构建链 / 外链 CDN。
+
+**基线**：main `911640cf484cd0fb07482fa1325f4baec3b3ee71`（含 d28c347，父 PR#4；能力祖先 C5 `f955313`）。分支 `feat/fe-console-coverage`。API 面相对该基线无变（911640c 仅 README/demo-talk docs）。
+
+**形态钉死（D-FE-3 读码收敛）**：保持**单文件** index.html（CSS/JS 全内联），**不**拆 app.js/console.css——SecurityConfig `consolePaths` 仅 permit `/`、`/index.html`、`/favicon.ico`，任何新静态路径撞 `anyRequest().hasRole("USER")`（未登录时页面资源即被拦），改 SecurityConfig 违反冻结（D-FE-8）。交接「过 ~800 行可拆」分支由本读码事实排除。
+
+**progress 钉（交接 §7 风险表要求）**：
+- 创建 variants：无行则 **omit** 字段（null=absent 语义）；有行才传数组。行上限 10；key `[A-Za-z0-9_-]{1,32}`；weight 1–10000 整数。
+- PATCH variants 整集替换：null=不动、`[]`=清空。UI 规则：编辑表单行数>0 → 传数组；行数=0 且该链原有 variants → 传 `[]`（显式清除分流）；行数=0 且原本无 variants → omit。
+- 密码互斥：`accessPassword` 与 `clearAccessPassword:true` 同提即后端 400；UI 先行互斥校验。
+- expireAt：PATCH 语义「不可清除」，UI 留空 = 不传该字段；datetime-local 提交沿用 `value + ':00'` 惯例。
+- variant 徽标策略：不为徽标打 N 次 detail。徽标只在**打开过详情**的行显示（详情响应 variants 写入本地缓存 Map），创建/编辑成功后同步更新缓存。
+- 幂等键：创建区可选输入框，非空则用用户值作为 `Idempotency-Key`，空则维持自动 `ui-…`。
+- 导出：fetch + `Authorization: Bearer` 拉 CSV 再 blob 触发下载；响应非 2xx 显示错误，不得静默当成功。删除裸 `<a href>` 导出。
+
+### FE-* 验收自勾（手点后回填）
+
+- [ ] FE-1 基线祖先 911640c；V1–V10 零 diff；无新业务 Java API
+- [ ] FE-2 改动仅 static/index.html + progress；无 Vue/React/webpack
+- [ ] FE-3 登录态导出 CSV 成功（Bearer）；未登录/失败不静默当成功
+- [ ] FE-4 创建 ≥2 variants；detail 可见；多次 /r 见不同 Location（权重随机）
+- [ ] FE-5 PATCH url/title/expire/UTM/variants 整集；设/清密码互斥
+- [ ] FE-6 clicks 分页字段齐全；空数据友好文案
+- [ ] FE-7 days=7/30/90 切换，请求带对应 query
+- [ ] FE-8 导入列说明 + 可下载模板；写明无 variants 列
+- [ ] FE-9 登录/Key/Webhook/启停删/QR 基础回归通过
+- [ ] FE-10 QR size/margin/ec；share ttlSeconds
+- [ ] FE-11 可选 Idempotency-Key：同 key 同码
+- [ ] FE-12 ADMIN Bloom rebuild 展示 codes；MEMBER 无入口
+- [ ] FE-13 列表 title；打开过详情的行显示 variant 徽标
+- [ ] FE-14 导入多失败行可滚动/不撑破
+- [ ] FE-15 progress 手点证据（日期/SHA/勾选）
+- [ ] FE-16 mvn -B verify 绿；pom 2.0.0；例数 319
+- [ ] FE-17 范围外未做
+- [ ] FE-18 resume/demo-talk 本波未改（合入后 docs 对齐）
+- [ ] FE-19 无构建链；无外链 CDN 字体/图标
+- [ ] FE-20 统一色板 + 卡片分区 + header 品牌条；空状态非裸页
+- [ ] FE-21 hover；统计分区清晰；Key/once 醒目卡片（只显示一次提示）
+- [ ] FE-22 开放面能力均可在控制台点到；热路径仍口述不进假面板
+
+### 手点证据（回填）
+
+- 待回填
