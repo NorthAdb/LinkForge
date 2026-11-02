@@ -1678,7 +1678,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 ### FE-* 验收自勾（2026-11-03 手点后勾选；FE-16 随 CI conclusion 回填）
 
 - [x] FE-1 基线祖先 911640c（git pull 后 main 未前进，即 911640cf…71）；V1–V10 零 diff（本波仅 static/ + progress）；无新业务 Java API（`git status`/diff 仅 index.html）
-- [x] FE-2 改动仅 static/index.html（452→1057 行）+ progress；无 Vue/React/webpack（`import `/框架关键词 0 命中）
+- [x] FE-2 改动仅 static/index.html（452→1055 行，wc -l 口径）+ progress；无 Vue/React/webpack（`import `/框架关键词 0 命中）
 - [x] FE-3 登录态导出 CSV 成功（页面 `fetchBlob` 带 Bearer → 200 `text/csv` 344 行，表头 `code,original_url,…`；真按钮触发 download 事件）；未登录 curl 裸 GET `/api/links/export` = HTTP 401
 - [x] FE-4 创建 2 variants 成功（`/r/eteemI6` 含 2 个分流变体）；detail 弹窗 variants 表 a/1、b/3 可见；`/r` 十连抽 Location 统计 = var-a×3 / var-b×7（权重 1:3）
 - [x] FE-5 PATCH 整集：title 改「AB 测试落地页（改）」+ variant c/2 加入（a/b→a/b/c）+ 设密码（pill 增「密码保护」）+ 清密码（pill 回落）；互斥同提被 client 拒发（「accessPassword 与清除密码互斥，只能提交其中一个」）
