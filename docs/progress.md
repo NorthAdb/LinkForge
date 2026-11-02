@@ -1657,3 +1657,57 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 ## 面试材料加厚（docs-only，2026-11-01）
 
 功能冻结之后只加厚口述材料，**不开新功能波**。`docs/resume.md` 按春招简历口径扩写，仍是 C5 能力：A/B 权重分流、批量 CSV、httpclient5 DnsResolver 钉死 DNS rebinding、`fault-drill.sh`、Redis L2 fail-open、点击记账 fail-open；例数 **319 = 151 UT + 166 IT + 2 tz**；pom **2.0.0**；不发明 B10 / Geo 数字。新增 `docs/demo-talk.md`（10–15 分钟 Demo 讲稿）。README「面试 Demo 五步」加上讲稿链接。未改 Java、测试、Flyway、pom、CI。本轮未复跑 Compose；讲稿里的 `SMOKE OK` / `FAULT DRILL OK` 仍引用本章手验（tip `e0c567c`，smoke 8 PASS，fault-drill 7 PASS）。
+
+## FE 波：控制台覆盖开放面（FE1+FE2，2026-11-02）
+
+**范围声明**：C5 功能冻结的「仅控制台静态页」例外。只改 `src/main/resources/static/index.html`（+ 本章证据）。Q1–Q7 全 A（widget：FE1+FE2 一并）；决策 D-FE-1…34；验收 FE-1…FE-22；审计 = 实习JAVA_AI 整波冷拉。禁止新业务 API / 改 Service / 改 V1–V10 / 升 pom / Vue·React·构建链 / 外链 CDN。
+
+**基线**：main `911640cf484cd0fb07482fa1325f4baec3b3ee71`（含 d28c347，父 PR#4；能力祖先 C5 `f955313`）。分支 `feat/fe-console-coverage`。API 面相对该基线无变（911640c 仅 README/demo-talk docs）。
+
+**形态钉死（D-FE-3 读码收敛）**：保持**单文件** index.html（CSS/JS 全内联），**不**拆 app.js/console.css——SecurityConfig `consolePaths` 仅 permit `/`、`/index.html`、`/favicon.ico`，任何新静态路径撞 `anyRequest().hasRole("USER")`（未登录时页面资源即被拦），改 SecurityConfig 违反冻结（D-FE-8）。交接「过 ~800 行可拆」分支由本读码事实排除。
+
+**progress 钉（交接 §7 风险表要求）**：
+- 创建 variants：无行则 **omit** 字段（null=absent 语义）；有行才传数组。行上限 10；key `[A-Za-z0-9_-]{1,32}`；weight 1–10000 整数。
+- PATCH variants 整集替换：null=不动、`[]`=清空。UI 规则：编辑表单行数>0 → 传数组；行数=0 且该链原有 variants → 传 `[]`（显式清除分流）；行数=0 且原本无 variants → omit。
+- 密码互斥：`accessPassword` 与 `clearAccessPassword:true` 同提即后端 400；UI 先行互斥校验。
+- expireAt：PATCH 语义「不可清除」，UI 留空 = 不传该字段；datetime-local 提交沿用 `value + ':00'` 惯例。
+- variant 徽标策略：不为徽标打 N 次 detail。徽标只在**打开过详情**的行显示（详情响应 variants 写入本地缓存 Map），创建/编辑成功后同步更新缓存。
+- 幂等键：创建区可选输入框，非空则用用户值作为 `Idempotency-Key`，空则维持自动 `ui-…`。
+- 导出：fetch + `Authorization: Bearer` 拉 CSV 再 blob 触发下载；响应非 2xx 显示错误，不得静默当成功。删除裸 `<a href>` 导出。
+
+### FE-* 验收自勾（2026-11-03 手点后勾选；FE-16 随 CI conclusion 回填）
+
+- [x] FE-1 基线祖先 911640c（git pull 后 main 未前进，即 911640cf…71）；V1–V10 零 diff（本波仅 static/ + progress）；无新业务 Java API（`git status`/diff 仅 index.html）
+- [x] FE-2 改动仅 static/index.html（452→1057 行）+ progress；无 Vue/React/webpack（`import `/框架关键词 0 命中）
+- [x] FE-3 登录态导出 CSV 成功（页面 `fetchBlob` 带 Bearer → 200 `text/csv` 344 行，表头 `code,original_url,…`；真按钮触发 download 事件）；未登录 curl 裸 GET `/api/links/export` = HTTP 401
+- [x] FE-4 创建 2 variants 成功（`/r/eteemI6` 含 2 个分流变体）；detail 弹窗 variants 表 a/1、b/3 可见；`/r` 十连抽 Location 统计 = var-a×3 / var-b×7（权重 1:3）
+- [x] FE-5 PATCH 整集：title 改「AB 测试落地页（改）」+ variant c/2 加入（a/b→a/b/c）+ 设密码（pill 增「密码保护」）+ 清密码（pill 回落）；互斥同提被 client 拒发（「accessPassword 与清除密码互斥，只能提交其中一个」）
+- [x] FE-6 clicks 表字段 时间/IP/User-Agent/Referer 齐全；18 条分 2 页（第 2 页 8 行，Prev/Next 按页界禁用）；空链显示「还没有点击记录」
+- [x] FE-7 页内捕获 days 切换后的真实请求 URL：`stats?days=30` + 五个 `breakdown?dim=…&days=30`；标题变「近 30 天」
+- [x] FE-8 列说明展开可读（original_url 必填 + 10 列全列）；琥珀警示「CSV 不支持 variants 列」；「下载空模板」触发 download 事件
+- [x] FE-9 登录/退出/注册（fetest1103）全通；Key 创建出 once 卡（`lfk_…` 明文 + 只显示一次提示 + 复制键）；Webhook 空状态与表单回显；启用/禁用/删除（confirm 接受后行消失）；QR 下载/复制分享链保留
+- [x] FE-10 QR size=512 预览 `naturalWidth=512`（margin/ec 同表单提交）；分享链 ttlSeconds=3600 → 返回 URL `exp=1793665560`（≈now+3600）
+- [x] FE-11 自定义 Idempotency-Key `fe-wave-demo-key-1` 两次提交同返 `eteemI6`（未建新链）
+- [x] FE-12 ADMIN（注册租户首用户）见 Bloom 卡 + ADMIN 徽标，重建 confirm 后「重建完成（result=ok），已载入 957 个短码」；MEMBER（demo/admin，本库 V8 前旧行 role NULL 读作 MEMBER）`bloomCard` 节点整个 remove，无入口
+- [x] FE-13 列表显示 title 列（截断 + title 属性）；徽标 A/B ×2（创建响应写缓存）→ A/B ×3（编辑后刷新），未为徽标批量打 detail
+- [x] FE-14 真服务端响应（1 成 30 败）渲染 30 行 `.fail-line` 于 `.fail-scroll`：scrollHeight 733 / clientHeight 158，滚动生效不撑破
+- [x] FE-15 本节即手点证据（日期/SHA/逐步输出）
+- [ ] FE-16 mvn -B verify 绿；pom 2.0.0；例数 319 —— 本地 `verify -DskipITs` exit 0（16 UT）；**全量 319 见 CI，conclusion 表随收尾提交回填**
+- [x] FE-17 范围外未做：B10/Geo/名单 UI/新后端 API/改 V1–V10/热路径假面板
+- [x] FE-18 resume/demo-talk 本波未改（合入后 docs 对齐）
+- [x] FE-19 无构建链；`cdn|googleapis|unpkg|jsdelivr|fontawesome` 0 命中
+- [x] FE-20 统一色板（`:root` CSS 变量）+ 卡片阴影层次 + 渐变品牌条（SVG logo + LinkForge + 多租户短链）+ 未登录/空列表/空 clicks/空 Key/空 Webhook 五处空状态（内联 SVG）；登录页/主控台/详情弹窗截图过审
+- [x] FE-21 按钮 primary/ghost/danger 三级 + `:hover` 反馈；表格行 hover；统计区大数字块 + 每日横条 + 五维分组；Key/once 结果卡带「只显示一次」注记 + 复制键
+- [x] FE-22 开放面能力均可控制台点到（FE1 1–9 + FE2 1–6 全数上屏）；热路径/Outbox/fail-open/SSRF/fault-drill 无假面板，仍口述+脚本
+
+### 手点证据（2026-11-03 Asia/Shanghai）
+
+- **环境**：宿主 jar `target/linkforge-2.0.0.jar`（`mvn -B -DskipTests package` @ 分支 tip `8b2cf44`）+ 既有 compose 栈（mysql/redis/rabbitmq healthy）；浏览器自动化手点（Chromium 1280×900）。登录两组身份：demo/admin（本库该行系 V8 前旧数据，role NULL 读作 MEMBER——恰好覆盖 MEMBER 面）+ 新注册租户 fetest1103/admin（ADMIN 面）。
+- **手点过程即验收**：上节 FE-1…FE-22 每项括号内为实跑观察输出（页面文本/请求 URL/HTTP 码/尺寸数字均取自真实响应）。
+- **手点中发现并修复 3 个 bug**（修复后重打包复验通过，随 `8b2cf44` 一并交付）：
+  1. `.hidden{display:none}` 在样式表中先于 `.pill`/`.overlay`（后者自带 display 且同优先级后者胜）→ 登录页 ADMIN 徽标裸露、详情遮罩常驻盖页；修复：`.hidden` 移至样式表末尾并注 why。
+  2. 编辑表单 UTM 五输入 id 写成 `editUtmSource`（大写 U），JS 拼接 `'edit'+f` 得 `editutmSource` → `resetDetailUi`/`saveEdit` 抛 null；修复：HTML id 改小写对齐拼接。
+  3. `loadClicks` 拼 `st.clicksSize`（弹窗局部对象无此字段）→ 服务端收 `size=undefined` 500；修复：改读 `state.clicksSize`。
+- **导入口径**：端到端 curl multipart 实证（1 成 30 败）；UI 渲染路径以页面内同内容 `FormData + fetch` 走 `importCsv` 同款 `showImportResult` 验证——自动化浏览器（IAB）不支持 file chooser，file input 选择一步无法注入，其余全真。
+- **`/r` 抽签口径**：浏览器内 `fetch(redirect:manual)` 读不到 Location（opaque redirect 过滤），改用 curl 十连抽。
+- **CI**：全量 319 由 push 触发，conclusion 表随收尾提交回填（FE-16）。
