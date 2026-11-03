@@ -1,0 +1,479 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "点击统计管道数据流",
+    "locale": "zh-CN",
+    "output": "docs/source-learning/diagrams/archify/html/14-click-pipeline-dataflow.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/NorthAdb/LinkForge.git",
+      "provider": "github",
+      "revision": "01f0b5a0e788b426e9de136555cf370f06e06894"
+    }
+  },
+  "stages": [
+    {
+      "label": "跳转热路径"
+    },
+    {
+      "label": "同事务存根"
+    },
+    {
+      "label": "Relay 抽水"
+    },
+    {
+      "label": "MQ 与补偿"
+    },
+    {
+      "label": "幂等消费与投递"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "redirect",
+      "type": "backend",
+      "label": "跳转 302",
+      "sublabel": "resolveForGet·B2 过滤",
+      "stage": 0,
+      "row": 0,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 565,
+          "end_line": 585
+        }
+      ]
+    },
+    {
+      "id": "recordClick",
+      "type": "backend",
+      "label": "recordClick",
+      "tag": "同一 DB 事务",
+      "sublabel": "sync+async 双写",
+      "stage": 0,
+      "row": 1,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/stats/service/ClickRecordService.java",
+          "line": 40,
+          "end_line": 75
+        }
+      ]
+    },
+    {
+      "id": "outbox",
+      "type": "database",
+      "label": "lf_outbox",
+      "tag": "PENDING",
+      "stage": 1,
+      "row": 1,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/stats/service/ClickRecordService.java",
+          "line": 60,
+          "end_line": 74
+        },
+        {
+          "path": "src/main/resources/db/migration/V2__outbox.sql",
+          "line": 5,
+          "end_line": 16
+        }
+      ]
+    },
+    {
+      "id": "clickLog",
+      "type": "database",
+      "label": "lf_click_log",
+      "sublabel": "sync 明细行",
+      "stage": 1,
+      "row": 2,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/stats/service/ClickRecordService.java",
+          "line": 56,
+          "end_line": 58
+        }
+      ]
+    },
+    {
+      "id": "cleanup",
+      "type": "backend",
+      "label": "SentRowCleanup",
+      "sublabel": "每小时·分批删",
+      "stage": 1,
+      "row": 0,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/retention/SentRowCleanup.java",
+          "line": 52,
+          "end_line": 72
+        },
+        {
+          "path": "src/main/java/com/linkforge/stats/mapper/OutboxMapper.java",
+          "line": 33,
+          "end_line": 35
+        }
+      ]
+    },
+    {
+      "id": "relay",
+      "type": "backend",
+      "label": "ClickOutboxRelay",
+      "sublabel": "confirm 后标 SENT",
+      "stage": 2,
+      "row": 1,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/stats/service/ClickOutboxRelay.java",
+          "line": 37,
+          "end_line": 43
+        },
+        {
+          "path": "src/main/java/com/linkforge/stats/service/ClickOutboxRelay.java",
+          "line": 44,
+          "end_line": 73
+        },
+        {
+          "path": "src/main/java/com/linkforge/stats/service/ClickOutboxRelay.java",
+          "line": 75,
+          "end_line": 78
+        }
+      ]
+    },
+    {
+      "id": "reconciler",
+      "type": "backend",
+      "label": "ClickLogReconciler",
+      "sublabel": "30s·反连接扫 500",
+      "stage": 3,
+      "row": 2,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/stats/service/ClickLogReconciler.java",
+          "line": 30,
+          "end_line": 47
+        },
+        {
+          "path": "src/main/java/com/linkforge/stats/mapper/ClickLogMapper.java",
+          "line": 14,
+          "end_line": 18
+        }
+      ]
+    },
+    {
+      "id": "mq",
+      "type": "messagebus",
+      "label": "RabbitMQ",
+      "sublabel": "click.exchange/queue",
+      "tag": "click.recorded",
+      "stage": 3,
+      "row": 1,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/config/RabbitMqConfig.java",
+          "line": 17,
+          "end_line": 22
+        },
+        {
+          "path": "src/main/java/com/linkforge/config/RabbitMqConfig.java",
+          "line": 24,
+          "end_line": 40
+        }
+      ]
+    },
+    {
+      "id": "dlq",
+      "type": "messagebus",
+      "label": "linkforge.click.dlq",
+      "tag": "click.dead",
+      "stage": 3,
+      "row": 0,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/config/RabbitMqConfig.java",
+          "line": 42,
+          "end_line": 55
+        },
+        {
+          "path": "src/main/resources/application.yml",
+          "line": 78,
+          "end_line": 84
+        }
+      ]
+    },
+    {
+      "id": "agg",
+      "type": "database",
+      "label": "lf_click_daily",
+      "tag": "upsert 累加",
+      "stage": 4,
+      "row": 0,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/stats/service/ClickStatsService.java",
+          "line": 94,
+          "end_line": 105
+        },
+        {
+          "path": "src/main/java/com/linkforge/stats/mapper/ClickDailyMapper.java",
+          "line": 16,
+          "end_line": 22
+        }
+      ],
+      "sublabel": "lf_click_dim_daily upsert"
+    },
+    {
+      "id": "consumer",
+      "type": "backend",
+      "label": "ClickEventConsumer",
+      "sublabel": "lf_consumed_event 去重",
+      "stage": 4,
+      "row": 1,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/stats/mq/ClickEventConsumer.java",
+          "line": 10,
+          "end_line": 27
+        },
+        {
+          "path": "src/main/java/com/linkforge/stats/service/ClickStatsService.java",
+          "line": 66,
+          "end_line": 93
+        }
+      ]
+    },
+    {
+      "id": "intent",
+      "type": "database",
+      "label": "lf_webhook_delivery",
+      "tag": "PENDING",
+      "sublabel": "lf_webhook_agg_buffer 窗口缓冲",
+      "stage": 4,
+      "row": 2,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/webhook/service/WebhookService.java",
+          "line": 247,
+          "end_line": 277
+        },
+        {
+          "path": "src/main/java/com/linkforge/stats/service/ClickStatsService.java",
+          "line": 106,
+          "end_line": 112
+        }
+      ],
+      "width": 170
+    },
+    {
+      "id": "whRelay",
+      "type": "backend",
+      "label": "WebhookDeliveryRelay",
+      "sublabel": "2s·退避 ≤1h·上限 8 次",
+      "stage": 4,
+      "row": 3,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/webhook/service/WebhookDeliveryRelay.java",
+          "line": 63,
+          "end_line": 64
+        },
+        {
+          "path": "src/main/java/com/linkforge/webhook/service/WebhookDeliveryRelay.java",
+          "line": 90,
+          "end_line": 147
+        },
+        {
+          "path": "src/main/java/com/linkforge/webhook/service/WebhookDeliveryRelay.java",
+          "line": 154,
+          "end_line": 166
+        }
+      ],
+      "width": 150
+    },
+    {
+      "id": "endpoint",
+      "type": "cloud",
+      "label": "外部 endpoint",
+      "sublabel": "SSRF 钉死 IP·禁重定向",
+      "stage": 4,
+      "row": 4,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/webhook/support/PinnedHttpSender.java",
+          "line": 50,
+          "end_line": 59
+        },
+        {
+          "path": "src/main/java/com/linkforge/webhook/support/WebhookSigner.java",
+          "line": 21,
+          "end_line": 34
+        }
+      ]
+    }
+  ],
+  "flows": [
+    {
+      "id": "redirect-record",
+      "from": "redirect",
+      "to": "recordClick",
+      "label": "成功跳转后",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 30
+    },
+    {
+      "id": "record-outbox",
+      "from": "recordClick",
+      "to": "outbox",
+      "label": "同事务写",
+      "variant": "emphasis",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "record-clicklog",
+      "from": "recordClick",
+      "to": "clickLog",
+      "label": "sync 明细"
+    },
+    {
+      "id": "outbox-relay",
+      "from": "outbox",
+      "to": "relay",
+      "label": "2s 批 100",
+      "variant": "emphasis",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "outbox-cleanup",
+      "from": "outbox",
+      "to": "cleanup",
+      "label": "SENT 清理",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "clicklog-reconcile",
+      "from": "clickLog",
+      "to": "reconciler",
+      "label": "扫未消费",
+      "variant": "dashed"
+    },
+    {
+      "id": "reconcile-consume",
+      "from": "reconciler",
+      "to": "consumer",
+      "label": "同键重放",
+      "variant": "dashed"
+    },
+    {
+      "id": "relay-mq",
+      "from": "relay",
+      "to": "mq",
+      "label": "等 ack",
+      "variant": "emphasis",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "mq-consumer",
+      "from": "mq",
+      "to": "consumer",
+      "label": "投递",
+      "variant": "emphasis",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "mq-dlq",
+      "from": "mq",
+      "to": "dlq",
+      "label": "异常改道",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "consume-agg",
+      "from": "consumer",
+      "to": "agg",
+      "label": "upsert 计数",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "consume-intent",
+      "from": "consumer",
+      "to": "intent",
+      "label": "投递意图",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 30
+    },
+    {
+      "id": "intent-whrelay",
+      "from": "intent",
+      "to": "whRelay",
+      "label": "出队",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 30
+    },
+    {
+      "id": "whrelay-endpoint",
+      "from": "whRelay",
+      "to": "endpoint",
+      "label": "HMAC 签名",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 30
+    }
+  ],
+  "cards": [
+    {
+      "dot": "orange",
+      "title": "同步/异步边界",
+      "items": [
+        "热路径零 MQ 依赖：recordClick 同事务只写两行，MQ 停机跳转照常 302",
+        "sync/async 双开关（application.yml :177-178 生产默认双开）拼出四种部署矩阵",
+        "B2 过滤在事务外：prefetch/预览 bot 拿同样 302 但不记点击",
+        "eventId：sync 开 = log-{明细id} 确定性；sync 关 = UUID 存 outbox payload"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "at-least-once 与幂等",
+      "items": [
+        "多实例 relay 并发拉批、markSent 前崩溃，同一事件可能投两次",
+        "lf_consumed_event 主键 INSERT 即锁：重复 ack 不计数，是唯一兜底",
+        "UUID 事件由消费者回填 lf_click_log 并打 event_id 标记，对账不重放",
+        "去重、回填、聚合、webhook 入队同一个手工短事务，崩溃回滚到未消费态"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "两个时钟口径",
+      "items": [
+        "调度列（next_attempt_at / window_start）一律 DB 时钟 DATE_ADD(NOW())",
+        "sent_at 用 JVM 业务时钟：outbox 清理用 DB NOW()，webhook 清理传 JVM cutoff",
+        "reconcile 每 30s 反连接扫未消费明细，与 relay 双通道汇合于去重锁"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "失败出口与拓扑",
+      "items": [
+        "relay 退避 min(60, 2^n) 秒、30 次 FAILED 终态，手工 UPDATE 回 PENDING 重放",
+        "webhook 退避 10×2^n ≤1h、上限 8 次；其他 4xx 首败即 FAILED",
+        "消费失败一次 reject 不重回队列，经 DLX（click.dead）进 DLQ，人工是唯一出口",
+        "拓扑：linkforge.click.exchange →(click.recorded)→ linkforge.click.queue"
+      ]
+    }
+  ]
+}

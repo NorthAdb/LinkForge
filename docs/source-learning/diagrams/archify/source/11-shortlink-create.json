@@ -1,0 +1,704 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "创建短链全流程",
+    "locale": "zh-CN",
+    "output": "docs/source-learning/diagrams/archify/html/11-shortlink-create.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/NorthAdb/LinkForge.git",
+      "provider": "github",
+      "revision": "01f0b5a0e788b426e9de136555cf370f06e06894"
+    }
+  },
+  "lanes": [
+    {
+      "id": "client",
+      "label": "客户端"
+    },
+    {
+      "id": "gate",
+      "label": "前置闸门 create :129-140"
+    },
+    {
+      "id": "idem",
+      "label": "幂等调度 create :141-175"
+    },
+    {
+      "id": "chain",
+      "label": "doCreate 校验链 :203-218"
+    },
+    {
+      "id": "write",
+      "label": "落库与提交后 :237-283"
+    },
+    {
+      "id": "rej",
+      "label": "拒绝出口",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "p1",
+      "label": "入口与前置",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "p2",
+      "label": "幂等调度",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "p3",
+      "label": "校验与落库",
+      "fromCol": 4,
+      "toCol": 5
+    }
+  ],
+  "groups": [
+    {
+      "id": "g_gate",
+      "label": "三道前置闸",
+      "lane": "gate",
+      "fromCol": 1,
+      "toCol": 1
+    },
+    {
+      "id": "g_idem",
+      "label": "两段式幂等",
+      "lane": "idem",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "g_chain",
+      "label": "写前七步校验",
+      "lane": "chain",
+      "fromCol": 4,
+      "toCol": 4
+    },
+    {
+      "id": "g_write",
+      "label": "事务与收尾",
+      "lane": "write",
+      "fromCol": 5,
+      "toCol": 5
+    }
+  ],
+  "mainPath": [
+    "req",
+    "auth",
+    "limit",
+    "smuggle",
+    "hub",
+    "setnx",
+    "utm",
+    "url",
+    "b9",
+    "expire",
+    "variants",
+    "custom",
+    "pwd",
+    "tx",
+    "post",
+    "settle",
+    "resp"
+  ],
+  "semanticChecks": {
+    "allowedRoots": [
+      "req"
+    ],
+    "allowedTerminals": [
+      "resp",
+      "e429",
+      "e400a",
+      "e503",
+      "e400b",
+      "e409"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "req",
+      "lane": "client",
+      "col": 0,
+      "type": "external",
+      "label": "客户端请求",
+      "sublabel": "POST /api/links",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/controller/ShortLinkController.java",
+          "line": 43,
+          "end_line": 48
+        }
+      ]
+    },
+    {
+      "id": "resp",
+      "lane": "write",
+      "col": 5,
+      "type": "external",
+      "label": "ApiResponse",
+      "sublabel": "id·code·url·shortUrl",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 282,
+          "end_line": 282
+        }
+      ],
+      "yOffset": 165
+    },
+    {
+      "id": "auth",
+      "lane": "gate",
+      "col": 1,
+      "type": "security",
+      "yOffset": -110,
+      "label": "身份校验",
+      "sublabel": "requireUser",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 130,
+          "end_line": 130
+        }
+      ]
+    },
+    {
+      "id": "limit",
+      "lane": "gate",
+      "col": 1,
+      "type": "security",
+      "yOffset": 0,
+      "label": "创建限流",
+      "sublabel": "30 次/60s 按用户",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 132,
+          "end_line": 138
+        }
+      ]
+    },
+    {
+      "id": "smuggle",
+      "lane": "gate",
+      "col": 1,
+      "type": "security",
+      "yOffset": 110,
+      "label": "拒夹带归因",
+      "sublabel": "utm* + 9 归因 id",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 140,
+          "end_line": 140
+        }
+      ]
+    },
+    {
+      "id": "hub",
+      "lane": "idem",
+      "col": 2,
+      "type": "backend",
+      "label": "幂等调度",
+      "sublabel": "有键 SETNX / 无键直建",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 141,
+          "end_line": 175
+        }
+      ]
+    },
+    {
+      "id": "replay",
+      "lane": "idem",
+      "col": 3,
+      "type": "database",
+      "label": "终值重放",
+      "sublabel": "回库核归属",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 182,
+          "end_line": 201
+        }
+      ],
+      "yOffset": -110
+    },
+    {
+      "id": "setnx",
+      "lane": "idem",
+      "col": 3,
+      "type": "database",
+      "yOffset": 0,
+      "label": "SETNX 抢锁",
+      "sublabel": "pending 5s",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 152,
+          "end_line": 163
+        }
+      ]
+    },
+    {
+      "id": "poll",
+      "lane": "idem",
+      "col": 3,
+      "type": "backend",
+      "yOffset": 110,
+      "label": "轮询等待",
+      "sublabel": "10×200ms",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 164,
+          "end_line": 173
+        }
+      ]
+    },
+    {
+      "id": "utm",
+      "lane": "chain",
+      "col": 4,
+      "type": "backend",
+      "yOffset": -330,
+      "label": "UTM 合并",
+      "sublabel": "超 2048→400",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 204,
+          "end_line": 205
+        }
+      ]
+    },
+    {
+      "id": "url",
+      "lane": "chain",
+      "col": 4,
+      "type": "backend",
+      "yOffset": -220,
+      "label": "URL 结构",
+      "sublabel": "非法→400",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 206,
+          "end_line": 206
+        }
+      ]
+    },
+    {
+      "id": "b9",
+      "lane": "chain",
+      "col": 4,
+      "type": "security",
+      "yOffset": -110,
+      "label": "B9 门禁",
+      "sublabel": "BLOCK→400·判最终 URL",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 207,
+          "end_line": 207
+        },
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 798,
+          "end_line": 807
+        }
+      ]
+    },
+    {
+      "id": "expire",
+      "lane": "chain",
+      "col": 4,
+      "type": "backend",
+      "yOffset": 0,
+      "label": "expireAt",
+      "sublabel": "非未来→400",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 208,
+          "end_line": 210
+        }
+      ]
+    },
+    {
+      "id": "variants",
+      "lane": "chain",
+      "col": 4,
+      "type": "backend",
+      "yOffset": 110,
+      "label": "variants",
+      "sublabel": "≤10·违规→400",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 212,
+          "end_line": 213
+        },
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 823,
+          "end_line": 843
+        }
+      ]
+    },
+    {
+      "id": "custom",
+      "lane": "chain",
+      "col": 4,
+      "type": "backend",
+      "yOffset": 220,
+      "label": "自定义码",
+      "sublabel": "4-16·保留字→400",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 214,
+          "end_line": 217
+        }
+      ]
+    },
+    {
+      "id": "pwd",
+      "lane": "chain",
+      "col": 4,
+      "type": "security",
+      "yOffset": 330,
+      "label": "访问密码",
+      "sublabel": "4-64→400",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 218,
+          "end_line": 218
+        },
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 810,
+          "end_line": 819
+        }
+      ]
+    },
+    {
+      "id": "tx",
+      "lane": "write",
+      "col": 5,
+      "type": "database",
+      "yOffset": -165,
+      "label": "事务写库",
+      "sublabel": "主行+variants 同事务",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 237,
+          "end_line": 264
+        }
+      ]
+    },
+    {
+      "id": "post",
+      "lane": "write",
+      "col": 5,
+      "type": "messagebus",
+      "yOffset": -55,
+      "label": "提交后五连",
+      "sublabel": "Bloom→广播→清absent→写穿→meter",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 266,
+          "end_line": 270
+        }
+      ]
+    },
+    {
+      "id": "settle",
+      "lane": "write",
+      "col": 5,
+      "type": "database",
+      "yOffset": 55,
+      "label": "幂等终值",
+      "sublabel": "TTL 24h · fail-open",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 271,
+          "end_line": 281
+        }
+      ]
+    },
+    {
+      "id": "e429",
+      "lane": "rej",
+      "col": 1,
+      "type": "security",
+      "label": "429 限流拒绝",
+      "sublabel": "Retry-After",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 135,
+          "end_line": 138
+        }
+      ]
+    },
+    {
+      "id": "e400a",
+      "lane": "rej",
+      "col": 2,
+      "type": "security",
+      "label": "400 拒归因参数",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 871,
+          "end_line": 878
+        }
+      ]
+    },
+    {
+      "id": "e503",
+      "lane": "rej",
+      "col": 3,
+      "type": "security",
+      "label": "503 未落终值",
+      "sublabel": "稍后重试",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 171,
+          "end_line": 173
+        }
+      ]
+    },
+    {
+      "id": "e400b",
+      "lane": "rej",
+      "col": 4,
+      "type": "security",
+      "label": "400 校验拒绝",
+      "sublabel": "任一校验点",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 203,
+          "end_line": 218
+        }
+      ]
+    },
+    {
+      "id": "e409",
+      "lane": "rej",
+      "col": 5,
+      "type": "security",
+      "label": "409 码已存在",
+      "sublabel": "撞 uk_code",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 244,
+          "end_line": 246
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "ed1",
+      "from": "req",
+      "to": "auth",
+      "role": "main"
+    },
+    {
+      "id": "ed2",
+      "from": "auth",
+      "to": "limit",
+      "role": "main"
+    },
+    {
+      "id": "ed3",
+      "from": "limit",
+      "to": "smuggle",
+      "role": "main"
+    },
+    {
+      "id": "ed4",
+      "from": "limit",
+      "to": "e429",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "ed5",
+      "from": "smuggle",
+      "to": "e400a",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "ed6",
+      "from": "smuggle",
+      "to": "hub",
+      "role": "main"
+    },
+    {
+      "id": "ed7",
+      "from": "hub",
+      "to": "replay",
+      "role": "main",
+      "label": "先查终值"
+    },
+    {
+      "id": "ed8",
+      "from": "hub",
+      "to": "setnx",
+      "role": "main",
+      "label": "查无·抢锁"
+    },
+    {
+      "id": "ed9",
+      "from": "setnx",
+      "to": "poll",
+      "role": "branch",
+      "label": "未抢到"
+    },
+    {
+      "id": "ed10",
+      "from": "poll",
+      "to": "e503",
+      "variant": "security",
+      "role": "error",
+      "label": "2s 未落"
+    },
+    {
+      "id": "ed11",
+      "from": "setnx",
+      "to": "utm",
+      "role": "main",
+      "label": "抢到·执行"
+    },
+    {
+      "id": "ed12",
+      "from": "hub",
+      "to": "utm",
+      "role": "branch",
+      "label": "无键直建"
+    },
+    {
+      "id": "ed13",
+      "from": "replay",
+      "to": "resp",
+      "role": "return"
+    },
+    {
+      "id": "ed14",
+      "from": "utm",
+      "to": "url",
+      "role": "main"
+    },
+    {
+      "id": "ed15",
+      "from": "url",
+      "to": "b9",
+      "role": "main"
+    },
+    {
+      "id": "ed16",
+      "from": "b9",
+      "to": "expire",
+      "role": "main"
+    },
+    {
+      "id": "ed17",
+      "from": "expire",
+      "to": "variants",
+      "role": "main"
+    },
+    {
+      "id": "ed18",
+      "from": "variants",
+      "to": "custom",
+      "role": "main"
+    },
+    {
+      "id": "ed19",
+      "from": "custom",
+      "to": "pwd",
+      "role": "main"
+    },
+    {
+      "id": "ed27",
+      "from": "pwd",
+      "to": "tx",
+      "role": "main"
+    },
+    {
+      "id": "ed28",
+      "from": "tx",
+      "to": "post",
+      "role": "main"
+    },
+    {
+      "id": "ed29",
+      "from": "tx",
+      "to": "e409",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "ed30",
+      "from": "post",
+      "to": "settle",
+      "role": "main",
+      "label": "有幂等键时"
+    },
+    {
+      "id": "ed31",
+      "from": "settle",
+      "to": "resp",
+      "role": "main"
+    },
+    {
+      "id": "ed20",
+      "from": "pwd",
+      "to": "e400b",
+      "variant": "security",
+      "role": "error",
+      "fromSide": "left"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "不对称 fail-open（D-C4-16）",
+      "items": [
+        "acquire 失败视为抢到：停机期可并发双建（meter idem_acquire）",
+        "settle 失败键停 pending：停机期同键重试会再造一条（:276-279）",
+        "共同前提：链接已提交，绝不为 Redis 可用性回滚落库"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "写库并发纪律",
+      "items": [
+        "uk_code 唯一索引兜底，不做先查后插",
+        "随机码撞码换码重试 16 次；自定义码撞码 409",
+        "variants 与主行同事务（C3-S1），失败整体回滚"
+      ]
+    }
+  ]
+}

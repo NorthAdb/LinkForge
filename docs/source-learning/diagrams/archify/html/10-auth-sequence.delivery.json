@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "99303611-b666-4234-889f-a26880079925",
+  "status": "current",
+  "command": "deliver",
+  "type": "sequence",
+  "input": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\10-auth-sequence.json",
+  "output": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\10-auth-sequence.html",
+  "specification": {
+    "sha256": "5ee2c5513b0f9f8cfaa3c35c5dc5050959857961d67381d42f63a061a94c02c9",
+    "bytes": 10077
+  },
+  "artifact": {
+    "sha256": "00ef90a5d9dd2aa8e6df4075be92c6a3ad3308b5a75a851103b719f23777f1a7",
+    "bytes": 854511
+  }
+}

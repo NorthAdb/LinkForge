@@ -1,0 +1,194 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "测试与 CI 流水线",
+    "locale": "zh-CN",
+    "output": "docs/source-learning/diagrams/archify/html/09-test-ci-pipeline.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/NorthAdb/LinkForge.git",
+      "provider": "github",
+      "revision": "01f0b5a0e788b426e9de136555cf370f06e06894"
+    }
+  },
+  "lanes": [
+    { "id": "trig", "label": "触发" },
+    { "id": "prep", "label": "Runner 准备" },
+    { "id": "cache", "label": "Maven 缓存" },
+    { "id": "build", "label": "Surefire 单测" },
+    { "id": "it", "label": "Failsafe 集成" },
+    { "id": "infra", "label": "容器设施" },
+    { "id": "out", "label": "结果" }
+  ],
+  "phases": [
+    { "id": "env", "label": "环境准备", "fromCol": 0, "toCol": 2 },
+    { "id": "exec", "label": "测试执行", "fromCol": 3, "toCol": 4, "variant": "emphasis" },
+    { "id": "wrap", "label": "收尾", "fromCol": 5, "toCol": 5 }
+  ],
+  "groups": [
+    { "id": "g_cache", "label": "actions/cache@v4", "lane": "cache", "fromCol": 3, "toCol": 3 },
+    { "id": "g_containers", "label": "每 JVM 单例", "lane": "infra", "fromCol": 4, "toCol": 4 },
+    { "id": "g_tz", "label": "独立 fork", "lane": "it", "fromCol": 5, "toCol": 5 }
+  ],
+  "mainPath": ["trigger", "checkout", "java", "cache", "mvn", "surefire", "itDefault", "tzFork", "result"],
+  "nodes": [
+    {
+      "id": "trigger",
+      "lane": "trig",
+      "col": 0,
+      "type": "cloud",
+      "label": "push / PR",
+      "sublabel": "main · feat/** · fix/** · 全部 PR",
+      "sources": [
+        { "path": ".github/workflows/ci.yml", "line": 3, "end_line": 6 }
+      ]
+    },
+    {
+      "id": "checkout",
+      "lane": "prep",
+      "col": 1,
+      "type": "backend",
+      "label": "checkout",
+      "sublabel": "actions/checkout@v4",
+      "sources": [
+        { "path": ".github/workflows/ci.yml", "line": 12, "end_line": 12 }
+      ]
+    },
+    {
+      "id": "java",
+      "lane": "prep",
+      "col": 2,
+      "type": "backend",
+      "label": "setup-java",
+      "sublabel": "temurin · Java 17",
+      "sources": [
+        { "path": ".github/workflows/ci.yml", "line": 13, "end_line": 16 }
+      ]
+    },
+    {
+      "id": "cache",
+      "lane": "cache",
+      "col": 3,
+      "type": "database",
+      "label": "M2 缓存",
+      "sublabel": "~/.m2/repository",
+      "tag": "key=hashFiles(pom.xml)",
+      "sources": [
+        { "path": ".github/workflows/ci.yml", "line": 17, "end_line": 22 }
+      ]
+    },
+    {
+      "id": "mvn",
+      "lane": "build",
+      "col": 3,
+      "type": "backend",
+      "label": "mvn -B verify",
+      "sublabel": "单 job · ubuntu-latest",
+      "sources": [
+        { "path": ".github/workflows/ci.yml", "line": 23, "end_line": 24 }
+      ]
+    },
+    {
+      "id": "surefire",
+      "lane": "build",
+      "col": 4,
+      "type": "backend",
+      "label": "Surefire *Test",
+      "sublabel": "151 例 纯单测",
+      "tag": "免 Docker",
+      "sources": [
+        { "path": "pom.xml", "line": 215, "end_line": 218 }
+      ]
+    },
+    {
+      "id": "itDefault",
+      "lane": "it",
+      "col": 4,
+      "type": "backend",
+      "label": "Failsafe *IT",
+      "sublabel": "166 例 · 排除 ClockIT",
+      "tag": "Testcontainers",
+      "sources": [
+        { "path": "pom.xml", "line": 219, "end_line": 234 }
+      ]
+    },
+    {
+      "id": "containers",
+      "lane": "infra",
+      "col": 4,
+      "type": "database",
+      "label": "容器单例",
+      "sublabel": "MySQL · Redis · RabbitMQ",
+      "tag": "每 JVM 一次",
+      "sources": [
+        { "path": "src/test/java/com/linkforge/AbstractIntegrationTest.java", "line": 33, "end_line": 58 },
+        { "path": "src/test/java/com/linkforge/AbstractIntegrationTest.java", "line": 60, "end_line": 71 }
+      ]
+    },
+    {
+      "id": "tzFork",
+      "lane": "it",
+      "col": 5,
+      "type": "backend",
+      "label": "时钟 IT fork",
+      "sublabel": "WebhookRetryClockIT · 2 例",
+      "tag": "Asia/Shanghai",
+      "sources": [
+        { "path": "pom.xml", "line": 235, "end_line": 247 }
+      ]
+    },
+    {
+      "id": "result",
+      "lane": "out",
+      "col": 5,
+      "type": "backend",
+      "label": "verify 绿",
+      "sublabel": "两次 failsafe verify 通过",
+      "icon": "success",
+      "sources": [
+        { "path": "pom.xml", "line": 225, "end_line": 228 }
+      ]
+    }
+  ],
+  "edges": [
+    { "id": "trig-checkout", "from": "trigger", "to": "checkout", "role": "main" },
+    { "id": "checkout-java", "from": "checkout", "to": "java", "role": "main" },
+    { "id": "java-cache", "from": "java", "to": "cache", "role": "main" },
+    { "id": "cache-mvn", "from": "cache", "to": "mvn", "role": "main" },
+    { "id": "mvn-surefire", "from": "mvn", "to": "surefire", "role": "main", "label": "test 阶段" },
+    { "id": "surefire-itdefault", "from": "surefire", "to": "itDefault", "role": "main", "label": "随后 integration-test" },
+    { "id": "itdefault-containers", "from": "itDefault", "to": "containers", "role": "branch", "variant": "dashed", "label": "static 单例启动" },
+    { "id": "containers-itdefault", "from": "containers", "to": "itDefault", "role": "return", "variant": "dashed", "label": "@DynamicPropertySource 注入" },
+    { "id": "itdefault-tzfork", "from": "itDefault", "to": "tzFork", "role": "main", "label": "第二执行 · 独立 fork" },
+    { "id": "tzfork-result", "from": "tzFork", "to": "result", "role": "main" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "触发与缓存",
+      "items": [
+        "push 仅 main / feat** / fix** 分支，PR 全部触发",
+        "缓存 key = runner.os-m2-<hashFiles(pom.xml)>，restore-keys 前缀兜底"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "两层测试",
+      "items": [
+        "*Test 走 Surefire：151 例纯单测，不需要 Docker",
+        "*IT 走 Failsafe：166 例，MySQL/Redis/RabbitMQ 由 Testcontainers 提供",
+        "MySQL 以 --max-connections=500 启动，防多上下文连接池打满",
+        "例数取自 .audit/inventory/schema-tests.md 盘点（该文件未入库，仅工作区参考）"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "时钟特例",
+      "items": [
+        "默认执行排除 WebhookRetryClockIT，由第二执行单独 fork 跑",
+        "argLine -Duser.timezone=Asia/Shanghai：JVM(+8) 对 DB(UTC) 的时钟差被真实复现（Bw2-M1）"
+      ]
+    }
+  ]
+}

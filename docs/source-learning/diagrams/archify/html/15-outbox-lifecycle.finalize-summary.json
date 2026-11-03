@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "lifecycle",
+  "quality": "showcase",
+  "specification": {
+    "path": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\15-outbox-lifecycle.json",
+    "sha256": "cd23f44b90551beae31109e6c42dbdaa8763bc2d67c96cd1b32d51f58232f267",
+    "bytes": 4705
+  },
+  "artifact": {
+    "path": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\15-outbox-lifecycle.html",
+    "sha256": "c0927bd21819ae4922e0165b5b042ee97a17745879635452fe5052d4acf68e77",
+    "bytes": 835476
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\15-outbox-lifecycle.finalize.json",
+    "summaryReceipt": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\15-outbox-lifecycle.finalize-summary.json",
+    "browserCheckReceipt": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\15-outbox-lifecycle.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-02T16:23:23.730Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 7877,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  },
+  "visualReviewRecommendation": {
+    "action": "inspect-route-readability",
+    "signals": {
+      "routesOverSuggestedStretch": 1
+    },
+    "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+    "affectedRoutes": {
+      "crossings": [],
+      "detours": [
+        {
+          "relationship": {
+            "id": "pending-retry",
+            "from": "pending",
+            "to": "pending",
+            "label": "发布失败/nack/超时",
+            "collectionIndex": 2,
+            "artifactIndex": 3
+          },
+          "bends": 2,
+          "stretch": 3.308
+        }
+      ],
+      "truncated": false
+    },
+    "repair": "Advisory only: this mode places or routes these relationships itself. Report them; do not remove relationships or meaning to reduce crossings."
+  }
+}

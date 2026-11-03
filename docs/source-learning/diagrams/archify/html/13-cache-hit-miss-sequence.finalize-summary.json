@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "sequence",
+  "quality": "showcase",
+  "specification": {
+    "path": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\13-cache-hit-miss-sequence.json",
+    "sha256": "ab3df86502b73a9408a888bab9c8369f060471ae9f25886b3daaf4a6e9dc6862",
+    "bytes": 10998
+  },
+  "artifact": {
+    "path": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\13-cache-hit-miss-sequence.html",
+    "sha256": "1cffdc02209d36ea84afe035a8b90adce80f24564c214b58f7dd893490411189",
+    "bytes": 865341
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\13-cache-hit-miss-sequence.finalize.json",
+    "summaryReceipt": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\13-cache-hit-miss-sequence.finalize-summary.json",
+    "browserCheckReceipt": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\13-cache-hit-miss-sequence.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-02T16:23:23.730Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 9206,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}

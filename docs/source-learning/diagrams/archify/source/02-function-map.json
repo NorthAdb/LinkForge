@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "diagram_type": "tree",
+  "meta": {
+    "title": "LinkForge 用户能力地图",
+    "subtitle": "功能分解树：七个能力域，叶子取自 README「功能总览」；HTTP 叶子标注真实入口，机制叶子标注实现类。",
+    "locale": "zh-CN",
+    "output": "docs/source-learning/diagrams/archify/html/02-function-map.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/NorthAdb/LinkForge.git",
+      "provider": "github",
+      "revision": "01f0b5a0e788b426e9de136555cf370f06e06894"
+    }
+  },
+  "layout": {
+    "direction": "right",
+    "gapX": 28,
+    "gapY": 28
+  },
+  "nodes": [
+    { "id": "capabilities", "label": "LinkForge 用户能力地图", "sublabel": "多租户短链 + 点击分析后端 · 七个能力域", "sources": [ { "path": "README.md", "line": 30 } ] },
+
+    { "id": "dom-auth", "label": "认证", "parent": "capabilities", "sublabel": "登录、注册与租户归属", "sources": [ { "path": "README.md", "line": 34 } ] },
+    { "id": "cap-jwt-login", "label": "JWT 登录", "parent": "dom-auth", "sublabel": "POST /api/auth/login · 签发 HMAC JWT，默认 24h", "sources": [ { "path": "README.md", "line": 34 }, { "path": "src/main/java/com/linkforge/user/controller/AuthController.java", "line": 23 } ] },
+    { "id": "cap-register", "label": "开放注册（按 IP 限流）", "parent": "dom-auth", "sublabel": "POST /api/auth/register · 事务建租户+首用户", "sources": [ { "path": "README.md", "line": 34 }, { "path": "src/main/java/com/linkforge/user/controller/AuthController.java", "line": 28 } ] },
+    { "id": "cap-bootstrap-tenant", "label": "bootstrap 演示租户", "parent": "dom-auth", "sublabel": "启动时 ApplicationRunner 建演示租户与 admin", "sources": [ { "path": "README.md", "line": 34 }, { "path": "src/main/java/com/linkforge/bootstrap/BootstrapDataLoader.java", "line": 26 } ] },
+    { "id": "cap-tenant-isolation", "label": "多租户隔离", "parent": "dom-auth", "sublabel": "内部机制：按 tenantId 归属，getOwnedLink 校验", "sources": [ { "path": "README.md", "line": 34 }, { "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java", "line": 890, "end_line": 903 } ] },
+
+    { "id": "dom-links", "label": "短链管理", "parent": "capabilities", "sublabel": "创建、维护、批量与物料", "sources": [ { "path": "README.md", "line": 35 }, { "path": "README.md", "line": 36 }, { "path": "README.md", "line": 37 } ] },
+    { "id": "cap-link-crud", "label": "短链 CRUD", "parent": "dom-links", "sublabel": "POST/GET/PATCH/DELETE /api/links[/{code}]", "sources": [ { "path": "README.md", "line": 35 }, { "path": "src/main/java/com/linkforge/link/controller/ShortLinkController.java", "line": 36 } ] },
+    { "id": "cap-custom-code", "label": "自定义短码（区分大小写）", "parent": "dom-links", "sublabel": "创建入参 customCode · 4-16 位与保留字校验", "sources": [ { "path": "README.md", "line": 35 }, { "path": "src/main/java/com/linkforge/link/support/LinkValidations.java", "line": 13 } ] },
+    { "id": "cap-expiry-status", "label": "过期/禁用", "parent": "dom-links", "sublabel": "expireAt + status 开关，跳转时 410/404", "sources": [ { "path": "README.md", "line": 35 }, { "path": "src/main/java/com/linkforge/link/controller/ShortLinkController.java", "line": 81 } ] },
+    { "id": "cap-idempotent-create", "label": "创建幂等", "parent": "dom-links", "sublabel": "内部机制：幂等键 SETNX pending 5s，终值 24h", "sources": [ { "path": "README.md", "line": 35 }, { "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java", "line": 142 } ] },
+    { "id": "cap-no-collision", "label": "并发不撞码", "parent": "dom-links", "sublabel": "内部机制：随机码试 16 次 + uk_code 兜底 409", "sources": [ { "path": "README.md", "line": 35 }, { "path": "src/main/java/com/linkforge/link/support/ShortCodes.java", "line": 6 } ] },
+    { "id": "cap-csv-export", "label": "CSV 导出", "parent": "dom-links", "sublabel": "GET /api/links/export · 带 BOM，1 万行上限", "sources": [ { "path": "README.md", "line": 35 }, { "path": "src/main/java/com/linkforge/link/controller/ShortLinkController.java", "line": 56 } ] },
+    { "id": "cap-qr-material", "label": "QR 物料 + 短时分享链", "parent": "dom-links", "sublabel": "GET /api/links/{code}/qr.png · qr-share 签名链免登录", "sources": [ { "path": "README.md", "line": 35 }, { "path": "src/main/java/com/linkforge/link/controller/ShortLinkController.java", "line": 100 } ] },
+    { "id": "cap-utm-merge", "label": "UTM 写时合并", "parent": "dom-links", "sublabel": "内部机制：UtmMerger 不覆盖已有、超 2048 拒绝", "sources": [ { "path": "README.md", "line": 35 }, { "path": "src/main/java/com/linkforge/link/support/UtmMerger.java", "line": 12 } ] },
+    { "id": "cap-ab-split", "label": "A/B 权重分流", "parent": "dom-links", "sublabel": "一码多目标（≤10）按权重抽签，统计按 variant 分桶", "sources": [ { "path": "README.md", "line": 36 }, { "path": "src/main/java/com/linkforge/link/support/VariantPicker.java", "line": 12 } ] },
+    { "id": "cap-csv-import", "label": "批量 CSV 导入", "parent": "dom-links", "sublabel": "POST /api/links/import · ≤100 行，逐行返回行号+原因", "sources": [ { "path": "README.md", "line": 37 }, { "path": "src/main/java/com/linkforge/link/controller/ShortLinkController.java", "line": 65 } ] },
+
+    { "id": "dom-redirect", "label": "跳转", "parent": "capabilities", "sublabel": "读取路径与防护门禁", "sources": [ { "path": "README.md", "line": 38 }, { "path": "README.md", "line": 39 }, { "path": "README.md", "line": 41 } ] },
+    { "id": "cap-redirect-302", "label": "302 跳转 + HEAD 探测", "parent": "dom-redirect", "sublabel": "GET/HEAD /r/{code} · 行权威校验", "sources": [ { "path": "README.md", "line": 38 }, { "path": "src/main/java/com/linkforge/link/controller/RedirectController.java", "line": 36 } ] },
+    { "id": "cap-five-layer", "label": "五层读取防护", "parent": "dom-redirect", "sublabel": "内部机制：限流 → Bloom → 空值缓存 → L1/L2 → singleflight", "sources": [ { "path": "README.md", "line": 38 }, { "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java", "line": 601 } ] },
+    { "id": "cap-password-gate", "label": "密码短链（BCrypt）", "parent": "dom-redirect", "sublabel": "POST /r/{code}/unlock · 先限流后 BCrypt 校验", "sources": [ { "path": "README.md", "line": 41 }, { "path": "src/main/java/com/linkforge/link/controller/RedirectController.java", "line": 52 } ] },
+    { "id": "cap-phishing-gate", "label": "目标域名名单门禁（BLOCK/WARN）", "parent": "dom-redirect", "sublabel": "跳转时判定：BLOCK 403 拦截页，WARN 可继续", "sources": [ { "path": "README.md", "line": 41 }, { "path": "src/main/java/com/linkforge/link/support/PhishingPolicy.java", "line": 29 } ] },
+    { "id": "cap-rate-limit", "label": "Redis 滑动窗口限流 + 日配额", "parent": "dom-redirect", "sublabel": "内部机制：Lua 滑窗（Redis TIME 时钟），多入口共用", "sources": [ { "path": "README.md", "line": 39 }, { "path": "src/main/java/com/linkforge/common/ratelimit/RedisRateLimiter.java", "line": 25 } ] },
+
+    { "id": "dom-stats", "label": "统计", "parent": "capabilities", "sublabel": "点击管道与查询", "sources": [ { "path": "README.md", "line": 40 }, { "path": "README.md", "line": 41 } ] },
+    { "id": "cap-click-record", "label": "点击记录（同事务 Outbox）", "parent": "dom-stats", "sublabel": "内部机制：同事务写 lf_click_log + PENDING outbox", "sources": [ { "path": "README.md", "line": 40 }, { "path": "src/main/java/com/linkforge/stats/service/ClickRecordService.java", "line": 26 } ] },
+    { "id": "cap-relay-consume", "label": "Relay 投递 + 幂等消费", "parent": "dom-stats", "sublabel": "内部机制：抽水到 RabbitMQ，eventId 去重，异常进 DLQ", "sources": [ { "path": "README.md", "line": 40 }, { "path": "src/main/java/com/linkforge/stats/service/ClickOutboxRelay.java", "line": 27 } ] },
+    { "id": "cap-reconcile", "label": "断链自动追平", "parent": "dom-stats", "sublabel": "内部机制：双写全开时定时重放未消费明细", "sources": [ { "path": "README.md", "line": 40 }, { "path": "src/main/java/com/linkforge/stats/service/ClickLogReconciler.java", "line": 24 } ] },
+    { "id": "cap-exact-uv", "label": "精确 UV", "parent": "dom-stats", "sublabel": "内部机制：COUNT(DISTINCT ip)（依赖同步双写）", "sources": [ { "path": "README.md", "line": 40 }, { "path": "src/main/java/com/linkforge/stats/mapper/ClickLogMapper.java", "line": 12 } ] },
+    { "id": "cap-stats-api", "label": "统计查询", "parent": "dom-stats", "sublabel": "GET /api/links/{code}/stats 与 /clicks 明细分页", "sources": [ { "path": "README.md", "line": 40 }, { "path": "src/main/java/com/linkforge/stats/controller/StatsController.java", "line": 33 } ] },
+    { "id": "cap-dims", "label": "设备/来源维度", "parent": "dom-stats", "sublabel": "GET /api/links/{code}/stats/breakdown · dim 白名单", "sources": [ { "path": "README.md", "line": 40 }, { "path": "src/main/java/com/linkforge/stats/controller/StatsController.java", "line": 45 } ] },
+    { "id": "cap-bot-filter", "label": "非人点击不计", "parent": "dom-stats", "sublabel": "内部机制：prefetch/预览 bot 识别，302 照常不记", "sources": [ { "path": "README.md", "line": 41 }, { "path": "src/main/java/com/linkforge/link/support/ClickFilter.java", "line": 18 } ] },
+
+    { "id": "dom-open", "label": "开放能力", "parent": "capabilities", "sublabel": "API Key 与 Webhook", "sources": [ { "path": "README.md", "line": 42 } ] },
+    { "id": "cap-apikey-mgmt", "label": "API Key（哈希存储 + 配额）", "parent": "dom-open", "sublabel": "POST/GET/DELETE /api/keys · 只存哈希，明文仅一次", "sources": [ { "path": "README.md", "line": 42 }, { "path": "src/main/java/com/linkforge/apikey/controller/ApiKeyController.java", "line": 25 } ] },
+    { "id": "cap-apikey-scope", "label": "API Key 双 scope", "parent": "dom-open", "sublabel": "X-API-Key 认证 · USER/TENANT，TENANT 仅 ADMIN", "sources": [ { "path": "README.md", "line": 42 }, { "path": "src/main/java/com/linkforge/security/ApiKeyAuthFilter.java", "line": 42 } ] },
+    { "id": "cap-webhook-mgmt", "label": "点击 Webhook 双模式", "parent": "dom-open", "sublabel": "PUT/GET/DELETE /api/webhooks/endpoint · 逐次/聚合", "sources": [ { "path": "README.md", "line": 42 }, { "path": "src/main/java/com/linkforge/webhook/controller/WebhookController.java", "line": 24 } ] },
+    { "id": "cap-webhook-security", "label": "Webhook 安全投递", "parent": "dom-open", "sublabel": "HMAC 签名 + AES-GCM at-rest + SSRF 防护", "sources": [ { "path": "README.md", "line": 42 }, { "path": "src/main/java/com/linkforge/webhook/support/WebhookSigner.java", "line": 12 }, { "path": "src/main/java/com/linkforge/webhook/support/PinnedHttpSender.java", "line": 32 } ] },
+
+    { "id": "dom-observability", "label": "可观测", "parent": "capabilities", "sublabel": "指标与看板", "sources": [ { "path": "README.md", "line": 43 } ] },
+    { "id": "cap-prometheus", "label": "Prometheus 指标端点", "parent": "dom-observability", "sublabel": "GET /actuator/prometheus · 令牌守卫", "sources": [ { "path": "README.md", "line": 43 }, { "path": "src/main/java/com/linkforge/security/MetricsScrapeTokenFilter.java", "line": 29 } ] },
+    { "id": "cap-grafana", "label": "Grafana 自动 provision 看板", "parent": "dom-observability", "sublabel": "compose --profile observability · provisioning 挂载", "sources": [ { "path": "README.md", "line": 43 }, { "path": "docker-compose.yml", "line": 90 } ] },
+    { "id": "cap-backlog-gauge", "label": "积压 gauge", "parent": "dom-observability", "sublabel": "内部机制：outbox/webhook 积压定时采样", "sources": [ { "path": "README.md", "line": 43 }, { "path": "src/main/java/com/linkforge/observability/BacklogGauges.java", "line": 23 } ] },
+
+    { "id": "dom-engineering", "label": "工程", "parent": "capabilities", "sublabel": "迁移、测试与交付", "sources": [ { "path": "README.md", "line": 44 } ] },
+    { "id": "cap-flyway", "label": "Flyway 版本化迁移（V1–V10）", "parent": "dom-engineering", "sublabel": "db/migration V1–V10 · 启动自动迁移", "sources": [ { "path": "README.md", "line": 44 }, { "path": "src/main/resources/db/migration/V1__baseline_schema.sql", "line": 1 } ] },
+    { "id": "cap-tests", "label": "测试 319 例（Testcontainers 集成 166）", "parent": "dom-engineering", "sublabel": "mvn verify · surefire 跑 *Test，failsafe 跑 *IT", "sources": [ { "path": "README.md", "line": 44 } ] },
+    { "id": "cap-ci", "label": "GitHub Actions CI", "parent": "dom-engineering", "sublabel": ".github/workflows/ci.yml · PR 全量 mvn verify", "sources": [ { "path": "README.md", "line": 44 }, { "path": ".github/workflows/ci.yml", "line": 1 } ] },
+    { "id": "cap-prod-profile", "label": "prod profile 一键收紧", "parent": "dom-engineering", "sublabel": "application.yml prod 文档：关映射/文档/健康详情", "sources": [ { "path": "README.md", "line": 44 }, { "path": "src/main/resources/application.yml", "line": 254 } ] }
+  ],
+  "cards": [
+    {
+      "dot": "violet",
+      "title": "域归并说明",
+      "items": [
+        "README「限流」行并入跳转域：它是读取防护的第一层，也被注册/创建/API Key 共用",
+        "README「安全」行拆入跳转（密码门/名单门禁）与统计（非人不计）",
+        "其余行按域列直挂；能力条目未增删，仅按七个固定域重新归位"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "入口约定",
+      "items": [
+        "HTTP 叶子标注真实路径与方法，取自源码 @Mapping 注解实测",
+        "「内部机制」叶子标注实现类，无独立 HTTP 入口",
+        "每条能力均能在 README 功能总览表找到原文"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "0ddc5ef3-3a00-49cc-b658-8751f8390b6a",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\08-scheduled-tasks.json",
+  "output": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\08-scheduled-tasks.html",
+  "specification": {
+    "sha256": "2a17b9e6e88164fd42f29c2021eb1c31d665cf15bb11b866ae84d4f651dd3d09",
+    "bytes": 10700
+  },
+  "artifact": {
+    "sha256": "096f162a28866f1c167105183d808d2defa6aecd8a0aebe7dfe6df32fd533343",
+    "bytes": 864898
+  }
+}

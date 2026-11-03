@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "workflow",
+  "quality": "showcase",
+  "specification": {
+    "path": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\09-test-ci-pipeline.json",
+    "sha256": "c114e76309d1d39c170a9472036ea507d6f84dc61aacd7e2fab7c2a908380b34",
+    "bytes": 6535
+  },
+  "artifact": {
+    "path": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\09-test-ci-pipeline.html",
+    "sha256": "d51c394e146f922977e512316a3974da5ad393b3e833af37a523f9aa0dafa55e",
+    "bytes": 849751
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\09-test-ci-pipeline.finalize.json",
+    "summaryReceipt": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\09-test-ci-pipeline.finalize-summary.json",
+    "browserCheckReceipt": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\09-test-ci-pipeline.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-02T16:23:23.730Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 9653,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}

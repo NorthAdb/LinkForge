@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "b38947ff-a9ca-442a-b909-18c18d5f2b44",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\00-system-architecture.json",
+  "output": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\00-system-architecture.html",
+  "specification": {
+    "sha256": "25967794f3bdf4350b5aca31a5a93a75ee326bec757d18745f1691a4325ec984",
+    "bytes": 11231
+  },
+  "artifact": {
+    "sha256": "2a20946ba88821f73c7d5bc56c294b3a5e59b13165b41d7dfbbe4d293f6ead9c",
+    "bytes": 867352
+  }
+}

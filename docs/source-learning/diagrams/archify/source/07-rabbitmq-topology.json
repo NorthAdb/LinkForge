@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "RabbitMQ 点击事件拓扑",
+    "locale": "zh-CN",
+    "output": "docs/source-learning/diagrams/archify/html/07-rabbitmq-topology.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/NorthAdb/LinkForge.git",
+      "provider": "github",
+      "revision": "01f0b5a0e788b426e9de136555cf370f06e06894"
+    }
+  },
+  "components": [
+    {
+      "id": "relay",
+      "type": "backend",
+      "label": "ClickOutboxRelay",
+      "sublabel": "outbox 中继 · 每 2s 一批",
+      "pos": [40, 40],
+      "size": [160, 64],
+      "sources": [
+        { "path": "src/main/java/com/linkforge/stats/service/ClickOutboxRelay.java", "line": 37, "end_line": 58 }
+      ]
+    },
+    {
+      "id": "publisher",
+      "type": "backend",
+      "label": "RabbitClickEventPublisher",
+      "sublabel": "correlated confirm · 5s 超时",
+      "pos": [272, 40],
+      "size": [210, 64],
+      "sources": [
+        { "path": "src/main/java/com/linkforge/stats/mq/RabbitClickEventPublisher.java", "line": 27, "end_line": 41 },
+        { "path": "src/main/java/com/linkforge/stats/mq/RabbitClickEventPublisher.java", "line": 44, "end_line": 67 },
+        { "path": "src/main/resources/application.yml", "line": 70, "end_line": 75 }
+      ]
+    },
+    {
+      "id": "exchange",
+      "type": "messagebus",
+      "label": "linkforge.click.exchange",
+      "sublabel": "Topic 交换器 · durable",
+      "pos": [598, 40],
+      "size": [200, 64],
+      "sources": [
+        { "path": "src/main/java/com/linkforge/config/RabbitMqConfig.java", "line": 24, "end_line": 27 }
+      ]
+    },
+    {
+      "id": "queue",
+      "type": "messagebus",
+      "label": "linkforge.click.queue",
+      "sublabel": "durable · 异常死信→DLX",
+      "pos": [598, 180],
+      "size": [200, 64],
+      "sources": [
+        { "path": "src/main/java/com/linkforge/config/RabbitMqConfig.java", "line": 29, "end_line": 35 },
+        { "path": "src/main/java/com/linkforge/config/RabbitMqConfig.java", "line": 37, "end_line": 40 }
+      ]
+    },
+    {
+      "id": "consumer",
+      "type": "backend",
+      "label": "ClickEventConsumer",
+      "sublabel": "@RabbitListener · 拒绝不重排",
+      "pos": [922, 180],
+      "size": [190, 64],
+      "sources": [
+        { "path": "src/main/java/com/linkforge/stats/mq/ClickEventConsumer.java", "line": 22, "end_line": 27 },
+        { "path": "src/main/resources/application.yml", "line": 76, "end_line": 81 }
+      ]
+    },
+    {
+      "id": "dlx",
+      "type": "messagebus",
+      "label": "linkforge.click.dlx",
+      "sublabel": "Topic 交换器 · durable",
+      "pos": [598, 300],
+      "size": [200, 64],
+      "sources": [
+        { "path": "src/main/java/com/linkforge/config/RabbitMqConfig.java", "line": 42, "end_line": 45 }
+      ]
+    },
+    {
+      "id": "dlq",
+      "type": "messagebus",
+      "label": "linkforge.click.dlq",
+      "sublabel": "durable 队列",
+      "pos": [598, 420],
+      "size": [200, 64],
+      "sources": [
+        { "path": "src/main/java/com/linkforge/config/RabbitMqConfig.java", "line": 47, "end_line": 55 }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "RabbitMQ Broker（独立运行时）",
+      "wraps": ["exchange", "queue", "dlx", "dlq"]
+    }
+  ],
+  "connections": [
+    { "id": "relay-publish", "from": "relay", "to": "publisher", "label": "publish" },
+    { "id": "publisher-send", "from": "publisher", "to": "exchange", "label": "convertAndSend" },
+    { "id": "binding-click", "from": "exchange", "to": "queue", "label": "click.recorded", "variant": "emphasis" },
+    { "id": "queue-consume", "from": "queue", "to": "consumer", "label": "@RabbitListener" },
+    { "id": "dead-letter", "from": "queue", "to": "dlx", "label": "异常拒绝→死信", "variant": "dashed" },
+    { "id": "binding-dead", "from": "dlx", "to": "dlq", "label": "click.dead", "variant": "dashed" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "发布确认（A7）",
+      "items": [
+        "publisher-confirm-type=correlated、publisher-returns=true、template.mandatory=true 三开关全开",
+        "nack、不可路由、5s 确认超时都抛异常，outbox 行保持 PENDING 由 Relay 重试",
+        "Jackson2JsonMessageConverter 复用 Spring 的 ObjectMapper，否则 LocalDateTime 事件全数死信"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "死信路径",
+      "items": [
+        "clickQueue 参数：x-dead-letter-exchange=linkforge.click.dlx，x-dead-letter-routing-key=click.dead",
+        "消费异常 reject 且不重队（default-requeue-rejected=false）→ 经 DLX 落入 click.dlq",
+        "重复 eventId 直接 ack 不再计数，消费幂等靠 lf_consumed_event"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "拓扑声明",
+      "items": [
+        "六个 @Bean：clickExchange / clickQueue / clickBinding / clickDlx / clickDlq / clickDlqBinding",
+        "Relay 收到 broker 确认后才把 outbox 行标 SENT；FAILED 行保留，SQL 复位 PENDING 即重放"
+      ]
+    }
+  ]
+}

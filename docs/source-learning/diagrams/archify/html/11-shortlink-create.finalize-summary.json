@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "workflow",
+  "quality": "standard",
+  "specification": {
+    "path": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\11-shortlink-create.json",
+    "sha256": "7ab7834474673f58c093a010bbcdb3612ffb7298cef5362edd539b586e12a8eb",
+    "bytes": 15644
+  },
+  "artifact": {
+    "path": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\11-shortlink-create.html",
+    "sha256": "19ddda39d41188be5ab81daeee920c2241f025718e791b55cceebc9a0bd1ea48",
+    "bytes": 880283
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\11-shortlink-create.finalize.json",
+    "summaryReceipt": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\11-shortlink-create.finalize-summary.json",
+    "browserCheckReceipt": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\11-shortlink-create.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-02T16:23:23.730Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 9932,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}

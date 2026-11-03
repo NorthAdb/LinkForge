@@ -1,0 +1,250 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "LinkForge 缓存命中/未命中读路径时序",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": "docs/source-learning/diagrams/archify/html/13-cache-hit-miss-sequence.html",
+    "repository": {
+      "url": "https://github.com/NorthAdb/LinkForge.git",
+      "provider": "github",
+      "revision": "01f0b5a0e788b426e9de136555cf370f06e06894"
+    }
+  },
+  "participants": [
+    {
+      "id": "client",
+      "type": "external",
+      "label": "客户端",
+      "sublabel": "浏览器 / 扫描器",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/controller/RedirectController.java",
+          "line": 36,
+          "end_line": 41,
+          "label": "GET /r/{code} 匿名入口"
+        }
+      ]
+    },
+    {
+      "id": "controller",
+      "type": "backend",
+      "label": "跳转入口",
+      "sublabel": "RedirectController",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/controller/RedirectController.java",
+          "line": 36,
+          "end_line": 48
+        },
+        {
+          "path": "src/main/java/com/linkforge/link/controller/RedirectController.java",
+          "line": 85,
+          "end_line": 117
+        }
+      ]
+    },
+    {
+      "id": "svc",
+      "type": "backend",
+      "label": "resolveTarget",
+      "sublabel": "ShortLinkService",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 565,
+          "end_line": 585
+        },
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 601,
+          "end_line": 712
+        }
+      ]
+    },
+    {
+      "id": "limiter",
+      "type": "security",
+      "label": "限流器",
+      "sublabel": "RedisRateLimiter",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/common/ratelimit/RedisRateLimiter.java",
+          "line": 39,
+          "end_line": 71
+        }
+      ]
+    },
+    {
+      "id": "bloom",
+      "type": "security",
+      "label": "CodeBloomFilter",
+      "sublabel": "负答案权威",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/support/CodeBloomFilter.java",
+          "line": 186,
+          "end_line": 200
+        }
+      ]
+    },
+    {
+      "id": "l1",
+      "type": "backend",
+      "label": "UrlLocalCache",
+      "sublabel": "Caffeine L1",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/support/UrlLocalCache.java",
+          "line": 76,
+          "end_line": 95
+        }
+      ]
+    },
+    {
+      "id": "redis",
+      "type": "database",
+      "label": "Redis L2",
+      "sublabel": "code / absent 键",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 633,
+          "end_line": 644
+        },
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 966,
+          "end_line": 977
+        }
+      ]
+    },
+    {
+      "id": "flight",
+      "type": "backend",
+      "label": "SingleFlight",
+      "sublabel": "行读合并",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/support/SingleFlight.java",
+          "line": 57,
+          "end_line": 99
+        },
+        {
+          "path": "src/main/java/com/linkforge/link/support/ShortLinkRowLoader.java",
+          "line": 20,
+          "end_line": 22
+        }
+      ]
+    },
+    {
+      "id": "mysql",
+      "type": "database",
+      "label": "MySQL",
+      "sublabel": "lf_short_link 行",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/support/ShortLinkRowLoader.java",
+          "line": 20,
+          "end_line": 22
+        }
+      ]
+    }
+  ],
+  "segments": [
+    { "from": 150, "to": 500, "label": "公共前缀：限流 → Bloom → 空值缓存" },
+    { "from": 505, "to": 812, "label": "命中线：L1 命中（行读照做）" },
+    { "from": 817, "to": 1164, "label": "未命中线：L1/L2 双 miss → singleflight 行读" },
+    { "from": 1165, "to": 1405, "label": "行分叉：不存在 → 404；存在 → 预热 → 302" }
+  ],
+  "messages": [
+    { "id": "get1", "from": "client", "to": "controller", "y": 175, "label": "GET /r/{code}", "variant": "emphasis" },
+    { "id": "resolve1", "from": "controller", "to": "svc", "y": 203, "label": "resolveForGet(code)" },
+    { "id": "rate1", "from": "svc", "to": "limiter", "y": 231, "label": "acquire(redirect:ip)", "variant": "security", "note": "超限抛 429（:604-610）" },
+    { "id": "rate_ok1", "from": "limiter", "to": "svc", "y": 289, "label": "放行", "variant": "return" },
+    { "id": "bloom1", "from": "svc", "to": "bloom", "y": 317, "label": "mightContain(code)", "variant": "security", "note": "负答→404（:615-618）" },
+    { "id": "bloom_yes", "from": "bloom", "to": "svc", "y": 375, "label": "true 可能存在", "variant": "return", "note": "禁用态 fail-open 恒 true" },
+    { "id": "absent_probe", "from": "svc", "to": "redis", "y": 433, "label": "GET absent:{code}", "note": "命中→404（:623-626）" },
+    { "id": "absent_miss", "from": "redis", "to": "svc", "y": 491, "label": "无哨兵", "variant": "return" },
+    { "id": "l1_get1", "from": "svc", "to": "l1", "y": 519, "label": "getIfPresent(code)" },
+    { "id": "l1_hit", "from": "l1", "to": "svc", "y": 547, "label": "URL 命中", "variant": "return", "note": "只省 Redis 往返（:629-632）" },
+    { "id": "flight1", "from": "svc", "to": "flight", "y": 605, "label": "run(code, rowLoader.load)" },
+    { "id": "row1", "from": "flight", "to": "mysql", "y": 633, "label": "selectOne 行读" },
+    { "id": "row_back1", "from": "mysql", "to": "flight", "y": 661, "label": "行", "variant": "return" },
+    { "id": "flight_ret1", "from": "flight", "to": "svc", "y": 689, "label": "行（shared 跟车）", "variant": "return", "note": "合并同码行读（:645-649）" },
+    { "id": "outcome1", "from": "svc", "to": "controller", "y": 747, "label": "RedirectOutcome.Redirect", "variant": "return", "note": "门禁全过后抽签（:656-711）" },
+    { "id": "redirect1", "from": "controller", "to": "client", "y": 805, "label": "302 Location", "variant": "return" },
+    { "id": "get2", "from": "client", "to": "controller", "y": 843, "label": "GET /r/{code} 冷码", "variant": "emphasis" },
+    { "id": "resolve2", "from": "controller", "to": "svc", "y": 871, "label": "resolveForGet(code)" },
+    { "id": "l1_get2", "from": "svc", "to": "l1", "y": 899, "label": "getIfPresent(code)" },
+    { "id": "l1_miss", "from": "l1", "to": "svc", "y": 927, "label": "miss", "variant": "return" },
+    { "id": "l2_get", "from": "svc", "to": "redis", "y": 955, "label": "GET code:{code}", "note": "仅 L1 miss 才查（:633）" },
+    { "id": "l2_miss", "from": "redis", "to": "svc", "y": 1013, "label": "miss / 异常", "variant": "return", "note": "异常 fail-open 降级行读" },
+    { "id": "flight2", "from": "svc", "to": "flight", "y": 1071, "label": "run(code, rowLoader.load)", "note": "Leader 读，Follower 跟车" },
+    { "id": "row2", "from": "flight", "to": "mysql", "y": 1129, "label": "selectOne 行读" },
+    { "id": "row_back2", "from": "mysql", "to": "flight", "y": 1157, "label": "null 或 行", "variant": "return" },
+    { "id": "mark_absent", "from": "svc", "to": "redis", "y": 1193, "label": "SET absent:{code}", "variant": "dashed", "note": "markAbsent，TTL 60-90s" },
+    { "id": "outcome_404", "from": "svc", "to": "controller", "y": 1251, "label": "BizException 404", "variant": "security" },
+    { "id": "resp_404", "from": "controller", "to": "client", "y": 1279, "label": "404 not found", "variant": "security" },
+    { "id": "prewarm", "from": "svc", "to": "redis", "y": 1307, "label": "SETEX code:{code}", "variant": "dashed", "note": "cacheUrl 预热（:678-680）" },
+    { "id": "outcome2", "from": "svc", "to": "controller", "y": 1365, "label": "RedirectOutcome.Redirect", "variant": "return" },
+    { "id": "redirect2", "from": "controller", "to": "client", "y": 1393, "label": "302 Location", "variant": "return" }
+  ],
+  "activations": [
+    { "participant": "controller", "from": 175, "to": 811 },
+    { "participant": "svc", "from": 203, "to": 753 },
+    { "participant": "limiter", "from": 231, "to": 295 },
+    { "participant": "bloom", "from": 317, "to": 381 },
+    { "participant": "redis", "from": 433, "to": 497 },
+    { "participant": "l1", "from": 519, "to": 553 },
+    { "participant": "flight", "from": 605, "to": 695 },
+    { "participant": "mysql", "from": 633, "to": 667 },
+    { "participant": "controller", "from": 843, "to": 1399 },
+    { "participant": "svc", "from": 871, "to": 1371 },
+    { "participant": "l1", "from": 899, "to": 933 },
+    { "participant": "redis", "from": 955, "to": 1019 },
+    { "participant": "flight", "from": 1071, "to": 1163 },
+    { "participant": "mysql", "from": 1129, "to": 1163 },
+    { "participant": "redis", "from": 1193, "to": 1257 },
+    { "participant": "redis", "from": 1307, "to": 1371 }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "命中线的取舍",
+      "items": [
+        "L1 命中只省 Redis 往返（:629-632 注释），singleflight 行读每请求必做",
+        "Bloom 负答案权威，不触 MySQL 直接 404（:615-618）；空值缓存命中同样 404（:623-626）",
+        "判定全在行上：状态 :656、过期 :659、URL 校验 :663-671、B9 :684、密码 :691、WARN :696、抽签 :708"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "未命中线与预热",
+      "items": [
+        "L2 只在 L1 miss 时查（:633），cache.l2{result} 只打给真走 L2 的请求（:642-643）",
+        "行存在 → cacheUrl 写穿预热（:678-680、:966-977）：L1 put + SETEX TTL 加抖动",
+        "行不存在 → markAbsent（:650-654）写 60-90s 哨兵；禁用/过期行绝不入空值缓存（:620-626）"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "fail-open 家族（降级不 500）",
+      "items": [
+        "Bloom 禁用/未就绪/播种失败恒 true，走缓存+DB 路径（CodeBloomFilter:186-192）",
+        "L2 读失败 op=l2_get 继续行读（:636-640）；L2 写失败 op=l2_set 等下次回填（:973-976）",
+        "singleflight Follower 500ms 超时降级自读（SingleFlight:83-89）；absent 探针失败当未命中（:932-936）"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "行权威 vs 缓存提示（三处落地）",
+      "items": [
+        "URL 可渲染校验先验行再验缓存值，脏行必须 410（:663-671）",
+        "B9 门禁判行的 URL，陈旧缓存不得掩盖 DB 今天说指向哪（:682-684）",
+        "variants 抽签结果永远压过缓存 URL（:705-707）；HEAD 走 resolveForProbe 不记录点击"
+      ]
+    }
+  ]
+}

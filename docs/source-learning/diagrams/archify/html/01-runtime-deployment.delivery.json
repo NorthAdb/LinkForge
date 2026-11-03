@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "fd712d02-55a8-4717-8dfd-e17aa8f209ec",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\01-runtime-deployment.json",
+  "output": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\01-runtime-deployment.html",
+  "specification": {
+    "sha256": "6d6a3f49a644ac0f194b02555da5647f10a5684fa17a69038b35a03503bcc977",
+    "bytes": 5830
+  },
+  "artifact": {
+    "sha256": "03b79edd827b03fe047d0847e3f6c083fbf9d62b4d1ffabe0eea3fbf2c456c50",
+    "bytes": 857568
+  }
+}

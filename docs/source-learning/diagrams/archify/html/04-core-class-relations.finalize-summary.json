@@ -1,0 +1,167 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "class",
+  "quality": "showcase",
+  "specification": {
+    "path": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\04-core-class-relations.json",
+    "sha256": "0db41d17eb9eb83397c319e3815043b985d768d372f6dee7c4d023405e435985",
+    "bytes": 18533
+  },
+  "artifact": {
+    "path": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\04-core-class-relations.html",
+    "sha256": "4e418241dee6b13f100444d4ce0e9e5a08e6397cc2195c7ca41e538be9281229",
+    "bytes": 919939
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\04-core-class-relations.finalize.json",
+    "summaryReceipt": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\04-core-class-relations.finalize-summary.json",
+    "browserCheckReceipt": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\04-core-class-relations.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-02T16:23:23.730Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 9684,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  },
+  "visualReviewRecommendation": {
+    "action": "inspect-route-readability",
+    "signals": {
+      "routesOverSuggestedBends": 3
+    },
+    "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+    "affectedRoutes": {
+      "crossings": [],
+      "detours": [
+        {
+          "relationship": {
+            "id": "svc_cache",
+            "from": "sl_service",
+            "to": "url_local_cache",
+            "label": "L1 读写与失效",
+            "collectionIndex": 5,
+            "artifactIndex": 6
+          },
+          "bends": 3,
+          "stretch": 1.058,
+          "directCorridorBlockers": [
+            {
+              "id": "shortlink_mapper",
+              "label": "ShortLinkMapper",
+              "box": [
+                488.5,
+                543,
+                243,
+                74
+              ]
+            },
+            {
+              "id": "single_flight",
+              "label": "SingleFlight&lt;K,V&gt;",
+              "box": [
+                460,
+                741,
+                300,
+                214
+              ]
+            }
+          ]
+        },
+        {
+          "relationship": {
+            "id": "svc_bloom",
+            "from": "sl_service",
+            "to": "code_bloom_filter",
+            "label": "创建播种/门禁",
+            "collectionIndex": 7,
+            "artifactIndex": 8
+          },
+          "bends": 3,
+          "stretch": 1.045,
+          "directCorridorBlockers": [
+            {
+              "id": "shortlink_mapper",
+              "label": "ShortLinkMapper",
+              "box": [
+                488.5,
+                543,
+                243,
+                74
+              ]
+            },
+            {
+              "id": "single_flight",
+              "label": "SingleFlight&lt;K,V&gt;",
+              "box": [
+                460,
+                741,
+                300,
+                214
+              ]
+            },
+            {
+              "id": "url_local_cache",
+              "label": "UrlLocalCache",
+              "box": [
+                475.5,
+                1054,
+                269,
+                134
+              ]
+            }
+          ]
+        },
+        {
+          "relationship": {
+            "id": "consumer_stats",
+            "from": "click_event_consumer",
+            "to": "click_stats_service",
+            "label": "onMessage 委派",
+            "collectionIndex": 16,
+            "artifactIndex": 16
+          },
+          "bends": 4,
+          "stretch": 1.278,
+          "directCorridorBlockers": [
+            {
+              "id": "cache_bus",
+              "label": "CacheBus",
+              "box": [
+                462.5,
+                1545,
+                295,
+                134
+              ]
+            }
+          ]
+        }
+      ],
+      "truncated": false
+    },
+    "repair": "Advisory only: this mode places or routes these relationships itself. Report them; do not remove relationships or meaning to reduce crossings."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "cc3508dd-0f5a-4a68-91eb-6126383ff8c5",
+  "status": "current",
+  "command": "deliver",
+  "type": "erd",
+  "input": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\05-database-erd.json",
+  "output": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\05-database-erd.html",
+  "specification": {
+    "sha256": "a7cabec31388d07c349747d3a5d89892fe45afd910273452d3ec3476cd338745",
+    "bytes": 21364
+  },
+  "artifact": {
+    "sha256": "4a33760a64e64bfe1eeba982492abfba7732481cc8f4989b76d8d290809d7ea2",
+    "bytes": 936690
+  }
+}

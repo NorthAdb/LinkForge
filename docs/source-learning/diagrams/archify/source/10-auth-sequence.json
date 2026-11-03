@@ -1,0 +1,394 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "LinkForge 认证时序：注册/登录与 JWT 过滤器链",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": "docs/source-learning/diagrams/archify/html/10-auth-sequence.html",
+    "repository": {
+      "url": "https://github.com/NorthAdb/LinkForge.git",
+      "provider": "github",
+      "revision": "01f0b5a0e788b426e9de136555cf370f06e06894"
+    }
+  },
+  "participants": [
+    {
+      "id": "client",
+      "type": "external",
+      "label": "客户端",
+      "sublabel": "匿名 / JWT / Key",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/security/SecurityConfig.java",
+          "line": 41,
+          "end_line": 46,
+          "label": "/api/auth/** permitAll"
+        }
+      ]
+    },
+    {
+      "id": "auth_controller",
+      "type": "backend",
+      "label": "认证入口",
+      "sublabel": "AuthController",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/user/controller/AuthController.java",
+          "line": 16,
+          "end_line": 32
+        }
+      ]
+    },
+    {
+      "id": "auth_service",
+      "type": "backend",
+      "label": "AuthService",
+      "sublabel": "注册 / 登录",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/user/service/AuthService.java",
+          "line": 29,
+          "end_line": 39
+        },
+        {
+          "path": "src/main/java/com/linkforge/user/service/AuthService.java",
+          "line": 64,
+          "end_line": 100
+        }
+      ]
+    },
+    {
+      "id": "limiter",
+      "type": "security",
+      "label": "限流器",
+      "sublabel": "RedisRateLimiter",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/common/ratelimit/RedisRateLimiter.java",
+          "line": 25,
+          "end_line": 39
+        },
+        {
+          "path": "src/main/java/com/linkforge/common/ratelimit/RedisRateLimiter.java",
+          "line": 71,
+          "end_line": 71
+        }
+      ]
+    },
+    {
+      "id": "db",
+      "type": "database",
+      "label": "MySQL",
+      "sublabel": "租户/用户 Mapper",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/user/mapper/TenantMapper.java",
+          "line": 7,
+          "end_line": 9
+        },
+        {
+          "path": "src/main/java/com/linkforge/user/mapper/UserAccountMapper.java",
+          "line": 7,
+          "end_line": 9
+        }
+      ]
+    },
+    {
+      "id": "jwt_service",
+      "type": "security",
+      "label": "JwtService",
+      "sublabel": "HMAC 签发/校验",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/security/JwtService.java",
+          "line": 21,
+          "end_line": 45
+        }
+      ]
+    },
+    {
+      "id": "jwt_filter",
+      "type": "security",
+      "label": "JwtAuthFilter",
+      "sublabel": "Bearer 解析",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/security/JwtAuthFilter.java",
+          "line": 22,
+          "end_line": 58
+        }
+      ]
+    },
+    {
+      "id": "biz_controller",
+      "type": "backend",
+      "label": "业务层",
+      "sublabel": "Controller",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/security/SecurityConfig.java",
+          "line": 61,
+          "end_line": 69,
+          "label": "路径-角色矩阵"
+        },
+        {
+          "path": "src/main/java/com/linkforge/link/controller/ShortLinkController.java",
+          "line": 35,
+          "end_line": 44
+        }
+      ]
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 640,
+      "label": "场景 A：注册 / 登录"
+    },
+    {
+      "from": 650,
+      "to": 940,
+      "label": "场景 B：带 JWT 的后续请求"
+    }
+  ],
+  "messages": [
+    {
+      "id": "register_req",
+      "from": "client",
+      "to": "auth_controller",
+      "y": 175,
+      "label": "POST /api/auth/register",
+      "variant": "emphasis",
+      "note": "login 同链路，无 IP 限流"
+    },
+    {
+      "id": "register_call",
+      "from": "auth_controller",
+      "to": "auth_service",
+      "y": 240,
+      "label": "register(request) @Transactional"
+    },
+    {
+      "id": "rate_check",
+      "from": "auth_service",
+      "to": "limiter",
+      "y": 268,
+      "label": "acquire(sw register:{ip})",
+      "variant": "security",
+      "note": "拒绝→429 限流异常"
+    },
+    {
+      "id": "rate_ok",
+      "from": "limiter",
+      "to": "auth_service",
+      "y": 330,
+      "label": "allowed",
+      "variant": "return"
+    },
+    {
+      "id": "tenant_insert",
+      "from": "auth_service",
+      "to": "db",
+      "y": 358,
+      "label": "insert 租户",
+      "note": "DuplicateKey→409 重名"
+    },
+    {
+      "id": "tenant_row",
+      "from": "db",
+      "to": "auth_service",
+      "y": 420,
+      "label": "租户行",
+      "variant": "return"
+    },
+    {
+      "id": "user_insert",
+      "from": "auth_service",
+      "to": "db",
+      "y": 448,
+      "label": "insert 首用户（BCrypt，ADMIN）",
+      "note": "失败靠事务回滚防孤儿"
+    },
+    {
+      "id": "user_row",
+      "from": "db",
+      "to": "auth_service",
+      "y": 510,
+      "label": "用户行",
+      "variant": "return"
+    },
+    {
+      "id": "token_create",
+      "from": "auth_service",
+      "to": "jwt_service",
+      "y": 538,
+      "label": "createToken(userId, tenantId, username)"
+    },
+    {
+      "id": "token_back",
+      "from": "jwt_service",
+      "to": "auth_service",
+      "y": 566,
+      "label": "签名 JWT（默认 24h）",
+      "variant": "return"
+    },
+    {
+      "id": "resp_svc",
+      "from": "auth_service",
+      "to": "auth_controller",
+      "y": 594,
+      "label": "LoginResponse(token, …)",
+      "variant": "return"
+    },
+    {
+      "id": "resp_client",
+      "from": "auth_controller",
+      "to": "client",
+      "y": 622,
+      "label": "200 JWT",
+      "variant": "return"
+    },
+    {
+      "id": "jwt_req",
+      "from": "client",
+      "to": "jwt_filter",
+      "y": 662,
+      "label": "GET /api/links + Bearer",
+      "variant": "emphasis",
+      "note": "链序 Metrics→Jwt→ApiKey→QrShare"
+    },
+    {
+      "id": "jwt_parse",
+      "from": "jwt_filter",
+      "to": "jwt_service",
+      "y": 725,
+      "label": "parse(token)",
+      "variant": "security"
+    },
+    {
+      "id": "jwt_claims",
+      "from": "jwt_service",
+      "to": "jwt_filter",
+      "y": 753,
+      "label": "claims",
+      "variant": "return",
+      "note": "置 UserContext + ROLE_USER"
+    },
+    {
+      "id": "jwt_401",
+      "from": "jwt_filter",
+      "to": "client",
+      "y": 815,
+      "label": "401 invalid token（JwtException 直写）",
+      "variant": "security"
+    },
+    {
+      "id": "chain_on",
+      "from": "jwt_filter",
+      "to": "biz_controller",
+      "y": 843,
+      "label": "filterChain.doFilter 放行"
+    },
+    {
+      "id": "biz_resp",
+      "from": "biz_controller",
+      "to": "client",
+      "y": 871,
+      "label": "200 业务响应",
+      "variant": "return",
+      "note": "finally 双清两 ThreadLocal"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "auth_controller",
+      "from": 175,
+      "to": 628
+    },
+    {
+      "participant": "auth_service",
+      "from": 240,
+      "to": 600
+    },
+    {
+      "participant": "limiter",
+      "from": 268,
+      "to": 336
+    },
+    {
+      "participant": "db",
+      "from": 358,
+      "to": 516
+    },
+    {
+      "participant": "jwt_service",
+      "from": 538,
+      "to": 572
+    },
+    {
+      "participant": "jwt_service",
+      "from": 725,
+      "to": 759
+    },
+    {
+      "participant": "jwt_filter",
+      "from": 662,
+      "to": 849
+    },
+    {
+      "participant": "biz_controller",
+      "from": 843,
+      "to": 877
+    },
+    {
+      "participant": "limiter",
+      "from": 994,
+      "to": 1062
+    },
+    {
+      "participant": "biz_controller",
+      "from": 1084,
+      "to": 1151
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "401 的三个来源",
+      "items": [
+        "未认证走 SecurityConfig authenticationEntryPoint：{\"code\":401,\"message\":\"unauthorized\"}（:72-76）",
+        "坏 JWT 由 JwtAuthFilter 直写 401 invalid token（:51-54），到不了 @RestControllerAdvice",
+        "坏 key 直写 401 invalid api key（:82,88）；revoked 对外同文案，仅 metrics tag 区分"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "UserContext（ThreadLocal）生命周期",
+      "items": [
+        "set 仅两处：JwtAuthFilter:45、ApiKeyAuthFilter:99（scope 透传，生效点 isTenantWide）",
+        "clear 仅两个 filter 的 finally（:56、:105），匿名与早退路径同样必清",
+        "MetricsScrapeTokenFilter / QrShareAuthFilter 不碰 UserContext，消费方（requireUser 等）判空抛 401"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "注册事务与过滤器链序",
+      "items": [
+        "register @Transactional：user 插入失败回滚租户，防孤儿占名；租户名唯一索引是并发 409 兜底",
+        "SecurityConfig 装配链序 Metrics→Jwt→ApiKey→QrShare（:89-92），STATELESS、CSRF 关",
+        "注册限流拒绝→meter ratelimit.rejected{entry=register}→429；login 无 IP 限流（BCrypt 只在租户有效时执行）"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "X-API-Key 分支（图幅所限，改为卡片说明）",
+      "items": [
+        "链位：addFilterAfter JwtAuthFilter（SecurityConfig:91）；只看 /api/** 与非 health 的 /actuator/**",
+        "authenticate 经 ApiKeyService SHA-256 点查 key_hash 唯一索引；混发 Bearer→400 ambiguous；revoked 与 invalid 同文案 401",
+        "配额：分钟滑窗 + Asia/Shanghai 固定日窗，超限 429+Retry-After；touchLastUsed SETNX 60s 节流",
+        "成功置 AuthUser(username=apikey:prefix, scope)→UserContext→ROLE_API_KEY，finally 双清（:104-107）"
+      ]
+    }
+  ]
+}

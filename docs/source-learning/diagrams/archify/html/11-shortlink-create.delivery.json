@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "0661274f-1d8d-4d7b-8a6f-fc2cd144e90c",
+  "status": "current",
+  "command": "deliver",
+  "type": "workflow",
+  "input": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\11-shortlink-create.json",
+  "output": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\11-shortlink-create.html",
+  "specification": {
+    "sha256": "7ab7834474673f58c093a010bbcdb3612ffb7298cef5362edd539b586e12a8eb",
+    "bytes": 15644
+  },
+  "artifact": {
+    "sha256": "19ddda39d41188be5ab81daeee920c2241f025718e791b55cceebc9a0bd1ea48",
+    "bytes": 880283
+  }
+}

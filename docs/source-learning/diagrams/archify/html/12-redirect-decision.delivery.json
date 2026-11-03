@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "64ac8afe-5dc3-4248-bb77-dbc3100a49d2",
+  "status": "current",
+  "command": "deliver",
+  "type": "workflow",
+  "input": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\12-redirect-decision.json",
+  "output": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\12-redirect-decision.html",
+  "specification": {
+    "sha256": "65a16cc7e0b5bfd72b45e75231cc5a1584c0a0e9807047f0a8177d38792bfe25",
+    "bytes": 16138
+  },
+  "artifact": {
+    "sha256": "896519a2eec409adb5475837d8b5333a83edc4a73e3d40ac3151c7a560491b80",
+    "bytes": 882354
+  }
+}

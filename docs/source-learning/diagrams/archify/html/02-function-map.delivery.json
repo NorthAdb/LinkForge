@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "51cc0a97-efb4-4ebe-956d-b0054f74bc04",
+  "status": "current",
+  "command": "deliver",
+  "type": "tree",
+  "input": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\02-function-map.json",
+  "output": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\02-function-map.html",
+  "specification": {
+    "sha256": "d0cc6701bac8c7183281a35581e077ee7abf00f428f90e0db2aa3f4416764231",
+    "bytes": 14176
+  },
+  "artifact": {
+    "sha256": "4eb8b67802cc852d6961d3dd1abe0421c2c58d3ab4214f31102c3122cdef06cd",
+    "bytes": 929178
+  }
+}

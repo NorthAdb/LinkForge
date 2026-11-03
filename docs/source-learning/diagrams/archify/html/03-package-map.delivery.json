@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "b3975ff9-a8f5-4178-816c-dd8a8c8cf33d",
+  "status": "current",
+  "command": "deliver",
+  "type": "tree",
+  "input": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\03-package-map.json",
+  "output": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\03-package-map.html",
+  "specification": {
+    "sha256": "9f0e3399ec6c214422ced072704ae9d62fc7bd4b5d1f537d62155de3c40393e4",
+    "bytes": 42942
+  },
+  "artifact": {
+    "sha256": "c4babe5dc4b634f7cfe06c499797421cda6307c1fc6145636c0c845e6d9058b0",
+    "bytes": 1203572
+  }
+}

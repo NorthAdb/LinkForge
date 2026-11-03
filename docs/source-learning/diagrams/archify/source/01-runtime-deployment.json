@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "LinkForge 运行部署架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": "docs/source-learning/diagrams/archify/html/01-runtime-deployment.html",
+    "repository": {
+      "url": "https://github.com/NorthAdb/LinkForge.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "01f0b5a0e788b426e9de136555cf370f06e06894"
+    }
+  },
+  "components": [
+    { "id": "bloom", "type": "backend", "label": "Guava Bloom", "sublabel": "短码判存 · 24h rebuild", "pos": [80, 80], "size": [130, 64], "sources": [{ "path": "src/main/java/com/linkforge/link/support/CodeBloomFilter.java", "line": 42, "end_line": 42 }, { "path": "src/main/java/com/linkforge/link/support/CodeBloomFilter.java", "line": 116, "end_line": 116 }] },
+    { "id": "caffeine", "type": "backend", "label": "Caffeine L1", "sublabel": "URL 缓存 · TTL 10s", "pos": [230, 80], "size": [130, 64], "sources": [{ "path": "src/main/java/com/linkforge/link/support/UrlLocalCache.java", "line": 27, "end_line": 27 }, { "path": "README.md", "line": 403, "end_line": 403 }] },
+    { "id": "flyway", "type": "backend", "label": "Flyway", "sublabel": "V1–V10 版本化迁移", "pos": [400, 80], "size": [120, 64], "sources": [{ "path": "src/main/resources/application.yml", "line": 18, "end_line": 24 }] },
+    { "id": "actuator", "type": "backend", "label": "可观测端点", "sublabel": "/actuator/prometheus", "pos": [610, 80], "size": [150, 64], "sources": [{ "path": "src/main/resources/application.yml", "line": 26, "end_line": 30 }, { "path": "README.md", "line": 527, "end_line": 527 }] },
+    { "id": "tomcat", "type": "backend", "label": "Tomcat", "sublabel": "HTTP :8080", "pos": [80, 220], "size": [130, 72], "sources": [{ "path": "src/main/resources/application.yml", "line": 98, "end_line": 99 }, { "path": "README.md", "line": 145, "end_line": 152 }] },
+    { "id": "chain", "type": "backend", "label": "跳转判定链", "sublabel": "限流→Bloom→行读", "pos": [260, 220], "size": [160, 88], "sources": [{ "path": "README.md", "line": 320, "end_line": 335 }, { "path": "README.md", "line": 389, "end_line": 404 }] },
+    { "id": "sched", "type": "backend", "label": "调度线程池", "sublabel": "size 6 · @Scheduled", "pos": [480, 220], "size": [130, 72], "sources": [{ "path": "src/main/resources/application.yml", "line": 6, "end_line": 12 }] },
+    { "id": "client", "type": "external", "label": "客户端", "sublabel": "浏览器 / 控制台", "pos": [80, 560], "size": [130, 64], "sources": [{ "path": "README.md", "line": 58, "end_line": 61 }] },
+    { "id": "mysql", "type": "database", "label": "MySQL 8", "sublabel": ":3306 · 业务表", "pos": [440, 440], "size": [130, 72], "sources": [{ "path": "docker-compose.yml", "line": 1, "end_line": 24 }] },
+    { "id": "redis", "type": "database", "label": "Redis 7", "sublabel": ":6379 · 缓存/限流", "pos": [260, 440], "size": [130, 72], "sources": [{ "path": "docker-compose.yml", "line": 26, "end_line": 39 }] },
+    { "id": "rabbitmq", "type": "messagebus", "label": "RabbitMQ 3.13", "sublabel": ":5672 · :15672 管理", "pos": [620, 440], "size": [130, 72], "sources": [{ "path": "docker-compose.yml", "line": 41, "end_line": 58 }] },
+    { "id": "prom", "type": "cloud", "label": "Prometheus", "sublabel": ":9090 · 默认不启动", "pos": [790, 440], "size": [130, 72], "sources": [{ "path": "docker-compose.yml", "line": 63, "end_line": 75 }, { "path": "README.md", "line": 527, "end_line": 528 }] },
+    { "id": "grafana", "type": "cloud", "label": "Grafana", "sublabel": ":3001→3000 · 默认不启动", "pos": [790, 560], "size": [130, 72], "sources": [{ "path": "docker-compose.yml", "line": 77, "end_line": 94 }] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "宿主机 JVM 进程（Spring Boot 单体）", "wraps": ["bloom", "caffeine", "flyway", "actuator", "tomcat", "chain", "sched"] },
+    { "kind": "region", "label": "docker compose 容器", "wraps": ["mysql", "redis", "rabbitmq", "prom", "grafana"] }
+  ],
+  "connections": [
+    { "id": "d1", "from": "client", "to": "tomcat", "label": "HTTP :8080" },
+    { "id": "d2", "from": "tomcat", "to": "chain" },
+    { "id": "d3", "from": "chain", "to": "bloom", "label": "判存" },
+    { "id": "d4", "from": "chain", "to": "caffeine", "label": "URL L1" },
+    { "id": "d5", "from": "chain", "to": "redis", "label": "L2 · 限流 · 空值" },
+    { "id": "d6", "from": "chain", "to": "mysql", "label": "行读 singleflight" },
+    { "id": "d7", "from": "sched", "to": "mysql", "label": "轮询", "variant": "dashed" },
+    { "id": "d8", "from": "sched", "to": "rabbitmq", "label": "AMQP 发布", "variant": "dashed" },
+    { "id": "d9", "from": "flyway", "to": "mysql", "label": "V1–V10 迁移" },
+    { "id": "d10", "from": "prom", "to": "actuator", "label": "Bearer scrape-token", "variant": "security" },
+    { "id": "d11", "from": "grafana", "to": "prom", "label": "看板查询" }
+  ],
+  "cards": [
+    { "dot": "amber", "title": "抓取链路", "items": ["Prometheus 抓宿主机 8080 的 /actuator/prometheus", "extra_hosts: host.docker.internal:host-gateway", "Bearer token 读 ops/observability/scrape-token（credentials_file）"] },
+    { "dot": "violet", "title": "profile 与端口", "items": ["prometheus / grafana 属 observability profile，默认 up 不启动", "9090 / 3001 只绑 127.0.0.1，Grafana 宿主 3001→容器 3000", "应用是宿主机 java -jar 进程，不在 Compose 服务列表"] },
+    { "dot": "cyan", "title": "进程内组件", "items": ["Guava Bloom 启动全量装载 + 24h 定时 rebuild", "Caffeine L1 只缓存 URL 字符串（TTL 10s）", "调度池 size 6：Outbox/Webhook Relay、对账、清理、积压采样"] }
+  ]
+}

@@ -1,0 +1,482 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "定时任务地图（共享调度池 size=6）",
+    "locale": "zh-CN",
+    "output": "docs/source-learning/diagrams/archify/html/08-scheduled-tasks.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/NorthAdb/LinkForge.git",
+      "provider": "github",
+      "revision": "01f0b5a0e788b426e9de136555cf370f06e06894"
+    }
+  },
+  "components": [
+    {
+      "id": "relay",
+      "type": "backend",
+      "label": "ClickOutboxRelay",
+      "sublabel": "每 2s 扫 lf_outbox · 批 100",
+      "pos": [
+        40,
+        60
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/stats/service/ClickOutboxRelay.java",
+          "line": 37,
+          "end_line": 78
+        }
+      ]
+    },
+    {
+      "id": "webhookRelay",
+      "type": "backend",
+      "label": "WebhookDeliveryRelay",
+      "sublabel": "每 2s · 退避≤1h · 上限 8",
+      "pos": [
+        280,
+        60
+      ],
+      "size": [
+        190,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/webhook/service/WebhookDeliveryRelay.java",
+          "line": 63,
+          "end_line": 88
+        },
+        {
+          "path": "src/main/java/com/linkforge/webhook/service/WebhookDeliveryRelay.java",
+          "line": 149,
+          "end_line": 166
+        }
+      ]
+    },
+    {
+      "id": "flusher",
+      "type": "backend",
+      "label": "WebhookAggregateFlusher",
+      "sublabel": "每 5s 扫 AGGREGATE 过期窗口",
+      "pos": [
+        530,
+        60
+      ],
+      "size": [
+        190,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/webhook/service/WebhookAggregateFlusher.java",
+          "line": 74,
+          "end_line": 98
+        }
+      ]
+    },
+    {
+      "id": "reconciler",
+      "type": "backend",
+      "label": "ClickLogReconciler",
+      "sublabel": "每 30s · 仅 sync 开启",
+      "pos": [
+        780,
+        60
+      ],
+      "size": [
+        190,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/stats/service/ClickLogReconciler.java",
+          "line": 30,
+          "end_line": 54
+        }
+      ]
+    },
+    {
+      "id": "phishing",
+      "type": "backend",
+      "label": "PhishingPolicy",
+      "sublabel": "每 30s · mtime 热载",
+      "pos": [
+        1030,
+        60
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/support/PhishingPolicy.java",
+          "line": 67,
+          "end_line": 92
+        }
+      ]
+    },
+    {
+      "id": "rabbit",
+      "type": "messagebus",
+      "label": "RabbitMQ",
+      "sublabel": "click 事件 broker",
+      "pos": [
+        40,
+        180
+      ],
+      "size": [
+        170,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/stats/mq/RabbitClickEventPublisher.java",
+          "line": 44,
+          "end_line": 50
+        }
+      ]
+    },
+    {
+      "id": "httpTarget",
+      "type": "external",
+      "label": "HTTP 端点",
+      "sublabel": "webhook 端点 · 签名 POST",
+      "pos": [
+        560,
+        180
+      ],
+      "size": [
+        190,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/webhook/service/WebhookDeliveryRelay.java",
+          "line": 118,
+          "end_line": 129
+        }
+      ]
+    },
+    {
+      "id": "blocklistFile",
+      "type": "external",
+      "label": "名单文件",
+      "sublabel": "blocklist · mtime",
+      "pos": [
+        1030,
+        180
+      ],
+      "size": [
+        180,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/support/PhishingPolicy.java",
+          "line": 71,
+          "end_line": 92
+        }
+      ]
+    },
+    {
+      "id": "gauges",
+      "type": "backend",
+      "label": "BacklogGauges",
+      "sublabel": "每 15s 采样 COUNT",
+      "pos": [
+        40,
+        280
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/observability/BacklogGauges.java",
+          "line": 40,
+          "end_line": 46
+        }
+      ]
+    },
+    {
+      "id": "cleanup",
+      "type": "backend",
+      "label": "SentRowCleanup",
+      "sublabel": "每 1h · 批 1000 · ≤10 遍",
+      "pos": [
+        320,
+        280
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/retention/SentRowCleanup.java",
+          "line": 34,
+          "end_line": 46
+        },
+        {
+          "path": "src/main/java/com/linkforge/retention/SentRowCleanup.java",
+          "line": 52,
+          "end_line": 72
+        }
+      ]
+    },
+    {
+      "id": "bloom",
+      "type": "backend",
+      "label": "CodeBloomFilter",
+      "sublabel": "每 24h 重建 · ADMIN 触发",
+      "pos": [
+        560,
+        280
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/support/CodeBloomFilter.java",
+          "line": 115,
+          "end_line": 159
+        }
+      ]
+    },
+    {
+      "id": "outbox",
+      "type": "database",
+      "label": "lf_outbox",
+      "sublabel": "PENDING→SENT/FAILED",
+      "pos": [
+        40,
+        520
+      ],
+      "size": [
+        200,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/stats/service/ClickOutboxRelay.java",
+          "line": 45,
+          "end_line": 62
+        },
+        {
+          "path": "src/main/java/com/linkforge/retention/SentRowCleanup.java",
+          "line": 63,
+          "end_line": 66
+        }
+      ]
+    },
+    {
+      "id": "delivery",
+      "type": "database",
+      "label": "lf_webhook_delivery",
+      "sublabel": "PENDING→SENT/FAILED",
+      "pos": [
+        280,
+        520
+      ],
+      "size": [
+        190,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/webhook/service/WebhookDeliveryRelay.java",
+          "line": 77,
+          "end_line": 88
+        },
+        {
+          "path": "src/main/java/com/linkforge/webhook/service/WebhookAggregateFlusher.java",
+          "line": 26,
+          "end_line": 36
+        }
+      ]
+    },
+    {
+      "id": "aggBuffer",
+      "type": "database",
+      "label": "lf_webhook_agg_buffer",
+      "sublabel": "AGGREGATE 聚合窗口",
+      "pos": [
+        520,
+        520
+      ],
+      "size": [
+        190,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/webhook/service/WebhookAggregateFlusher.java",
+          "line": 79,
+          "end_line": 98
+        }
+      ]
+    },
+    {
+      "id": "shortLink",
+      "type": "database",
+      "label": "lf_short_link",
+      "sublabel": "全量 code 种子",
+      "pos": [
+        760,
+        520
+      ],
+      "size": [
+        180,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/support/CodeBloomFilter.java",
+          "line": 153,
+          "end_line": 159
+        }
+      ]
+    },
+    {
+      "id": "clickLog",
+      "type": "database",
+      "label": "lf_click_log",
+      "sublabel": "未消费明细",
+      "pos": [
+        1020,
+        520
+      ],
+      "size": [
+        180,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/stats/service/ClickLogReconciler.java",
+          "line": 37,
+          "end_line": 43
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "relay-rabbit",
+      "from": "relay",
+      "to": "rabbit",
+      "label": "发布确认"
+    },
+    {
+      "id": "relay-outbox",
+      "from": "relay",
+      "to": "outbox",
+      "label": "读写"
+    },
+    {
+      "id": "gauges-outbox",
+      "from": "gauges",
+      "to": "outbox",
+      "label": "COUNT PENDING"
+    },
+    {
+      "id": "gauges-delivery",
+      "from": "gauges",
+      "to": "delivery",
+      "label": "COUNT 积压"
+    },
+    {
+      "id": "cleanup-outbox",
+      "from": "cleanup",
+      "to": "outbox",
+      "label": "删 SENT>7天"
+    },
+    {
+      "id": "cleanup-delivery",
+      "from": "cleanup",
+      "to": "delivery",
+      "label": "删 SENT>7天"
+    },
+    {
+      "id": "webhookrelay-delivery",
+      "from": "webhookRelay",
+      "to": "delivery",
+      "label": "读批·写状态"
+    },
+    {
+      "id": "webhookrelay-httptarget",
+      "from": "webhookRelay",
+      "to": "httpTarget",
+      "label": "签名投递"
+    },
+    {
+      "id": "flusher-aggbuffer",
+      "from": "flusher",
+      "to": "aggBuffer",
+      "label": "扫过期窗口"
+    },
+    {
+      "id": "flusher-delivery",
+      "from": "flusher",
+      "to": "delivery",
+      "label": "写摘要行"
+    },
+    {
+      "id": "reconciler-clicklog",
+      "from": "reconciler",
+      "to": "clickLog",
+      "label": "对账未消费行"
+    },
+    {
+      "id": "bloom-shortlink",
+      "from": "bloom",
+      "to": "shortLink",
+      "label": "读全量 code"
+    },
+    {
+      "id": "phishing-blocklistfile",
+      "from": "phishing",
+      "to": "blocklistFile",
+      "label": "mtime 热载"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "共享调度池与隔离",
+      "items": [
+        "全部 @Scheduled 任务共享一个调度池，size=6（spring.task.scheduling.pool，application.yml）",
+        "池的隔离意图：webhook 端点再慢，也不得拖住 outbox 追平与对账（B5）",
+        "各任务固定 delay 自旋，批次、退避、上限全部走配置项"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "重试与终态",
+      "items": [
+        "outbox：退避 2ⁿ≤60s，超 30 次标 FAILED（保留，SQL 复位 PENDING 即重放）",
+        "webhook：退避 10·2ⁿ≤1h，8 次后 FAILED；2xx 即 SENT；at-least-once 由接收方按 eventId 去重",
+        "SENT 行保留 7 天，cleanup 每遍删 1000 行、最多 10 遍；PENDING/FAILED 永不删"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "读侧设施",
+      "items": [
+        "Bloom 重建 bypass-then-swap：先发布新过滤器再回填全量 code，失败回滚旧引用",
+        "Phishing 名单按 mtime 热载，坏文件保留旧快照（fail-safe）",
+        "积压仪表 15s 采样三条 COUNT，抓取路径不碰 DB"
+      ]
+    }
+  ]
+}

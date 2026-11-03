@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "42ee971f-6731-4586-955f-1fcc33cd3769",
+  "status": "current",
+  "command": "deliver",
+  "type": "sequence",
+  "input": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\13-cache-hit-miss-sequence.json",
+  "output": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\13-cache-hit-miss-sequence.html",
+  "specification": {
+    "sha256": "ab3df86502b73a9408a888bab9c8369f060471ae9f25886b3daaf4a6e9dc6862",
+    "bytes": 10998
+  },
+  "artifact": {
+    "sha256": "1cffdc02209d36ea84afe035a8b90adce80f24564c214b58f7dd893490411189",
+    "bytes": 865341
+  }
+}

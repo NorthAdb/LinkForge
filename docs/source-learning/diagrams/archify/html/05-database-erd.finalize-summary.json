@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "erd",
+  "quality": "standard",
+  "specification": {
+    "path": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\05-database-erd.json",
+    "sha256": "a7cabec31388d07c349747d3a5d89892fe45afd910273452d3ec3476cd338745",
+    "bytes": 21364
+  },
+  "artifact": {
+    "path": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\05-database-erd.html",
+    "sha256": "4a33760a64e64bfe1eeba982492abfba7732481cc8f4989b76d8d290809d7ea2",
+    "bytes": 936690
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "D:\\LinkForge\\.archify\\erd-review-1\\05-database-erd.finalize.json",
+    "summaryReceipt": "D:\\LinkForge\\.archify\\erd-review-1\\05-database-erd.finalize-summary.json",
+    "browserCheckReceipt": "D:\\LinkForge\\.archify\\erd-review-1\\05-database-erd.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-02T16:23:23.730Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 14338,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  },
+  "visualReviewRecommendation": {
+    "action": "inspect-route-readability",
+    "signals": {
+      "routesOverSuggestedBends": 3
+    },
+    "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+    "affectedRoutes": {
+      "crossings": [],
+      "detours": [
+        {
+          "relationship": {
+            "id": "click_dim_tenant",
+            "from": "lf_click_dim_daily",
+            "to": "lf_tenant",
+            "label": "",
+            "collectionIndex": 10,
+            "artifactIndex": 11
+          },
+          "bends": 4,
+          "stretch": 1.329
+        },
+        {
+          "relationship": {
+            "id": "endpoint_tenant",
+            "from": "lf_webhook_endpoint",
+            "to": "lf_tenant",
+            "label": "",
+            "collectionIndex": 14,
+            "artifactIndex": 15
+          },
+          "bends": 3,
+          "stretch": 1.029
+        },
+        {
+          "relationship": {
+            "id": "endpoint_user",
+            "from": "lf_webhook_endpoint",
+            "to": "lf_user",
+            "label": "创建人",
+            "collectionIndex": 15,
+            "artifactIndex": 16
+          },
+          "bends": 4,
+          "stretch": 1.196
+        }
+      ],
+      "truncated": false
+    },
+    "repair": "Advisory only: this mode places or routes these relationships itself. Report them; do not remove relationships or meaning to reduce crossings."
+  }
+}

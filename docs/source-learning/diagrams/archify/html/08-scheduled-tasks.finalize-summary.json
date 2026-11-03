@@ -1,0 +1,292 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\08-scheduled-tasks.json",
+    "sha256": "2a17b9e6e88164fd42f29c2021eb1c31d665cf15bb11b866ae84d4f651dd3d09",
+    "bytes": 10700
+  },
+  "artifact": {
+    "path": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\08-scheduled-tasks.html",
+    "sha256": "096f162a28866f1c167105183d808d2defa6aecd8a0aebe7dfe6df32fd533343",
+    "bytes": 864898
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "D:\\LinkForge\\.archify\\08-scheduled-tasks-review-3\\08-scheduled-tasks.finalize.json",
+    "summaryReceipt": "D:\\LinkForge\\.archify\\08-scheduled-tasks-review-3\\08-scheduled-tasks.finalize-summary.json",
+    "browserCheckReceipt": "D:\\LinkForge\\.archify\\08-scheduled-tasks-review-3\\08-scheduled-tasks.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-02T16:23:23.730Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 10090,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  },
+  "visualReviewRecommendation": {
+    "action": "inspect-route-readability",
+    "signals": {
+      "resolvedCrossovers": 8,
+      "routesOverSuggestedBends": 3
+    },
+    "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+    "affectedRoutes": {
+      "crossings": [
+        {
+          "left": {
+            "id": "relay-outbox",
+            "from": "relay",
+            "to": "outbox",
+            "label": "读写",
+            "collectionIndex": 1,
+            "artifactIndex": 2
+          },
+          "right": {
+            "id": "gauges-delivery",
+            "from": "gauges",
+            "to": "delivery",
+            "label": "COUNT 积压",
+            "collectionIndex": 3,
+            "artifactIndex": 4
+          },
+          "point": [
+            244,
+            328
+          ]
+        },
+        {
+          "left": {
+            "id": "relay-outbox",
+            "from": "relay",
+            "to": "outbox",
+            "label": "读写",
+            "collectionIndex": 1,
+            "artifactIndex": 2
+          },
+          "right": {
+            "id": "cleanup-outbox",
+            "from": "cleanup",
+            "to": "outbox",
+            "label": "删 SENT&gt;7天",
+            "collectionIndex": 4,
+            "artifactIndex": 5
+          },
+          "point": [
+            244,
+            312
+          ],
+          "sharedNode": "outbox"
+        },
+        {
+          "left": {
+            "id": "gauges-delivery",
+            "from": "gauges",
+            "to": "delivery",
+            "label": "COUNT 积压",
+            "collectionIndex": 3,
+            "artifactIndex": 4
+          },
+          "right": {
+            "id": "cleanup-outbox",
+            "from": "cleanup",
+            "to": "outbox",
+            "label": "删 SENT&gt;7天",
+            "collectionIndex": 4,
+            "artifactIndex": 5
+          },
+          "point": [
+            224,
+            328
+          ]
+        },
+        {
+          "left": {
+            "id": "gauges-delivery",
+            "from": "gauges",
+            "to": "delivery",
+            "label": "COUNT 积压",
+            "collectionIndex": 3,
+            "artifactIndex": 4
+          },
+          "right": {
+            "id": "webhookrelay-delivery",
+            "from": "webhookRelay",
+            "to": "delivery",
+            "label": "读批·写状态",
+            "collectionIndex": 6,
+            "artifactIndex": 7
+          },
+          "point": [
+            256,
+            328
+          ],
+          "sharedNode": "delivery"
+        },
+        {
+          "left": {
+            "id": "cleanup-outbox",
+            "from": "cleanup",
+            "to": "outbox",
+            "label": "删 SENT&gt;7天",
+            "collectionIndex": 4,
+            "artifactIndex": 5
+          },
+          "right": {
+            "id": "webhookrelay-delivery",
+            "from": "webhookRelay",
+            "to": "delivery",
+            "label": "读批·写状态",
+            "collectionIndex": 6,
+            "artifactIndex": 7
+          },
+          "point": [
+            256,
+            312
+          ]
+        },
+        {
+          "left": {
+            "id": "webhookrelay-httptarget",
+            "from": "webhookRelay",
+            "to": "httpTarget",
+            "label": "签名投递",
+            "collectionIndex": 7,
+            "artifactIndex": 8
+          },
+          "right": {
+            "id": "flusher-aggbuffer",
+            "from": "flusher",
+            "to": "aggBuffer",
+            "label": "扫过期窗口",
+            "collectionIndex": 8,
+            "artifactIndex": 9
+          },
+          "point": [
+            557,
+            196
+          ]
+        },
+        {
+          "left": {
+            "id": "flusher-aggbuffer",
+            "from": "flusher",
+            "to": "aggBuffer",
+            "label": "扫过期窗口",
+            "collectionIndex": 8,
+            "artifactIndex": 9
+          },
+          "right": {
+            "id": "flusher-delivery",
+            "from": "flusher",
+            "to": "delivery",
+            "label": "写摘要行",
+            "collectionIndex": 9,
+            "artifactIndex": 10
+          },
+          "point": [
+            557,
+            376
+          ],
+          "sharedNode": "flusher"
+        },
+        {
+          "left": {
+            "id": "flusher-delivery",
+            "from": "flusher",
+            "to": "delivery",
+            "label": "写摘要行",
+            "collectionIndex": 9,
+            "artifactIndex": 10
+          },
+          "right": {
+            "id": "bloom-shortlink",
+            "from": "bloom",
+            "to": "shortLink",
+            "label": "读全量 code",
+            "collectionIndex": 11,
+            "artifactIndex": 12
+          },
+          "point": [
+            724,
+            375.99999999999994
+          ]
+        }
+      ],
+      "detours": [
+        {
+          "relationship": {
+            "id": "relay-outbox",
+            "from": "relay",
+            "to": "outbox",
+            "label": "读写",
+            "collectionIndex": 1,
+            "artifactIndex": 2
+          },
+          "bends": 3,
+          "stretch": 1.094
+        },
+        {
+          "relationship": {
+            "id": "flusher-aggbuffer",
+            "from": "flusher",
+            "to": "aggBuffer",
+            "label": "扫过期窗口",
+            "collectionIndex": 8,
+            "artifactIndex": 9
+          },
+          "bends": 4,
+          "stretch": 1.281
+        },
+        {
+          "relationship": {
+            "id": "flusher-delivery",
+            "from": "flusher",
+            "to": "delivery",
+            "label": "写摘要行",
+            "collectionIndex": 9,
+            "artifactIndex": 10
+          },
+          "bends": 5,
+          "stretch": 1.152
+        }
+      ],
+      "truncated": false
+    },
+    "hints": [
+      "relay → outbox crosses gauges → delivery: move the node of whichever is a branch, return, or second entrance to the other side of the main path, so that relationship runs through an empty corridor.",
+      "relay → outbox and cleanup → outbox cross next to outbox: move node relay or cleanup so the two reach outbox from different sides (for example one level with it, one directly above or below it).",
+      "gauges → delivery crosses cleanup → outbox: move the node of whichever is a branch, return, or second entrance to the other side of the main path, so that relationship runs through an empty corridor.",
+      "gauges → delivery and webhookRelay → delivery cross next to delivery: move node gauges or webhookRelay so the two reach delivery from different sides (for example one level with it, one directly above or below it).",
+      "cleanup → outbox crosses webhookRelay → delivery: move the node of whichever is a branch, return, or second entrance to the other side of the main path, so that relationship runs through an empty corridor.",
+      "webhookRelay → httpTarget crosses flusher → aggBuffer: move the node of whichever is a branch, return, or second entrance to the other side of the main path, so that relationship runs through an empty corridor.",
+      "flusher → aggBuffer and flusher → delivery cross next to flusher: move node aggBuffer or delivery so the two reach flusher from different sides (for example one level with it, one directly above or below it).",
+      "flusher → delivery crosses bloom → shortLink: move the node of whichever is a branch, return, or second entrance to the other side of the main path, so that relationship runs through an empty corridor."
+    ],
+    "repair": "Trace these relationships at the desktop viewport. For Architecture, use references/architecture-layout-repair.md: reflow a blocked main path or tangled connected scene, and repair an isolated defect locally only when the surrounding composition is accepted. Preserve all semantic content and user-fixed geometry. Rerun finalize once after the edit."
+  }
+}

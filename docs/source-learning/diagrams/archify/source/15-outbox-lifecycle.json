@@ -1,0 +1,154 @@
+{
+  "schema_version": 3,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "LinkForge Outbox 行生命周期：PENDING / SENT / FAILED",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": "docs/source-learning/diagrams/archify/html/15-outbox-lifecycle.html",
+    "repository": {
+      "url": "https://github.com/NorthAdb/LinkForge.git",
+      "provider": "github",
+      "revision": "01f0b5a0e788b426e9de136555cf370f06e06894"
+    }
+  },
+  "mainPath": ["pending", "sent", "purged"],
+  "states": [
+    {
+      "id": "pending",
+      "type": "waiting",
+      "label": "PENDING",
+      "sublabel": "新行 attempts=0",
+      "step": "01",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/stats/entity/Outbox.java",
+          "line": 25,
+          "end_line": 28
+        },
+        {
+          "path": "src/main/java/com/linkforge/stats/mapper/OutboxMapper.java",
+          "line": 14,
+          "end_line": 17
+        }
+      ]
+    },
+    {
+      "id": "sent",
+      "type": "success",
+      "label": "SENT",
+      "sublabel": "sent_at=NOW()（DB 时钟）",
+      "step": "02",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/stats/mapper/OutboxMapper.java",
+          "line": 19,
+          "end_line": 20
+        }
+      ]
+    },
+    {
+      "id": "purged",
+      "type": "neutral",
+      "label": "已删除",
+      "sublabel": "SentRowCleanup 分批删",
+      "step": "03",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/stats/mapper/OutboxMapper.java",
+          "line": 33,
+          "end_line": 35
+        }
+      ]
+    },
+    {
+      "id": "failed",
+      "type": "failure",
+      "label": "FAILED",
+      "sublabel": "终态：relay 永不再碰",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/stats/entity/Outbox.java",
+          "line": 27,
+          "end_line": 28
+        },
+        {
+          "path": "src/main/java/com/linkforge/stats/mapper/OutboxMapper.java",
+          "line": 22,
+          "end_line": 23
+        }
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "id": "pending-sent",
+      "from": "pending",
+      "to": "sent",
+      "label": "发布成功 + ack",
+      "note": "markSent：sent_at=NOW()（:19-20）",
+      "variant": "default"
+    },
+    {
+      "id": "sent-purged",
+      "from": "sent",
+      "to": "purged",
+      "label": "SentRowCleanup 7 天",
+      "note": "只删终态 SENT，分批 LIMIT（:29-35）",
+      "variant": "default"
+    },
+    {
+      "id": "pending-retry",
+      "from": "pending",
+      "to": "pending",
+      "label": "发布失败/nack/超时",
+      "note": "含不可路由（returned）",
+      "variant": "dashed"
+    },
+    {
+      "id": "pending-failed",
+      "from": "pending",
+      "to": "failed",
+      "label": "attempts ≥ 30",
+      "variant": "security"
+    },
+    {
+      "id": "failed-replay",
+      "from": "failed",
+      "to": "pending",
+      "label": "手工重放 UPDATE",
+      "note": "next_attempt_at=NULL 立即到期（README:412）",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "读侧扫描条件（relay 拉批）",
+      "items": [
+        "selectPendingBatch：status='PENDING' AND (next_attempt_at IS NULL OR next_attempt_at<=NOW()) ORDER BY id LIMIT 100（OutboxMapper:14-17）",
+        "扫描走 idx_outbox_pending(status,next_attempt_at,id)；relay fixedDelay 2s、批 100（ClickOutboxRelay:37-45）",
+        "开关每 tick 重读，演练可运行时拨动（:40-43）；外层 catch 吞整轮只记 warn（:70-72）"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "三个 mark 仅 WHERE id（与 Webhook 侧差异）",
+      "items": [
+        "outbox 的 markSent/markRetry/markFailed 均无 status='PENDING' 守卫（OutboxMapper:19-27）",
+        "对照 WebhookDeliveryMapper:27-39：三条 mark 全带 AND status='PENDING'",
+        "差异根源（推断）：outbox 拉取→发布→mark 同轮同步完成，重复 markSent 幂等无害；webhook 在途投递跨 2s tick"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "DB 时钟与重试节奏",
+      "items": [
+        "next_attempt_at 写 DATE_ADD(NOW())、比较 <=NOW()；sent_at=NOW()；清理 DATE_SUB(NOW(),7 天)——全 DB 时钟（OutboxMapper:14-35）",
+        "markRetry：attempts DB 端 +1；退避 min(60, 2^n)：1,2,4,8,16,32 后恒 60 秒（ClickOutboxRelay:62、:75-78）",
+        "attempts≥30 → markFailed + meter outbox.failed（:48-53）→ FAILED 终态",
+        "多实例 at-least-once：重复投递由消费端 lf_consumed_event 主键幂等兜底（README:412）"
+      ]
+    }
+  ]
+}

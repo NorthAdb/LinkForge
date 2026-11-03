@@ -1,0 +1,2 @@
+# Archify 图表产物按字节存取（finalize 回执绑定 HTML sha256，禁止 EOL 规范化破坏证据链）
+docs/source-learning/diagrams/archify/** -text

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "349606b5-9395-403a-ad75-ee5097dd2ac7",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\07-rabbitmq-topology.json",
+  "output": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\07-rabbitmq-topology.html",
+  "specification": {
+    "sha256": "07d99815fc0ea530cc50fabf39218654af0ef55a5965f50af4e3bd395dfbfc5e",
+    "bytes": 5160
+  },
+  "artifact": {
+    "sha256": "7d8baa2a51fff391a57fc09ce598726fdc375958b2e3077489364b0c84e362b1",
+    "bytes": 843316
+  }
+}

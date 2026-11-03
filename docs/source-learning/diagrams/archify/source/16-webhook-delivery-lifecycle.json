@@ -1,0 +1,178 @@
+{
+  "schema_version": 3,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "LinkForge Webhook 投递行状态机：PENDING / SENT / FAILED",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": "docs/source-learning/diagrams/archify/html/16-webhook-delivery-lifecycle.html",
+    "repository": {
+      "url": "https://github.com/NorthAdb/LinkForge.git",
+      "provider": "github",
+      "revision": "01f0b5a0e788b426e9de136555cf370f06e06894"
+    }
+  },
+  "mainPath": ["pending", "sent", "purged"],
+  "states": [
+    {
+      "id": "pending",
+      "type": "waiting",
+      "label": "PENDING",
+      "sublabel": "新行 attempts=0",
+      "step": "01",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/webhook/entity/WebhookDelivery.java",
+          "line": 14,
+          "end_line": 14
+        },
+        {
+          "path": "src/main/java/com/linkforge/webhook/mapper/WebhookDeliveryMapper.java",
+          "line": 23,
+          "end_line": 25
+        }
+      ]
+    },
+    {
+      "id": "sent",
+      "type": "success",
+      "label": "SENT",
+      "sublabel": "sent_at=JVM 时钟",
+      "step": "02",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/webhook/mapper/WebhookDeliveryMapper.java",
+          "line": 27,
+          "end_line": 29
+        }
+      ]
+    },
+    {
+      "id": "purged",
+      "type": "neutral",
+      "label": "已删除",
+      "sublabel": "SentRowCleanup 分批删",
+      "step": "03",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/webhook/mapper/WebhookDeliveryMapper.java",
+          "line": 47,
+          "end_line": 49
+        },
+        {
+          "path": "src/main/java/com/linkforge/retention/SentRowCleanup.java",
+          "line": 61,
+          "end_line": 65
+        }
+      ]
+    },
+    {
+      "id": "failed",
+      "type": "failure",
+      "label": "FAILED",
+      "sublabel": "终态，可手工重放",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/webhook/entity/WebhookDelivery.java",
+          "line": 16,
+          "end_line": 17
+        },
+        {
+          "path": "src/main/java/com/linkforge/webhook/mapper/WebhookDeliveryMapper.java",
+          "line": 37,
+          "end_line": 39
+        }
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "id": "pending-sent",
+      "from": "pending",
+      "to": "sent",
+      "label": "Relay 投递 2xx",
+      "note": "markSent：sent_at=JVM now（Relay:136）",
+      "variant": "default"
+    },
+    {
+      "id": "sent-purged",
+      "from": "sent",
+      "to": "purged",
+      "label": "SentRowCleanup 7 天",
+      "note": "只删终态 SENT，分批 LIMIT",
+      "variant": "default"
+    },
+    {
+      "id": "pending-retry",
+      "from": "pending",
+      "to": "pending",
+      "label": "408/429/5xx/传输/解密失败",
+      "note": "markRetry：NOW()+退避，DB 时钟（Relay:164）",
+      "variant": "dashed"
+    },
+    {
+      "id": "pending-failed",
+      "from": "pending",
+      "to": "failed",
+      "label": "4 类出口",
+      "variant": "security"
+    },
+    {
+      "id": "failed-replay",
+      "from": "failed",
+      "to": "pending",
+      "label": "手工重放",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "特殊路径：不耗 attempts 的跳批",
+      "items": [
+        "主密钥不可用：整批跳过，不碰行、不耗 attempts、保持 PENDING，密钥配好即恢复流动（WebhookDeliveryRelay:70-76，决策号 S1-c）",
+        "毒行异常：catch 后按普通失败走退避或终态，不再每 2s 被重选阻塞同批（WebhookDeliveryRelay:78-87，决策号 N7）"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "mark 三语句全带 PENDING 守卫（与 Outbox 差异）",
+      "items": [
+        "markSent/markRetry/markFailed 三条全带 AND status='PENDING'（WebhookDeliveryMapper:28/:33/:38）",
+        "对照组 OutboxMapper 同名三语句只 WHERE id，无守卫（OutboxMapper:19-27）",
+        "差异根源（推断）：relay 轮询、手工重放、聚合冲刷多触发源碰同一行，条件更新收敛恰好一次；outbox 写者唯一"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "双时钟口径",
+      "items": [
+        "next_attempt_at：写 DATE_ADD(NOW())、比较 <=NOW()，全 DB 时钟（WebhookDeliveryMapper:14-19、:31-35）",
+        "sent_at：markSent #{now} 由 Relay 按 JVM 时钟写入（WebhookDeliveryRelay:136）；业务列误用 NOW() 会「早 8 小时」",
+        "SENT 清理：cutoff 由调用方按 JVM 时钟算好传入（WebhookDeliveryMapper:41-49、SentRowCleanup:61-65）",
+        "退避 min(1h,10·2^n) 首次 20s（markRetry 写 DATE_ADD(NOW())）：20/40/80/160/320/640/1280s，8 次共约 42 分钟；1h 上限为调大 max-attempts 兜底（Relay:163-164）",
+        "SSRF blocked 的日志刻意不回显解析地址与内因，防探测扫描（WebhookDeliveryRelay:104-106，D-C4-8）"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "「4 类出口」与手工重放（行号）",
+      "items": [
+        "attempts≥8：第 8 次失败即终态，含毒行、解密失败耗尽（WebhookDeliveryRelay:154-161）",
+        "其他 4xx 首败：401/403/404/410… 明确拒绝，重试无意义（WebhookDeliveryRelay:142-146）",
+        "endpoint 缺失/disabled：last_error=endpoint disabled（WebhookDeliveryRelay:91-96）",
+        "SSRF 违规：last_error=blocked target，日志不回显内因（WebhookDeliveryRelay:100-107，D-C4-8）",
+        "手工重放：SQL UPDATE 回 PENDING；eventId 跨重试与重放稳定（WebhookDelivery.java:23-24，D-Bw2-12）"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "AGGREGATE digest 行同一条状态机",
+      "items": [
+        "digest 行同样 PENDING 起步，event_id=digest-{endpointId}-{windowStart}[-partN]（WebhookAggregateFlusher:165-166）",
+        "与逐条行同表、同 relay、同签名、同重试，是 C1 决策（D-C1-18..25）的核心省法",
+        "删除带缓冲 endpoint：discardBufferedOnDelete 直接写 FAILED 留痕，last_error=endpoint deleted with pending aggregate buffer（WebhookAggregateFlusher:46、:128-133）；FAILED 不被 relay 捞，不发送"
+      ]
+    }
+  ]
+}

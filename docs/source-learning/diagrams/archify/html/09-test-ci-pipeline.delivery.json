@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "b1e98d1f-16fe-4013-9f65-22da8d9896c3",
+  "status": "current",
+  "command": "deliver",
+  "type": "workflow",
+  "input": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\09-test-ci-pipeline.json",
+  "output": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\09-test-ci-pipeline.html",
+  "specification": {
+    "sha256": "c114e76309d1d39c170a9472036ea507d6f84dc61aacd7e2fab7c2a908380b34",
+    "bytes": 6535
+  },
+  "artifact": {
+    "sha256": "d51c394e146f922977e512316a3974da5ad393b3e833af37a523f9aa0dafa55e",
+    "bytes": 849751
+  }
+}

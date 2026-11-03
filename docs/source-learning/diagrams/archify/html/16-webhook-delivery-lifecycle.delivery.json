@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "543c9ffa-d635-468a-940f-a59163eedef5",
+  "status": "current",
+  "command": "deliver",
+  "type": "lifecycle",
+  "input": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\16-webhook-delivery-lifecycle.json",
+  "output": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\16-webhook-delivery-lifecycle.html",
+  "specification": {
+    "sha256": "232ede1a24d5d1b145cf20c5f89db7e0cede3e175cd9a6028750780d5ac1650d",
+    "bytes": 6335
+  },
+  "artifact": {
+    "sha256": "8264dfc7cbe84d7922d350df31d27f5982ea0178f233c574adb200418e68f87b",
+    "bytes": 837382
+  }
+}

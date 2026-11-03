@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "4d7efd87-f3b6-4a97-9514-da4180807509",
+  "status": "current",
+  "command": "deliver",
+  "type": "dataflow",
+  "input": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\06-redis-data-flow.json",
+  "output": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\06-redis-data-flow.html",
+  "specification": {
+    "sha256": "215bb1016a2810367dccc384ea5e17b6b6377e059c0da1f2531628089ab7b9da",
+    "bytes": 15031
+  },
+  "artifact": {
+    "sha256": "86f3e78fd307b5c071320232f146851efca7f274dc0c183910eb0188e76021ed",
+    "bytes": 866956
+  }
+}

@@ -1,0 +1,590 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Redis 键空间数据流",
+    "locale": "zh-CN",
+    "output": "docs/source-learning/diagrams/archify/html/06-redis-data-flow.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/NorthAdb/LinkForge.git",
+      "provider": "github",
+      "revision": "01f0b5a0e788b426e9de136555cf370f06e06894"
+    }
+  },
+  "stages": [
+    {
+      "label": "写入方"
+    },
+    {
+      "label": "服务层缓存操作"
+    },
+    {
+      "label": "Redis 键与频道"
+    },
+    {
+      "label": "判定"
+    },
+    {
+      "label": "订阅与广播"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "create",
+      "type": "backend",
+      "label": "创建 doCreate",
+      "sublabel": "DB 提交后写穿",
+      "stage": 0,
+      "row": 0,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 266,
+          "end_line": 274
+        }
+      ]
+    },
+    {
+      "id": "cacheUrl",
+      "type": "backend",
+      "label": "cacheUrl 写穿",
+      "sublabel": "L1 put + L2 SET",
+      "stage": 1,
+      "row": 0,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 966,
+          "end_line": 977
+        }
+      ]
+    },
+    {
+      "id": "codeKey",
+      "type": "database",
+      "label": "linkforge:code:{code}",
+      "tag": "TTL 3600+300s",
+      "width": 150,
+      "stage": 2,
+      "row": 0,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 967,
+          "end_line": 971
+        },
+        {
+          "path": "src/main/resources/application.yml",
+          "line": 112,
+          "end_line": 114
+        }
+      ]
+    },
+    {
+      "id": "resolve",
+      "type": "backend",
+      "label": "跳转读路径",
+      "sublabel": "absent→L1→L2→行读",
+      "stage": 3,
+      "row": 0,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 631,
+          "end_line": 644
+        }
+      ]
+    },
+    {
+      "id": "bloomChannel",
+      "type": "messagebus",
+      "label": "linkforge:bloom:put",
+      "tag": "at-most-once",
+      "width": 165,
+      "stage": 4,
+      "row": 0,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/support/CacheBus.java",
+          "line": 24,
+          "end_line": 28
+        },
+        {
+          "path": "src/main/java/com/linkforge/link/support/CacheBus.java",
+          "line": 39,
+          "end_line": 50
+        }
+      ]
+    },
+    {
+      "id": "writePath",
+      "type": "backend",
+      "label": "更新/禁用/删除",
+      "sublabel": "update 写穿·其余只删",
+      "stage": 0,
+      "row": 1,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 512,
+          "end_line": 519
+        },
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 531,
+          "end_line": 541
+        },
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 546,
+          "end_line": 558
+        }
+      ]
+    },
+    {
+      "id": "evict",
+      "type": "backend",
+      "label": "evictCache 失效",
+      "sublabel": "DEL code 键·1s 双删",
+      "stage": 1,
+      "row": 1,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 979,
+          "end_line": 999
+        }
+      ]
+    },
+    {
+      "id": "l1Channel",
+      "type": "messagebus",
+      "label": "linkforge:l1:invalidate",
+      "tag": "at-most-once",
+      "width": 165,
+      "stage": 2,
+      "row": 1,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/support/CacheBus.java",
+          "line": 26,
+          "end_line": 28
+        },
+        {
+          "path": "src/main/java/com/linkforge/link/support/CacheBus.java",
+          "line": 57,
+          "end_line": 68
+        }
+      ]
+    },
+    {
+      "id": "codeBloom",
+      "type": "backend",
+      "label": "CodeBloomFilter",
+      "sublabel": "put 幂等",
+      "stage": 4,
+      "row": 1,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/support/CodeBloomFilter.java",
+          "line": 56,
+          "end_line": 65
+        },
+        {
+          "path": "src/main/java/com/linkforge/link/support/CodeBloomFilter.java",
+          "line": 74,
+          "end_line": 76
+        }
+      ]
+    },
+    {
+      "id": "rowRead",
+      "type": "backend",
+      "label": "跳转行读 miss",
+      "sublabel": "singleflight 行 null",
+      "stage": 0,
+      "row": 2,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 649,
+          "end_line": 655
+        }
+      ]
+    },
+    {
+      "id": "absentOps",
+      "type": "backend",
+      "label": "markAbsent",
+      "sublabel": "只收 DB 确认不存在",
+      "stage": 1,
+      "row": 2,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 939,
+          "end_line": 952
+        }
+      ]
+    },
+    {
+      "id": "absentKey",
+      "type": "database",
+      "label": "linkforge:absent:{code}",
+      "tag": "TTL 60+30s",
+      "width": 165,
+      "stage": 2,
+      "row": 2,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 943,
+          "end_line": 946
+        },
+        {
+          "path": "src/main/resources/application.yml",
+          "line": 117,
+          "end_line": 118
+        }
+      ]
+    },
+    {
+      "id": "absentGate",
+      "type": "backend",
+      "label": "absentKnown→404",
+      "sublabel": "哨兵命中即拒",
+      "stage": 3,
+      "row": 2,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 623,
+          "end_line": 626
+        },
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 926,
+          "end_line": 937
+        }
+      ]
+    },
+    {
+      "id": "l1Cache",
+      "type": "backend",
+      "label": "UrlLocalCache",
+      "sublabel": "L1 槽位失效",
+      "stage": 4,
+      "row": 2,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/support/UrlLocalCache.java",
+          "line": 50,
+          "end_line": 74
+        }
+      ]
+    },
+    {
+      "id": "entries",
+      "type": "backend",
+      "label": "各入口",
+      "sublabel": "API·跳转·解锁·导入",
+      "stage": 0,
+      "row": 3,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 132,
+          "end_line": 138
+        },
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 604,
+          "end_line": 610
+        }
+      ]
+    },
+    {
+      "id": "limiter",
+      "type": "backend",
+      "label": "RedisRateLimiter",
+      "sublabel": "Lua 滑窗·fail-open",
+      "stage": 1,
+      "row": 3,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/common/ratelimit/RedisRateLimiter.java",
+          "line": 45,
+          "end_line": 53
+        }
+      ]
+    },
+    {
+      "id": "swKey",
+      "type": "database",
+      "label": "linkforge:rl:sw:{logical}",
+      "tag": "ZSET·PEXPIRE 窗口",
+      "width": 175,
+      "stage": 2,
+      "row": 3,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/common/ratelimit/RateLimitKeys.java",
+          "line": 13,
+          "end_line": 15
+        }
+      ]
+    },
+    {
+      "id": "idemCreate",
+      "type": "backend",
+      "label": "创建携带幂等键",
+      "sublabel": "Idempotency-Key 头",
+      "stage": 0,
+      "row": 4,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 142,
+          "end_line": 155
+        }
+      ]
+    },
+    {
+      "id": "idemOps",
+      "type": "backend",
+      "label": "幂等两段式",
+      "sublabel": "SETNX pending→settle",
+      "stage": 1,
+      "row": 4,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 154,
+          "end_line": 155
+        },
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 271,
+          "end_line": 274
+        }
+      ]
+    },
+    {
+      "id": "idemKey",
+      "type": "database",
+      "label": "linkforge:rl:idem:{userId}:{key}",
+      "tag": "pending 5s→24h",
+      "width": 220,
+      "stage": 2,
+      "row": 4,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 154,
+          "end_line": 155
+        },
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 273,
+          "end_line": 274
+        }
+      ]
+    },
+    {
+      "id": "replay",
+      "type": "backend",
+      "label": "重放读取",
+      "sublabel": "同键重试返回旧 code",
+      "stage": 3,
+      "row": 4,
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 182,
+          "end_line": 201
+        }
+      ]
+    }
+  ],
+  "flows": [
+    {
+      "id": "create-wt",
+      "from": "create",
+      "to": "cacheUrl",
+      "label": "写穿",
+      "variant": "emphasis",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "cacheurl-set",
+      "from": "cacheUrl",
+      "to": "codeKey",
+      "label": "SET EX",
+      "variant": "emphasis",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "codekey-read",
+      "from": "codeKey",
+      "to": "resolve",
+      "label": "L2 GET",
+      "variant": "emphasis",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "create-bloompub",
+      "from": "create",
+      "to": "bloomChannel",
+      "label": "新码广播",
+      "variant": "dashed",
+      "route": "top-channel"
+    },
+    {
+      "id": "bloom-put",
+      "from": "bloomChannel",
+      "to": "codeBloom",
+      "label": "不跳自己",
+      "variant": "dashed",
+      "route": "straight",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 28
+    },
+    {
+      "id": "write-evict",
+      "from": "writePath",
+      "to": "evict",
+      "label": "失效",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "evict-broadcast",
+      "from": "evict",
+      "to": "l1Channel",
+      "label": "广播一次",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "l1-skip",
+      "from": "l1Channel",
+      "to": "l1Cache",
+      "label": "跳过自己",
+      "variant": "dashed"
+    },
+    {
+      "id": "rowread-mark",
+      "from": "rowRead",
+      "to": "absentOps",
+      "label": "行 null",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "absent-set",
+      "from": "absentOps",
+      "to": "absentKey",
+      "label": "SET 1",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "absent-gate",
+      "from": "absentKey",
+      "to": "absentGate",
+      "label": "哨兵 404",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "entries-acquire",
+      "from": "entries",
+      "to": "limiter",
+      "label": "acquire",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "limiter-zadd",
+      "from": "limiter",
+      "to": "swKey",
+      "label": "ZADD",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "idem-acquire",
+      "from": "idemCreate",
+      "to": "idemOps",
+      "label": "SETNX 抢占",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "idem-settle",
+      "from": "idemOps",
+      "to": "idemKey",
+      "label": "落定",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "idem-replay",
+      "from": "idemKey",
+      "to": "replay",
+      "label": "重放",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "orange",
+      "title": "写路径三件套",
+      "items": [
+        "update 写穿新 URL，disable/delete 只删不写（evictCache :979-989）",
+        "1 秒延迟双删清并发读者的迟到回填（scheduleStaleClear :991-999）",
+        "广播只在写路径本尊发一次，延迟遍绝不补发（:517-518）",
+        "cacheUrl 三处调用：创建预热 :269、update 写穿 :515、跳转 L2 miss 回填 :679"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "TTL 与时钟",
+      "items": [
+        "正缓存 3600+uniform[0,300]s 只向上抖动防雪崩（jitteredTtlSeconds :918-924）",
+        "空值 60+30s，禁用/过期绝不写入；创建尾段 clearAbsent DEL 清哨兵（:268）",
+        "幂等 pending 5s、落定 24h，单键无抖动；限流窗口 PEXPIRE 保活，Lua 取 Redis TIME",
+        "API Key 分钟窗 60s；日窗 {rl}apikey:day:{keyId}:{yyyyMMdd} 固定键 INCR，86400s"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "广播语义与 fail-open",
+      "items": [
+        "双频道 at-most-once：丢失靠 TTL 兜底（L1 10s、L2 3600s），不靠重放",
+        "同一广播两种订阅：L1 跳过自己 origin 防自伤，Bloom 不跳（put 幂等防丢）",
+        "L2 读写删、absent 探测、幂等读取全部 fail-open，跳转绝不 500",
+        "行读永远发生：Redis 只省 URL 字段，不替 DB 挡流量"
+      ]
+    }
+  ]
+}

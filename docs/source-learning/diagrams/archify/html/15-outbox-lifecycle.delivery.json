@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "89327cf1-bb90-4294-8cd8-a0d6538a9076",
+  "status": "current",
+  "command": "deliver",
+  "type": "lifecycle",
+  "input": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\15-outbox-lifecycle.json",
+  "output": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\15-outbox-lifecycle.html",
+  "specification": {
+    "sha256": "cd23f44b90551beae31109e6c42dbdaa8763bc2d67c96cd1b32d51f58232f267",
+    "bytes": 4705
+  },
+  "artifact": {
+    "sha256": "c0927bd21819ae4922e0165b5b042ee97a17745879635452fe5052d4acf68e77",
+    "bytes": 835476
+  }
+}

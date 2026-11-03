@@ -1,0 +1,542 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "LinkForge 系统总架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": "docs/source-learning/diagrams/archify/html/00-system-architecture.html",
+    "repository": {
+      "url": "https://github.com/NorthAdb/LinkForge.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "01f0b5a0e788b426e9de136555cf370f06e06894"
+    }
+  },
+  "components": [
+    {
+      "id": "prom",
+      "type": "external",
+      "label": "Prometheus",
+      "sublabel": "指标抓取端",
+      "pos": [
+        40,
+        60
+      ],
+      "size": [
+        120,
+        50
+      ],
+      "sources": [
+        {
+          "path": "README.md",
+          "line": 525,
+          "end_line": 528
+        }
+      ]
+    },
+    {
+      "id": "actuator",
+      "type": "backend",
+      "label": "可观测端点",
+      "sublabel": "/actuator/prometheus",
+      "tag": "Bearer scrape-token",
+      "pos": [
+        40,
+        150
+      ],
+      "size": [
+        150,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/main/resources/application.yml",
+          "line": 26,
+          "end_line": 30
+        },
+        {
+          "path": "README.md",
+          "line": 527,
+          "end_line": 527
+        }
+      ]
+    },
+    {
+      "id": "client",
+      "type": "external",
+      "label": "客户端",
+      "sublabel": "浏览器 / 控制台",
+      "pos": [
+        40,
+        260
+      ],
+      "size": [
+        130,
+        64
+      ],
+      "sources": [
+        {
+          "path": "README.md",
+          "line": 58,
+          "end_line": 61
+        }
+      ]
+    },
+    {
+      "id": "secfilter",
+      "type": "security",
+      "label": "安全过滤器",
+      "sublabel": "JWT · API Key · 抓取令牌",
+      "pos": [
+        230,
+        260
+      ],
+      "size": [
+        140,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/security/SecurityConfig.java",
+          "line": 22,
+          "end_line": 27
+        },
+        {
+          "path": "README.md",
+          "line": 495,
+          "end_line": 499
+        }
+      ]
+    },
+    {
+      "id": "redirect",
+      "type": "backend",
+      "label": "跳转判定链",
+      "sublabel": "/r/{code} 五层防护",
+      "pos": [
+        440,
+        260
+      ],
+      "size": [
+        130,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/controller/RedirectController.java",
+          "line": 29,
+          "end_line": 29
+        },
+        {
+          "path": "README.md",
+          "line": 320,
+          "end_line": 335
+        }
+      ]
+    },
+    {
+      "id": "redis",
+      "type": "database",
+      "label": "Redis",
+      "sublabel": "L2 缓存 · 滑窗限流 · 幂等键",
+      "pos": [
+        640,
+        260
+      ],
+      "size": [
+        130,
+        72
+      ],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 26,
+          "end_line": 39
+        },
+        {
+          "path": "README.md",
+          "line": 373,
+          "end_line": 373
+        }
+      ]
+    },
+    {
+      "id": "mysql",
+      "type": "database",
+      "label": "MySQL",
+      "sublabel": "短链 / 明细 / Outbox / 聚合表",
+      "pos": [
+        830,
+        260
+      ],
+      "size": [
+        150,
+        170
+      ],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 1,
+          "end_line": 24
+        },
+        {
+          "path": "README.md",
+          "line": 297,
+          "end_line": 299
+        }
+      ]
+    },
+    {
+      "id": "adminapi",
+      "type": "backend",
+      "label": "管理 API",
+      "sublabel": "/api/links · /api/keys",
+      "pos": [
+        640,
+        60
+      ],
+      "size": [
+        140,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/controller/ShortLinkController.java",
+          "line": 38,
+          "end_line": 38
+        },
+        {
+          "path": "README.md",
+          "line": 490,
+          "end_line": 500
+        }
+      ]
+    },
+    {
+      "id": "stats",
+      "type": "backend",
+      "label": "统计查询",
+      "sublabel": "总量 · UV · 维度分布",
+      "pos": [
+        855,
+        60
+      ],
+      "size": [
+        125,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/stats/controller/StatsController.java",
+          "line": 24,
+          "end_line": 24
+        },
+        {
+          "path": "README.md",
+          "line": 422,
+          "end_line": 428
+        }
+      ]
+    },
+    {
+      "id": "clickrec",
+      "type": "backend",
+      "label": "点击记录",
+      "sublabel": "同事务 明细 + Outbox",
+      "pos": [
+        640,
+        460
+      ],
+      "size": [
+        140,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/stats/service/ClickRecordService.java",
+          "line": 26,
+          "end_line": 45
+        },
+        {
+          "path": "README.md",
+          "line": 408,
+          "end_line": 410
+        }
+      ]
+    },
+    {
+      "id": "outbox",
+      "type": "backend",
+      "label": "Outbox Relay",
+      "sublabel": "@Scheduled 轮询 · 批 100",
+      "pos": [
+        830,
+        510
+      ],
+      "size": [
+        120,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/stats/service/ClickOutboxRelay.java",
+          "line": 37,
+          "end_line": 38
+        },
+        {
+          "path": "README.md",
+          "line": 410,
+          "end_line": 412
+        }
+      ]
+    },
+    {
+      "id": "mq",
+      "type": "messagebus",
+      "label": "RabbitMQ",
+      "sublabel": "click.exchange",
+      "pos": [
+        820,
+        640
+      ],
+      "size": [
+        120,
+        64
+      ],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 41,
+          "end_line": 58
+        },
+        {
+          "path": "src/main/java/com/linkforge/config/RabbitMqConfig.java",
+          "line": 15,
+          "end_line": 15
+        }
+      ]
+    },
+    {
+      "id": "consumer",
+      "type": "backend",
+      "label": "事件消费",
+      "sublabel": "eventId 幂等 · 日聚合",
+      "pos": [
+        990,
+        640
+      ],
+      "size": [
+        130,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/stats/mq/ClickEventConsumer.java",
+          "line": 22,
+          "end_line": 22
+        },
+        {
+          "path": "README.md",
+          "line": 412,
+          "end_line": 414
+        }
+      ]
+    },
+    {
+      "id": "whrelay",
+      "type": "backend",
+      "label": "Webhook 投递",
+      "sublabel": "HMAC 签名 · 退避重试",
+      "pos": [
+        990,
+        480
+      ],
+      "size": [
+        130,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/webhook/service/WebhookDeliveryRelay.java",
+          "line": 37,
+          "end_line": 63
+        },
+        {
+          "path": "README.md",
+          "line": 516,
+          "end_line": 521
+        }
+      ]
+    },
+    {
+      "id": "whep",
+      "type": "external",
+      "label": "Webhook 接收方",
+      "sublabel": "租户配置的回调 URL",
+      "pos": [
+        990,
+        310
+      ],
+      "size": [
+        130,
+        64
+      ],
+      "sources": [
+        {
+          "path": "README.md",
+          "line": 514,
+          "end_line": 518
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "c1",
+      "from": "client",
+      "to": "secfilter",
+      "label": "HTTP",
+      "variant": "emphasis"
+    },
+    {
+      "id": "c2",
+      "from": "secfilter",
+      "to": "redirect",
+      "variant": "emphasis"
+    },
+    {
+      "id": "c3",
+      "from": "secfilter",
+      "to": "adminapi"
+    },
+    {
+      "id": "c4",
+      "from": "secfilter",
+      "to": "stats"
+    },
+    {
+      "id": "c5",
+      "from": "secfilter",
+      "to": "actuator"
+    },
+    {
+      "id": "c6",
+      "from": "prom",
+      "to": "actuator",
+      "label": "Bearer 抓取",
+      "variant": "security"
+    },
+    {
+      "id": "c7",
+      "from": "redirect",
+      "to": "redis",
+      "label": "限流 L2"
+    },
+    {
+      "id": "c8",
+      "from": "adminapi",
+      "to": "redis",
+      "label": "幂等键"
+    },
+    {
+      "id": "c9",
+      "from": "adminapi",
+      "to": "mysql",
+      "label": "写链 CRUD"
+    },
+    {
+      "id": "c10",
+      "from": "stats",
+      "to": "mysql",
+      "label": "聚合读"
+    },
+    {
+      "id": "c11",
+      "from": "redirect",
+      "to": "mysql",
+      "label": "行读 singleflight"
+    },
+    {
+      "id": "c12",
+      "from": "redirect",
+      "to": "clickrec",
+      "label": "记点击"
+    },
+    {
+      "id": "c13",
+      "from": "clickrec",
+      "to": "mysql",
+      "label": "同事务写"
+    },
+    {
+      "id": "c14",
+      "from": "outbox",
+      "to": "mysql",
+      "label": "轮询",
+      "variant": "dashed"
+    },
+    {
+      "id": "c15",
+      "from": "outbox",
+      "to": "mq",
+      "label": "AMQP 发布",
+      "variant": "dashed"
+    },
+    {
+      "id": "c16",
+      "from": "mq",
+      "to": "consumer",
+      "label": "AMQP",
+      "variant": "dashed"
+    },
+    {
+      "id": "c17",
+      "from": "consumer",
+      "to": "mysql",
+      "label": "幂等聚合"
+    },
+    {
+      "id": "c18",
+      "from": "whrelay",
+      "to": "mysql",
+      "label": "轮询",
+      "variant": "dashed"
+    },
+    {
+      "id": "c19",
+      "from": "whrelay",
+      "to": "whep",
+      "label": "HTTP POST HMAC"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "同步路径",
+      "items": [
+        "管理 API 与跳转链路同步读写 MySQL / Redis",
+        "302 后同事务写 lf_click_log + lf_outbox",
+        "统计查询读 MySQL 聚合表，UV 按 IP 去重"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "异步管道",
+      "items": [
+        "Outbox Relay 每 2s 轮询 PENDING，confirm 后标 SENT",
+        "AMQP 经 linkforge.click.exchange，消费端 eventId 幂等",
+        "Webhook 投递行独立 Relay 轮询，HMAC 签名推送"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "边界与守卫",
+      "items": [
+        "入口统一过安全过滤器（JWT / API Key / 抓取令牌）",
+        "可观测端点令牌未配置即 fail-closed 401",
+        "点击记账失败 fail-open，302 不受影响"
+      ]
+    }
+  ]
+}

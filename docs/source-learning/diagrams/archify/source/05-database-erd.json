@@ -1,0 +1,418 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "LinkForge 数据库实体关系图",
+    "locale": "zh-CN",
+    "output": "docs/source-learning/diagrams/archify/html/05-database-erd.html",
+    "quality_profile": "standard",
+    "repository": {
+      "url": "https://github.com/NorthAdb/LinkForge.git",
+      "provider": "github",
+      "revision": "01f0b5a0e788b426e9de136555cf370f06e06894"
+    },
+    "views": [
+      {
+        "id": "core",
+        "label": "短链核心",
+        "focus": ["lf_tenant", "lf_user", "lf_short_link", "lf_link_variant"],
+        "note": "租户 → 用户 → 短链；变体挂在短链下，重定向过全部闸门后才抽签"
+      },
+      {
+        "id": "pipeline",
+        "label": "点击链路",
+        "focus": ["lf_click_log", "lf_outbox", "lf_consumed_event", "lf_click_daily", "lf_click_dim_daily"],
+        "note": "热路径同步明细，outbox 异步投递；消费幂等后按日与维度聚合"
+      },
+      {
+        "id": "webhook",
+        "label": "Webhook 投递",
+        "focus": ["lf_webhook_endpoint", "lf_webhook_delivery", "lf_webhook_agg_buffer"],
+        "note": "每租户一个端点；PER_CLICK 直投，AGGREGATE 经缓冲桶汇成摘要"
+      },
+      {
+        "id": "openapi",
+        "label": "开放 API",
+        "focus": ["lf_api_key", "lf_user", "lf_tenant"],
+        "note": "key 以创建者身份请求；TENANT scope 可见全租户链接"
+      }
+    ]
+  },
+  "layout": {
+    "mode": "grid"
+  },
+  "entities": [
+    {
+      "id": "lf_tenant",
+      "label": "lf_tenant",
+      "sublabel": "租户（多租户根）",
+      "tag": "认证域",
+      "row": 0,
+      "col": 0,
+      "width": 240,
+      "sources": [
+        { "path": "src/main/resources/db/migration/V1__baseline_schema.sql", "line": 5, "end_line": 13, "label": "V1 建表" }
+      ],
+      "attributes": [
+        { "name": "id", "type": "BIGINT", "key": "pk" },
+        { "name": "name", "type": "VARCHAR(64)", "key": "uk" },
+        { "name": "status", "type": "TINYINT 1=启用 0=停用" },
+        { "name": "created_at", "type": "DATETIME" },
+        { "name": "updated_at", "type": "DATETIME" },
+        { "name": "deleted", "type": "TINYINT" }
+      ]
+    },
+    {
+      "id": "lf_user",
+      "label": "lf_user",
+      "sublabel": "租户用户",
+      "tag": "认证域",
+      "row": 1,
+      "col": 0,
+      "width": 286,
+      "sources": [
+        { "path": "src/main/resources/db/migration/V1__baseline_schema.sql", "line": 15, "end_line": 26, "label": "V1 建表" },
+        { "path": "src/main/resources/db/migration/V8__api_key_scope.sql", "line": 6, "label": "V8 加 tenant_role" }
+      ],
+      "attributes": [
+        { "name": "id", "type": "BIGINT", "key": "pk" },
+        { "name": "tenant_id", "type": "BIGINT", "key": "fk", "references": "lf_tenant.id" },
+        { "name": "username", "type": "VARCHAR(64)" },
+        { "name": "password_hash", "type": "VARCHAR(100)" },
+        { "name": "status", "type": "TINYINT" },
+        { "name": "tenant_role", "type": "VARCHAR(16) MEMBER|ADMIN" },
+        { "name": "created_at", "type": "DATETIME" },
+        { "name": "updated_at", "type": "DATETIME" },
+        { "name": "deleted", "type": "TINYINT" }
+      ]
+    },
+    {
+      "id": "lf_api_key",
+      "label": "lf_api_key",
+      "sublabel": "开放 API 密钥",
+      "tag": "开放域",
+      "row": 3,
+      "col": 1,
+      "width": 300,
+      "sources": [
+        { "path": "src/main/resources/db/migration/V5__api_key.sql", "line": 6, "end_line": 21, "label": "V5 建表" },
+        { "path": "src/main/resources/db/migration/V8__api_key_scope.sql", "line": 5, "label": "V8 加 scope" }
+      ],
+      "attributes": [
+        { "name": "id", "type": "BIGINT", "key": "pk" },
+        { "name": "tenant_id", "type": "BIGINT", "key": "fk", "references": "lf_tenant.id" },
+        { "name": "user_id", "type": "BIGINT 创建者", "key": "fk", "references": "lf_user.id" },
+        { "name": "name", "type": "VARCHAR(64)" },
+        { "name": "key_prefix", "type": "VARCHAR(16) 展示用" },
+        { "name": "key_hash", "type": "CHAR(64) SHA-256", "key": "uk" },
+        { "name": "quota_per_minute", "type": "INT NULL" },
+        { "name": "quota_per_day", "type": "INT NULL" },
+        { "name": "last_used_at", "type": "DATETIME NULL" },
+        { "name": "revoked_at", "type": "DATETIME NULL" },
+        { "name": "scope", "type": "VARCHAR(16) USER|TENANT" },
+        { "name": "created_at", "type": "DATETIME" }
+      ]
+    },
+    {
+      "id": "lf_short_link",
+      "label": "lf_short_link",
+      "sublabel": "短链主表",
+      "tag": "短链域",
+      "row": 1,
+      "col": 1,
+      "width": 302,
+      "sources": [
+        { "path": "src/main/resources/db/migration/V1__baseline_schema.sql", "line": 28, "end_line": 42, "label": "V1 建表" },
+        { "path": "src/main/resources/db/migration/V4__short_code_case_sensitive.sql", "line": 25, "end_line": 26, "label": "V4 code 改 0900_bin" },
+        { "path": "src/main/resources/db/migration/V7__link_access_password.sql", "line": 2, "label": "V7 加密码列" }
+      ],
+      "attributes": [
+        { "name": "id", "type": "BIGINT", "key": "pk" },
+        { "name": "tenant_id", "type": "BIGINT", "key": "fk", "references": "lf_tenant.id" },
+        { "name": "code", "type": "VARCHAR(16) 0900_bin", "key": "uk" },
+        { "name": "original_url", "type": "VARCHAR(2048)" },
+        { "name": "title", "type": "VARCHAR(128) NULL" },
+        { "name": "status", "type": "TINYINT 1=启用 0=停用" },
+        { "name": "expire_at", "type": "DATETIME NULL" },
+        { "name": "created_by", "type": "BIGINT NULL", "key": "fk", "references": "lf_user.id" },
+        { "name": "created_at", "type": "DATETIME" },
+        { "name": "updated_at", "type": "DATETIME" },
+        { "name": "deleted", "type": "TINYINT" },
+        { "name": "access_password_hash", "type": "VARCHAR(100) NULL" }
+      ]
+    },
+    {
+      "id": "lf_link_variant",
+      "label": "lf_link_variant",
+      "sublabel": "A/B 目标变体",
+      "tag": "短链域",
+      "row": 2,
+      "col": 1,
+      "width": 290,
+      "sources": [
+        { "path": "src/main/resources/db/migration/V10__link_variant.sql", "line": 7, "end_line": 17, "label": "V10 建表" }
+      ],
+      "attributes": [
+        { "name": "id", "type": "BIGINT", "key": "pk" },
+        { "name": "tenant_id", "type": "BIGINT", "key": "fk", "references": "lf_tenant.id" },
+        { "name": "link_id", "type": "BIGINT", "key": "fk", "references": "lf_short_link.id" },
+        { "name": "variant_key", "type": "VARCHAR(32) 0900_bin" },
+        { "name": "target_url", "type": "VARCHAR(2048)" },
+        { "name": "weight", "type": "INT 1..10000" },
+        { "name": "created_at", "type": "DATETIME" },
+        { "name": "updated_at", "type": "DATETIME" }
+      ]
+    },
+    {
+      "id": "lf_click_log",
+      "label": "lf_click_log",
+      "sublabel": "点击明细（同步+回填）",
+      "tag": "点击明细域",
+      "row": 1,
+      "col": 2,
+      "width": 290,
+      "sources": [
+        { "path": "src/main/resources/db/migration/V1__baseline_schema.sql", "line": 44, "end_line": 55, "label": "V1 建表" },
+        { "path": "src/main/resources/db/migration/V2__outbox.sql", "line": 21, "label": "V2 加 event_id" },
+        { "path": "src/main/resources/db/migration/V10__link_variant.sql", "line": 29, "label": "V10 加 variant" }
+      ],
+      "attributes": [
+        { "name": "id", "type": "BIGINT", "key": "pk" },
+        { "name": "tenant_id", "type": "BIGINT", "key": "fk", "references": "lf_tenant.id" },
+        { "name": "link_id", "type": "BIGINT", "key": "fk", "references": "lf_short_link.id" },
+        { "name": "code", "type": "VARCHAR(16) 快照" },
+        { "name": "ip", "type": "VARCHAR(64) NULL" },
+        { "name": "user_agent", "type": "VARCHAR(512) NULL" },
+        { "name": "referer", "type": "VARCHAR(512) NULL" },
+        { "name": "clicked_at", "type": "DATETIME" },
+        { "name": "event_id", "type": "VARCHAR(64) NULL 回填标记", "key": "fk", "references": "lf_outbox.event_id" },
+        { "name": "variant", "type": "VARCHAR(32) NULL" }
+      ]
+    },
+    {
+      "id": "lf_consumed_event",
+      "label": "lf_consumed_event",
+      "sublabel": "消费幂等账本",
+      "tag": "点击明细域",
+      "row": 2,
+      "col": 2,
+      "width": 250,
+      "sources": [
+        { "path": "src/main/resources/db/migration/V1__baseline_schema.sql", "line": 70, "end_line": 73, "label": "V1 建表" }
+      ],
+      "attributes": [
+        { "name": "event_id", "type": "VARCHAR(64)", "key": "pk" },
+        { "name": "consumed_at", "type": "DATETIME" }
+      ]
+    },
+    {
+      "id": "lf_click_daily",
+      "label": "lf_click_daily",
+      "sublabel": "按日点击聚合",
+      "tag": "聚合域",
+      "row": 3,
+      "col": 2,
+      "width": 260,
+      "sources": [
+        { "path": "src/main/resources/db/migration/V1__baseline_schema.sql", "line": 57, "end_line": 68, "label": "V1 建表" }
+      ],
+      "attributes": [
+        { "name": "id", "type": "BIGINT", "key": "pk" },
+        { "name": "tenant_id", "type": "BIGINT", "key": "fk", "references": "lf_tenant.id" },
+        { "name": "link_id", "type": "BIGINT", "key": "fk", "references": "lf_short_link.id" },
+        { "name": "code", "type": "VARCHAR(16) 快照" },
+        { "name": "stat_date", "type": "DATE" },
+        { "name": "clicks", "type": "BIGINT" },
+        { "name": "created_at", "type": "DATETIME" },
+        { "name": "updated_at", "type": "DATETIME" }
+      ]
+    },
+    {
+      "id": "lf_click_dim_daily",
+      "label": "lf_click_dim_daily",
+      "sublabel": "维度日聚合",
+      "tag": "聚合域",
+      "row": 4,
+      "col": 2,
+      "width": 311,
+      "sources": [
+        { "path": "src/main/resources/db/migration/V3__click_dim_daily.sql", "line": 5, "end_line": 17, "label": "V3 建表" }
+      ],
+      "attributes": [
+        { "name": "id", "type": "BIGINT", "key": "pk" },
+        { "name": "tenant_id", "type": "BIGINT", "key": "fk", "references": "lf_tenant.id" },
+        { "name": "link_id", "type": "BIGINT", "key": "fk", "references": "lf_short_link.id" },
+        { "name": "stat_date", "type": "DATE" },
+        { "name": "dim_type", "type": "VARCHAR(32) device/referer_host" },
+        { "name": "dim_value", "type": "VARCHAR(128)" },
+        { "name": "clicks", "type": "BIGINT" },
+        { "name": "created_at", "type": "DATETIME" },
+        { "name": "updated_at", "type": "DATETIME" }
+      ]
+    },
+    {
+      "id": "lf_outbox",
+      "label": "lf_outbox",
+      "sublabel": "事件发件箱",
+      "tag": "管道域",
+      "row": 4,
+      "col": 3,
+      "width": 260,
+      "sources": [
+        { "path": "src/main/resources/db/migration/V2__outbox.sql", "line": 5, "end_line": 16, "label": "V2 建表" }
+      ],
+      "attributes": [
+        { "name": "id", "type": "BIGINT", "key": "pk" },
+        { "name": "event_id", "type": "VARCHAR(64)", "key": "uk" },
+        { "name": "payload", "type": "JSON" },
+        { "name": "status", "type": "VARCHAR(16) PENDING/SENT" },
+        { "name": "attempts", "type": "INT" },
+        { "name": "next_attempt_at", "type": "DATETIME NULL" },
+        { "name": "created_at", "type": "DATETIME" },
+        { "name": "sent_at", "type": "DATETIME NULL" }
+      ]
+    },
+    {
+      "id": "lf_webhook_agg_buffer",
+      "label": "lf_webhook_agg_buffer",
+      "sublabel": "聚合缓冲桶",
+      "tag": "Webhook域",
+      "row": 0,
+      "col": 3,
+      "width": 310,
+      "sources": [
+        { "path": "src/main/resources/db/migration/V9__webhook_aggregate.sql", "line": 12, "end_line": 28, "label": "V9 建表" }
+      ],
+      "attributes": [
+        { "name": "id", "type": "BIGINT", "key": "pk" },
+        { "name": "tenant_id", "type": "BIGINT", "key": "fk", "references": "lf_tenant.id" },
+        { "name": "endpoint_id", "type": "BIGINT", "key": "fk", "references": "lf_webhook_endpoint.id" },
+        { "name": "window_start", "type": "BIGINT epoch 秒" },
+        { "name": "link_id", "type": "BIGINT", "key": "fk", "references": "lf_short_link.id" },
+        { "name": "code", "type": "VARCHAR(16) 快照" },
+        { "name": "clicks", "type": "INT" },
+        { "name": "sample_device", "type": "VARCHAR(32) NULL" },
+        { "name": "sample_referer_host", "type": "VARCHAR(255) NULL" },
+        { "name": "sample_clicked_at", "type": "DATETIME NULL" },
+        { "name": "late", "type": "TINYINT" },
+        { "name": "created_at", "type": "DATETIME" },
+        { "name": "updated_at", "type": "DATETIME" }
+      ]
+    },
+    {
+      "id": "lf_webhook_endpoint",
+      "label": "lf_webhook_endpoint",
+      "sublabel": "Webhook 端点",
+      "tag": "Webhook域",
+      "row": 1,
+      "col": 3,
+      "width": 364,
+      "sources": [
+        { "path": "src/main/resources/db/migration/V6__webhook.sql", "line": 6, "end_line": 16, "label": "V6 建表" },
+        { "path": "src/main/resources/db/migration/V9__webhook_aggregate.sql", "line": 5, "end_line": 7, "label": "V9 加聚合三列" }
+      ],
+      "attributes": [
+        { "name": "id", "type": "BIGINT", "key": "pk" },
+        { "name": "tenant_id", "type": "BIGINT", "key": ["fk", "uk"], "references": "lf_tenant.id" },
+        { "name": "url", "type": "VARCHAR(2048)" },
+        { "name": "secret", "type": "VARCHAR(512) AES-GCM 密文" },
+        { "name": "enabled", "type": "TINYINT" },
+        { "name": "created_by", "type": "BIGINT NULL", "key": "fk", "references": "lf_user.id" },
+        { "name": "delivery_mode", "type": "VARCHAR(16) PER_CLICK|AGGREGATE" },
+        { "name": "aggregate_window_seconds", "type": "INT 15..300 默认60" },
+        { "name": "aggregate_max_events", "type": "INT 1..100000 默认100" },
+        { "name": "created_at", "type": "DATETIME" },
+        { "name": "updated_at", "type": "DATETIME" }
+      ]
+    },
+    {
+      "id": "lf_webhook_delivery",
+      "label": "lf_webhook_delivery",
+      "sublabel": "投递记录",
+      "tag": "Webhook域",
+      "row": 2,
+      "col": 3,
+      "width": 310,
+      "sources": [
+        { "path": "src/main/resources/db/migration/V6__webhook.sql", "line": 18, "end_line": 35, "label": "V6 建表" }
+      ],
+      "attributes": [
+        { "name": "id", "type": "BIGINT", "key": "pk" },
+        { "name": "tenant_id", "type": "BIGINT", "key": "fk", "references": "lf_tenant.id" },
+        { "name": "endpoint_id", "type": "BIGINT", "key": "fk", "references": "lf_webhook_endpoint.id" },
+        { "name": "event_id", "type": "VARCHAR(80) evt_ 前缀" },
+        { "name": "event_type", "type": "VARCHAR(32) link.clicked" },
+        { "name": "payload", "type": "JSON" },
+        { "name": "status", "type": "VARCHAR(16) PENDING/SENT/FAILED" },
+        { "name": "attempts", "type": "INT" },
+        { "name": "next_attempt_at", "type": "DATETIME NULL" },
+        { "name": "last_status_code", "type": "INT NULL" },
+        { "name": "last_error", "type": "VARCHAR(512) NULL" },
+        { "name": "created_at", "type": "DATETIME" },
+        { "name": "sent_at", "type": "DATETIME NULL" }
+      ]
+    }
+  ],
+  "relationships": [
+    { "id": "user_tenant", "from": "lf_user", "to": "lf_tenant", "fromCardinality": "many", "toCardinality": "one", "identifying": false, "variant": "dashed" },
+    { "id": "short_link_tenant", "from": "lf_short_link", "to": "lf_tenant", "fromCardinality": "many", "toCardinality": "one", "identifying": false, "variant": "dashed" },
+    { "id": "short_link_user", "from": "lf_short_link", "to": "lf_user", "label": "创建人", "fromCardinality": "many", "toCardinality": "one", "fromOptional": true, "identifying": false, "variant": "dashed" },
+    { "id": "link_variant_tenant", "from": "lf_link_variant", "to": "lf_tenant", "fromCardinality": "many", "toCardinality": "one", "identifying": false, "variant": "dashed" },
+    { "id": "link_variant_link", "from": "lf_link_variant", "to": "lf_short_link", "label": "A/B 变体", "fromCardinality": "many", "toCardinality": "one", "identifying": false, "variant": "dashed" },
+    { "id": "click_log_tenant", "from": "lf_click_log", "to": "lf_tenant", "fromCardinality": "many", "toCardinality": "one", "identifying": false, "variant": "dashed" },
+    { "id": "click_log_link", "from": "lf_click_log", "to": "lf_short_link", "label": "点击", "fromCardinality": "many", "toCardinality": "one", "identifying": false, "variant": "dashed" },
+    { "id": "click_log_outbox", "from": "lf_click_log", "to": "lf_outbox", "label": "回填自", "fromCardinality": "many", "toCardinality": "one", "fromOptional": true, "identifying": false, "variant": "dashed" },
+    { "id": "click_daily_tenant", "from": "lf_click_daily", "to": "lf_tenant", "fromCardinality": "many", "toCardinality": "one", "identifying": false, "variant": "dashed" },
+    { "id": "click_daily_link", "from": "lf_click_daily", "to": "lf_short_link", "label": "按日聚合", "fromCardinality": "many", "toCardinality": "one", "identifying": false, "variant": "dashed" },
+    { "id": "click_dim_tenant", "from": "lf_click_dim_daily", "to": "lf_tenant", "fromCardinality": "many", "toCardinality": "one", "identifying": false, "variant": "dashed" },
+    { "id": "click_dim_link", "from": "lf_click_dim_daily", "to": "lf_short_link", "label": "维度聚合", "fromCardinality": "many", "toCardinality": "one", "identifying": false, "variant": "dashed" },
+    { "id": "api_key_tenant", "from": "lf_api_key", "to": "lf_tenant", "fromCardinality": "many", "toCardinality": "one", "identifying": false, "variant": "dashed" },
+    { "id": "api_key_user", "from": "lf_api_key", "to": "lf_user", "label": "请求身份", "fromCardinality": "many", "toCardinality": "one", "identifying": false, "variant": "dashed" },
+    { "id": "endpoint_tenant", "from": "lf_webhook_endpoint", "to": "lf_tenant", "fromCardinality": "one", "toCardinality": "one", "identifying": false, "variant": "dashed" },
+    { "id": "endpoint_user", "from": "lf_webhook_endpoint", "to": "lf_user", "label": "创建人", "fromCardinality": "many", "toCardinality": "one", "fromOptional": true, "identifying": false, "variant": "dashed" },
+    { "id": "delivery_tenant", "from": "lf_webhook_delivery", "to": "lf_tenant", "fromCardinality": "many", "toCardinality": "one", "identifying": false, "variant": "dashed" },
+    { "id": "delivery_endpoint", "from": "lf_webhook_delivery", "to": "lf_webhook_endpoint", "label": "投递至", "fromCardinality": "many", "toCardinality": "one", "identifying": false, "variant": "dashed" },
+    { "id": "agg_tenant", "from": "lf_webhook_agg_buffer", "to": "lf_tenant", "fromCardinality": "many", "toCardinality": "one", "identifying": false, "variant": "dashed" },
+    { "id": "agg_endpoint", "from": "lf_webhook_agg_buffer", "to": "lf_webhook_endpoint", "label": "聚合桶", "fromCardinality": "many", "toCardinality": "one", "identifying": false, "variant": "dashed" },
+    { "id": "agg_link", "from": "lf_webhook_agg_buffer", "to": "lf_short_link", "label": "窗口聚合", "fromCardinality": "many", "toCardinality": "one", "identifying": false, "variant": "dashed" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "键与唯一约束",
+      "items": [
+        "PK/FK/UK 徽标出自 SQL 原文；复合唯一键的成员列不标 UK，完整键见下。",
+        "uk_tenant_username(tenant_id, username)、uk_daily_link_date(link_id, stat_date)（幂等落桶承重墙）、uk_link_variant(link_id, variant_key)。",
+        "uk_dim_link_date_value(link_id, stat_date, dim_type, dim_value)、uk_webhook_endpoint_event(endpoint_id, event_id)（投递幂等兜底）、uk_agg_window_link(endpoint_id, window_start, link_id)。",
+        "uk_webhook_tenant(tenant_id) 为单列唯一：每租户仅一个 Webhook 端点。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "逻辑外键约定",
+      "items": [
+        "全库无显式 FOREIGN KEY：所有连线均为逻辑引用，故一律画成虚线。",
+        "10 张表的 tenant_id 都逻辑引用 lf_tenant.id，图中不再逐条标注文字。",
+        "V4/V10 的 RULE：跨表 join 一律走 link_id，禁止用 code 直连（collation 混排会报 ERROR 1267）。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "列的读法",
+      "items": [
+        "类型带「NULL」= 可空列，其余为 NOT NULL；DEFAULT / ON UPDATE 从略。",
+        "code 在 lf_click_log / lf_click_daily / lf_webhook_agg_buffer 中是快照列，从不参与比较或 join（V4）。",
+        "lf_click_log.event_id：NULL=热路径同步行（隐式事件 log-{id}）；非 NULL=消费者按 UUID outbox 事件回填，已计数，Reconciler 须跳过。",
+        "lf_link_variant 刻意没有 deleted 列：替换即硬删+插入（V10）。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "迁移与 flyway_schema_history",
+      "items": [
+        "flyway_schema_history 由 Flyway 自维护（baseline-on-migrate，baselineVersion=1），非业务模型，本图省略。",
+        "V1 六表基线 → V2 outbox → V3 维度聚合 → V4 短码 utf8mb4_0900_bin → V5/V6 API Key 与 Webhook → V7 密码短链 → V8 scope/tenant_role → V9 AGGREGATE 投递 → V10 A/B 变体。"
+      ]
+    }
+  ]
+}

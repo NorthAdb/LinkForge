@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "7193b930-701f-4db2-bb49-1a9af734b4fd",
+  "status": "current",
+  "command": "deliver",
+  "type": "dataflow",
+  "input": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\source\\14-click-pipeline-dataflow.json",
+  "output": "D:\\LinkForge\\docs\\source-learning\\diagrams\\archify\\html\\14-click-pipeline-dataflow.html",
+  "specification": {
+    "sha256": "d96dbddfff41adc57e421a99efe2c6acd7eef04656b1b7f5efb061a0272278b2",
+    "bytes": 12646
+  },
+  "artifact": {
+    "sha256": "fd2bec904dc55580c75fec401258337cb0acc85d022b27ed025bfdc27de3320d",
+    "bytes": 857624
+  }
+}

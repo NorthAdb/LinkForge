@@ -1,0 +1,742 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "跳转判定链 12 步",
+    "locale": "zh-CN",
+    "output": "docs/source-learning/diagrams/archify/html/12-redirect-decision.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/NorthAdb/LinkForge.git",
+      "provider": "github",
+      "revision": "01f0b5a0e788b426e9de136555cf370f06e06894"
+    }
+  },
+  "lanes": [
+    {
+      "id": "client",
+      "label": "浏览器"
+    },
+    {
+      "id": "pre",
+      "label": "判存闸门 :604-626"
+    },
+    {
+      "id": "cache",
+      "label": "缓存与行读 :631-654"
+    },
+    {
+      "id": "row",
+      "label": "行判定 :656-680"
+    },
+    {
+      "id": "gate",
+      "label": "三道门 :684-704"
+    },
+    {
+      "id": "exit",
+      "label": "门禁页与异常出口",
+      "variant": "exception"
+    },
+    {
+      "id": "draw",
+      "label": "抽签与记录 :705-711 · :567-583"
+    }
+  ],
+  "phases": [
+    {
+      "id": "p1",
+      "label": "入口与判存",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "p2",
+      "label": "缓存·行读·行判定",
+      "fromCol": 2,
+      "toCol": 3
+    },
+    {
+      "id": "p3",
+      "label": "三道门与放行",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "emphasis"
+    }
+  ],
+  "groups": [
+    {
+      "id": "g_pre",
+      "label": "步骤 1-3",
+      "lane": "pre",
+      "fromCol": 1,
+      "toCol": 1
+    },
+    {
+      "id": "g_cache",
+      "label": "步骤 4-6",
+      "lane": "cache",
+      "fromCol": 2,
+      "toCol": 2
+    },
+    {
+      "id": "g_row",
+      "label": "步骤 7-8",
+      "lane": "row",
+      "fromCol": 3,
+      "toCol": 3
+    },
+    {
+      "id": "g_gate",
+      "label": "步骤 9-11",
+      "lane": "gate",
+      "fromCol": 4,
+      "toCol": 4,
+      "variant": "emphasis"
+    },
+    {
+      "id": "g_draw",
+      "label": "步骤 12",
+      "lane": "draw",
+      "fromCol": 5,
+      "toCol": 5
+    }
+  ],
+  "mainPath": [
+    "get",
+    "s1",
+    "s2",
+    "s3",
+    "s4",
+    "s5",
+    "s6",
+    "s7",
+    "s8",
+    "s9",
+    "s10",
+    "s11",
+    "s12",
+    "s13",
+    "s14",
+    "resp"
+  ],
+  "semanticChecks": {
+    "allowedRoots": [
+      "get",
+      "head"
+    ],
+    "allowedTerminals": [
+      "resp",
+      "t429",
+      "t404a",
+      "t404b",
+      "t410",
+      "t403",
+      "tlock",
+      "twarn"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "get",
+      "lane": "client",
+      "col": 0,
+      "type": "external",
+      "yOffset": -55,
+      "label": "GET /r/{code}",
+      "sublabel": "resolveForGet",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/controller/RedirectController.java",
+          "line": 36,
+          "end_line": 41
+        }
+      ]
+    },
+    {
+      "id": "head",
+      "lane": "client",
+      "col": 0,
+      "type": "external",
+      "yOffset": 55,
+      "label": "HEAD /r/{code}",
+      "sublabel": "resolveForProbe · 不计数",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/controller/RedirectController.java",
+          "line": 43,
+          "end_line": 48
+        }
+      ]
+    },
+    {
+      "id": "s1",
+      "lane": "pre",
+      "col": 1,
+      "type": "security",
+      "yOffset": -110,
+      "tag": "步1",
+      "label": "IP 限流",
+      "sublabel": "redirect:ip 滑动窗",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 604,
+          "end_line": 610
+        }
+      ]
+    },
+    {
+      "id": "s2",
+      "lane": "pre",
+      "col": 1,
+      "type": "security",
+      "yOffset": 0,
+      "tag": "步2",
+      "label": "Bloom 负答",
+      "sublabel": "未创建→404",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 615,
+          "end_line": 618
+        }
+      ]
+    },
+    {
+      "id": "s3",
+      "lane": "pre",
+      "col": 1,
+      "type": "database",
+      "yOffset": 110,
+      "tag": "步3",
+      "label": "空值缓存",
+      "sublabel": "确认不存在→404",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 623,
+          "end_line": 626
+        }
+      ]
+    },
+    {
+      "id": "s4",
+      "lane": "cache",
+      "col": 2,
+      "type": "database",
+      "yOffset": -110,
+      "tag": "步4",
+      "label": "L1 Caffeine",
+      "sublabel": "仅 URL 字符串",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 631,
+          "end_line": 632
+        }
+      ]
+    },
+    {
+      "id": "s5",
+      "lane": "cache",
+      "col": 2,
+      "type": "database",
+      "yOffset": 0,
+      "tag": "步5",
+      "label": "L2 Redis",
+      "sublabel": "异常 fail-open",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 633,
+          "end_line": 644
+        }
+      ]
+    },
+    {
+      "id": "s6",
+      "lane": "cache",
+      "col": 2,
+      "type": "database",
+      "yOffset": 110,
+      "tag": "步6",
+      "label": "singleflight 行读",
+      "sublabel": "每请求必读 DB",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 649,
+          "end_line": 654
+        },
+        {
+          "path": "src/main/java/com/linkforge/link/support/SingleFlight.java",
+          "line": 57,
+          "end_line": 100
+        }
+      ]
+    },
+    {
+      "id": "s7",
+      "lane": "row",
+      "col": 3,
+      "type": "security",
+      "yOffset": 55,
+      "tag": "步7",
+      "label": "状态与过期",
+      "sublabel": "禁用 404 · 过期 410",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 656,
+          "end_line": 661
+        }
+      ]
+    },
+    {
+      "id": "s8",
+      "lane": "row",
+      "col": 3,
+      "type": "backend",
+      "yOffset": -55,
+      "tag": "步8",
+      "label": "URL 可渲染",
+      "sublabel": "行权威 · 脏值 410",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 663,
+          "end_line": 671
+        }
+      ]
+    },
+    {
+      "id": "s9",
+      "lane": "gate",
+      "col": 4,
+      "type": "security",
+      "yOffset": -110,
+      "tag": "步9",
+      "label": "B9 BLOCK",
+      "sublabel": "先于密码门",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 684,
+          "end_line": 688
+        }
+      ]
+    },
+    {
+      "id": "s10",
+      "lane": "gate",
+      "col": 4,
+      "type": "security",
+      "yOffset": 0,
+      "tag": "步10",
+      "label": "密码门",
+      "sublabel": "cookie 校验",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 691,
+          "end_line": 695
+        }
+      ]
+    },
+    {
+      "id": "s11",
+      "lane": "gate",
+      "col": 4,
+      "type": "security",
+      "yOffset": 110,
+      "tag": "步11",
+      "label": "B9 WARN",
+      "sublabel": "lf_continue=1 仅 GET",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 696,
+          "end_line": 704
+        }
+      ]
+    },
+    {
+      "id": "s12",
+      "lane": "draw",
+      "col": 5,
+      "type": "backend",
+      "yOffset": -165,
+      "tag": "步12",
+      "label": "variants 抽签",
+      "sublabel": "非空压过缓存 URL",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 705,
+          "end_line": 711
+        }
+      ]
+    },
+    {
+      "id": "s13",
+      "lane": "draw",
+      "col": 5,
+      "type": "backend",
+      "yOffset": -55,
+      "tag": "步12",
+      "label": "B2 bot 分类",
+      "sublabel": "仅 GET · bot 不记直跳",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 568,
+          "end_line": 572
+        }
+      ]
+    },
+    {
+      "id": "s14",
+      "lane": "draw",
+      "col": 5,
+      "type": "database",
+      "yOffset": 55,
+      "tag": "步12",
+      "label": "记录点击",
+      "sublabel": "失败 fail-open 仍 302",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 573,
+          "end_line": 582
+        }
+      ]
+    },
+    {
+      "id": "resp",
+      "lane": "draw",
+      "col": 5,
+      "type": "external",
+      "yOffset": 165,
+      "label": "302 Location",
+      "sublabel": "HEAD 同码无正文",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/controller/RedirectController.java",
+          "line": 86,
+          "end_line": 90
+        }
+      ]
+    },
+    {
+      "id": "t429",
+      "lane": "exit",
+      "col": 1,
+      "type": "security",
+      "yOffset": -55,
+      "label": "429 限流",
+      "sublabel": "Retry-After",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 607,
+          "end_line": 610
+        }
+      ]
+    },
+    {
+      "id": "t404a",
+      "lane": "exit",
+      "col": 1,
+      "type": "security",
+      "yOffset": 55,
+      "label": "404 未创建",
+      "sublabel": "Bloom 负答 · 空值缓存",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 615,
+          "end_line": 618
+        }
+      ]
+    },
+    {
+      "id": "t404b",
+      "lane": "exit",
+      "col": 2,
+      "type": "security",
+      "label": "404 无此行",
+      "sublabel": "行缺失 · 禁用",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 650,
+          "end_line": 658
+        }
+      ]
+    },
+    {
+      "id": "t410",
+      "lane": "exit",
+      "col": 4,
+      "type": "security",
+      "label": "410 已失效",
+      "sublabel": "过期 / 脏目标",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/service/ShortLinkService.java",
+          "line": 659,
+          "end_line": 661
+        }
+      ],
+      "yOffset": -55
+    },
+    {
+      "id": "t403",
+      "lane": "exit",
+      "col": 4,
+      "type": "security",
+      "yOffset": 55,
+      "label": "403 拦截页",
+      "sublabel": "Blocked",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/controller/RedirectController.java",
+          "line": 91,
+          "end_line": 97
+        }
+      ]
+    },
+    {
+      "id": "tlock",
+      "lane": "exit",
+      "col": 5,
+      "type": "security",
+      "yOffset": -55,
+      "label": "200 解锁页",
+      "sublabel": "HEAD 401 探测",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/controller/RedirectController.java",
+          "line": 98,
+          "end_line": 105
+        }
+      ]
+    },
+    {
+      "id": "twarn",
+      "lane": "exit",
+      "col": 5,
+      "type": "security",
+      "label": "200 警示页",
+      "sublabel": "lf_continue 可继续",
+      "sources": [
+        {
+          "path": "src/main/java/com/linkforge/link/controller/RedirectController.java",
+          "line": 106,
+          "end_line": 115
+        }
+      ],
+      "yOffset": 55
+    }
+  ],
+  "edges": [
+    {
+      "id": "ed1",
+      "from": "get",
+      "to": "s1",
+      "role": "main"
+    },
+    {
+      "id": "ed2",
+      "from": "head",
+      "to": "s1",
+      "role": "branch",
+      "label": "共用判定链"
+    },
+    {
+      "id": "ed3",
+      "from": "s1",
+      "to": "s2",
+      "role": "main"
+    },
+    {
+      "id": "ed4",
+      "from": "s2",
+      "to": "s3",
+      "role": "main"
+    },
+    {
+      "id": "ed5",
+      "from": "s1",
+      "to": "t429",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "ed6",
+      "from": "s2",
+      "to": "t404a",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "ed7",
+      "from": "s3",
+      "to": "t404a",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "ed8",
+      "from": "s3",
+      "to": "s4",
+      "role": "main"
+    },
+    {
+      "id": "ed9",
+      "from": "s4",
+      "to": "s5",
+      "role": "main"
+    },
+    {
+      "id": "ed10",
+      "from": "s5",
+      "to": "s6",
+      "role": "main"
+    },
+    {
+      "id": "ed11",
+      "from": "s6",
+      "to": "t404b",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "ed12",
+      "from": "s6",
+      "to": "s7",
+      "role": "main"
+    },
+    {
+      "id": "ed13",
+      "from": "s7",
+      "to": "s8",
+      "role": "main"
+    },
+    {
+      "id": "ed14",
+      "from": "s7",
+      "to": "t404b",
+      "variant": "security",
+      "role": "error",
+      "label": "禁用"
+    },
+    {
+      "id": "ed15",
+      "from": "s7",
+      "to": "t410",
+      "variant": "security",
+      "role": "error",
+      "label": "过期"
+    },
+    {
+      "id": "ed16",
+      "from": "s8",
+      "to": "t410",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "ed17",
+      "from": "s8",
+      "to": "s9",
+      "role": "main"
+    },
+    {
+      "id": "ed18",
+      "from": "s9",
+      "to": "s10",
+      "role": "main"
+    },
+    {
+      "id": "ed19",
+      "from": "s10",
+      "to": "s11",
+      "role": "main"
+    },
+    {
+      "id": "ed20",
+      "from": "s9",
+      "to": "t403",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "ed21",
+      "from": "s10",
+      "to": "tlock",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "ed22",
+      "from": "s11",
+      "to": "twarn",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "ed23",
+      "from": "s11",
+      "to": "s12",
+      "role": "main"
+    },
+    {
+      "id": "ed24",
+      "from": "s12",
+      "to": "s13",
+      "role": "main",
+      "label": "GET"
+    },
+    {
+      "id": "ed25",
+      "from": "s12",
+      "to": "resp",
+      "role": "branch",
+      "label": "HEAD 直返"
+    },
+    {
+      "id": "ed26",
+      "from": "s13",
+      "to": "s14",
+      "role": "main"
+    },
+    {
+      "id": "ed27",
+      "from": "s14",
+      "to": "resp",
+      "role": "main"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "violet",
+      "title": "两道出口的分界",
+      "items": [
+        "404/410/429 走 BizException 异常通道，无页面可渲染",
+        "Blocked/Locked/Warn/Redirect 走 sealed interface 返回值",
+        "render 末尾 IllegalStateException 强制新分支同步修改"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "缓存只加速不改判定",
+      "items": [
+        "L1 命中省 Redis 往返，行照读（状态/过期保持 DB 权威）",
+        "B9 判行的 URL，陈旧缓存不得掩盖（:682-683）",
+        "抽签结果压过缓存 URL（:705-707）"
+      ]
+    }
+  ]
+}
