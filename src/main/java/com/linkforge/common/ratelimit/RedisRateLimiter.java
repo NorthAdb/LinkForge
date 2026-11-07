@@ -3,11 +3,13 @@ package com.linkforge.common.ratelimit;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
@@ -27,7 +29,24 @@ public class RedisRateLimiter {
     private static final DefaultRedisScript<List> SLIDING_WINDOW_SCRIPT = new DefaultRedisScript<>();
 
     static {
-        SLIDING_WINDOW_SCRIPT.setLocation(new ClassPathResource("redis/sliding_window.lua"));
+        // Load the script text ONCE, here, through this class's own classloader.
+        // setLocation() instead defers the resource read to the first acquire()
+        // on an arbitrary request thread, whose context classloader may belong
+        // to an already-stopped web application instance (observed in the IT
+        // suite once enough Spring contexts had been created and evicted:
+        // "Illegal access: this web application instance has been stopped
+        // already. Could not load [redis/sliding_window.lua]") — every acquire
+        // then threw, degraded open, and rate limiting silently switched off.
+        // With the text embedded, no runtime resource access ever happens, and
+        // a missing script fails class initialization instead of failing open.
+        try (InputStream in = RedisRateLimiter.class.getResourceAsStream("/redis/sliding_window.lua")) {
+            if (in == null) {
+                throw new IllegalStateException("redis/sliding_window.lua not found on the classpath");
+            }
+            SLIDING_WINDOW_SCRIPT.setScriptText(new String(in.readAllBytes(), StandardCharsets.UTF_8));
+        } catch (IOException ex) {
+            throw new IllegalStateException("could not load redis/sliding_window.lua", ex);
+        }
         SLIDING_WINDOW_SCRIPT.setResultType(List.class);
     }
 
