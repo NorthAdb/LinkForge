@@ -64,7 +64,7 @@ flowchart LR
 
 ## 5. 源码详解：五个节点
 
-**节点一：三表一锁的表间关系。** 一次被消费的点击最多写六行：明细（仅 UUID 事件回填）、1 行日聚合、4-5 行维度、1 行去重、可能 1 条 webhook 投递。聚合的承重墙是一条 upsert：
+**节点一：三表一锁的表间关系。** 一次被消费的点击最多写 9 行（明细 1 + 日聚合 1 + 维度最多 5 + 去重 1 + webhook 意图 1；sync 开且无 variant 时 7 行）：明细（仅 UUID 事件回填）、1 行日聚合、4 行固定 UA 维度加命中 variant 时的 1 行（C3）、1 行去重、租户有 enabled endpoint 时的 1 条 webhook 投递意图。聚合的承重墙是一条 upsert：
 
 ```java
     @Insert("INSERT INTO lf_click_daily(tenant_id, link_id, code, stat_date, clicks) "

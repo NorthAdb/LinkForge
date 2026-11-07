@@ -20,14 +20,14 @@
 |------|------|----------|------------|
 | `src/main/resources/db/migration/V1__baseline_schema.sql`（73 行） | 六张基线表 | 第 1 | 一切的地基 |
 | `V2__outbox.sql`（21 行） | outbox 表 + click_log.event_id | 第 2 | 一迁移双动作的样本 |
-| `V3__click_dim_daily.sql`（18 行） | 维度聚合表 | 第 3 | 最简单的新表迁移 |
+| `V3__click_dim_daily.sql`（17 行） | 维度聚合表 | 第 3 | 最简单的新表迁移 |
 | `V4__short_code_case_sensitive.sql`（26 行） | code 排序规则改 bin | 第 4 | 本课核心论证 |
-| `V5__api_key.sql`（18 行） | API Key 表 | 第 5 | 哈希列设计 |
-| `V6__webhook.sql`（28 行） | webhook 两表 | 第 6 | 单租户单 endpoint 的唯一索引 |
+| `V5__api_key.sql`（21 行） | API Key 表 | 第 5 | 哈希列设计 |
+| `V6__webhook.sql`（35 行） | webhook 两表 | 第 6 | 单租户单 endpoint 的唯一索引 |
 | `V7__link_access_password.sql`（2 行） | 一列 ALTER | 第 7 | 最小迁移的样子 |
-| `V8__api_key_scope.sql`（4 行） | 两列 ALTER | 第 8 | 默认值回填旧行 |
-| `V9__webhook_aggregate.sql`（22 行） | 三列 + 聚合缓冲表 | 第 9 | 数值范围进列注释 |
-| `V10__link_variant.sql`（34 行） | 变体表 + click_log.variant | 第 10 | 内联 COLLATE 的对照 |
+| `V8__api_key_scope.sql`（6 行） | 两列 ALTER | 第 8 | 默认值回填旧行 |
+| `V9__webhook_aggregate.sql`（28 行） | 三列 + 聚合缓冲表 | 第 9 | 数值范围进列注释 |
+| `V10__link_variant.sql`（29 行） | 变体表 + click_log.variant | 第 10 | 内联 COLLATE 的对照 |
 | `application.yml`（:18-24） | flyway 配置 | 第 11 | baseline 开关 |
 
 ## 4. 类的定位（机制视角）
@@ -187,7 +187,7 @@ lf_click_log.code / lf_click_daily.code 是写入时从权威行复制的快照�
 
 **练习 1（概念理解）**：一个 v1.0.0 存量库首次启动，flyway_schema_history 里会有几条记录？第一条的 version 是多少？
 
-答案解析：11 条。1 条 BASELINE（version=1，由 baseline-on-migrate 写入，不执行任何 SQL）加 V2 到 V10 共 9 条补跑记录。V1 被跳过（存量库已具 V1 形状，重跑会 CREATE TABLE 失败）。FlywayBaselineIT 断言「恰 1 条 BASELINE@1、V1 不重跑」。
+答案解析：10 条。1 条 BASELINE（version=1，由 baseline-on-migrate 写入，不执行任何 SQL）加 V2 到 V10 共 9 条补跑记录。V1 被跳过（存量库已具 V1 形状，重跑会 CREATE TABLE 失败）。FlywayBaselineIT 断言「恰 1 条 BASELINE@1、V1 不重跑」。
 
 **练习 2（源码定位）**：`/r/abc%20` 请求码 abc。分别指出 V1 默认 collation、utf8mb4_bin、utf8mb4_0900_bin 三种情形下，数据库比较 `code = 'abc '` 的结果。
 

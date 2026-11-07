@@ -132,8 +132,8 @@ static long jitteredTtlSeconds(long baseSeconds, long jitterSeconds) {
 
 按顺序看三张图：
 
-1. [../../diagrams/archify/html/06-redis-data-flow.html](../../diagrams/archify/html/06-redis-data-flow.html)（由并行任务产出，若尚未生成本链接暂不可点）：Redis 键空间与读写方的数据流图。节点对应：`linkforge:code:*` 的读写方是 `ShortLinkService.cacheUrl`/`resolveTarget`，`linkforge:absent:*` 的是 `markAbsent`/`absentKnown`，两个频道的是 `CacheBus` 与两个订阅者。
-2. [../../diagrams/archify/html/13-cache-hit-miss-sequence.html](../../diagrams/archify/html/13-cache-hit-miss-sequence.html)（由并行任务产出，若尚未生成本链接暂不可点）：一次跳转里 L1、L2、空值缓存、DB 的命中时序，本课的键表是它的静态对照物。
+1. [../../diagrams/archify/html/06-redis-data-flow.html](../../diagrams/archify/html/06-redis-data-flow.html)：Redis 键空间与读写方的数据流图。节点对应：`linkforge:code:*` 的读写方是 `ShortLinkService.cacheUrl`/`resolveTarget`，`linkforge:absent:*` 的是 `markAbsent`/`absentKnown`，两个频道的是 `CacheBus` 与两个订阅者。
+2. [../../diagrams/archify/html/13-cache-hit-miss-sequence.html](../../diagrams/archify/html/13-cache-hit-miss-sequence.html)：一次跳转里 L1、L2、空值缓存、DB 的命中时序，本课的键表是它的静态对照物。
 3. [../../diagrams/archify/html/03-package-map.html](../../diagrams/archify/html/03-package-map.html)（已通过）：确认 `RedisConfig` 在 `config` 包、`CacheBus` 在 `link.support` 包的位置。
 
 Mermaid 备用图 [../../diagrams/mermaid/redirect-decision-chain.md](../../diagrams/mermaid/redirect-decision-chain.md) 画了跳转判定链，键的读写点都能对上。

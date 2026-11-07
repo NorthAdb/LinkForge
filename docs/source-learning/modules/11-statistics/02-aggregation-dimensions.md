@@ -198,7 +198,7 @@
 
 ## 7. 可视化
 
-- 主图：[14-click-pipeline-dataflow](../../diagrams/archify/html/14-click-pipeline-dataflow.html)。看「consume」节点向 lf_click_daily 与 lf_click_dim_daily 的出边，注意与 lf_consumed_event 的「先锁后写」顺序。（该图由并行任务产出，若尚未就位，先用下方 Mermaid 备用图。）
+- 主图：[14-click-pipeline-dataflow](../../diagrams/archify/html/14-click-pipeline-dataflow.html)。看「consume」节点向 lf_click_daily 与 lf_click_dim_daily 的出边，注意与 lf_consumed_event 的「先锁后写」顺序。
 - Mermaid 备用：[click-pipeline](../../diagrams/mermaid/click-pipeline.md)。[05-database-erd](../../diagrams/archify/html/05-database-erd.html)：看两张聚合表的唯一键与索引。
 
 阅读顺序：先 14（或 Mermaid）看写入时机，再 05 对上表结构与唯一键。节点对应：「consume」节点 = `ClickStatsService.consume`；「分桶」节点 = `ClickDimensions.of`；「daily 累加」「dim 累加」两节点 = 两个 mapper 的 `incrementClick`；「variant（可选）」出边 = `:102-105`。

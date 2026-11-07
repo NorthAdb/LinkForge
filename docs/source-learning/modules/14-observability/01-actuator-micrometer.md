@@ -24,12 +24,12 @@
 |----|----|----|----|
 | `src/main/resources/application.yml` | 266 | management 段 `:26-48` 是本课的配置中心；prod 覆盖 `:265-266` | 1 |
 | `src/main/java/com/linkforge/security/MetricsScrapeTokenFilter.java` | 67 | 抓取令牌过滤器（本课主角一） | 2 |
-| `src/main/java/com/linkforge/security/SecurityConfig.java` | 101 | 过滤器顺序与 `/actuator/**` 授权规则（`:41`、`:65-68`、`:89-92`） | 3 |
+| `src/main/java/com/linkforge/security/SecurityConfig.java` | 100 | 过滤器顺序与 `/actuator/**` 授权规则（`:41`、`:65-68`、`:89-92`） | 3 |
 | `src/main/java/com/linkforge/observability/HttpUriTagAllowList.java` | 51 | uri tag 白名单（本课主角二） | 4 |
 | `src/main/java/com/linkforge/config/LinkForgeProperties.java` | 239 | Metrics 内部类（`:53-59`） | 5 |
 | `src/main/java/com/linkforge/link/controller/HealthController.java` | 15 | 应用自己的静态 `/api/health` | 6 |
 | `src/main/java/com/linkforge/config/OpenApiConfig.java` | 41 | BuildProperties 消费方（info 数据的旁证） | 7 |
-| `src/test/java/com/linkforge/observability/PrometheusScrapeIT.java` | 158 | 令牌门禁、tag 有界、直方图的回归测试 | 8 |
+| `src/test/java/com/linkforge/observability/PrometheusScrapeIT.java` | 157 | 令牌门禁、tag 有界、直方图的回归测试 | 8 |
 | `pom.xml` | 281 | actuator 与 prometheus registry 依赖（`:59`、`:63-64`） | 9 |
 
 ## 4. 类的定位

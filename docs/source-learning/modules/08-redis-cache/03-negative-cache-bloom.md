@@ -135,7 +135,7 @@ BloomFilter<String> fresh = BloomFilter.create(
 ```
 `CodeBloomFilter.java:88-90`
 
-`expectedInsertions` 是容量预估（默认 100000，`application.yml:124`），`fpp` 是期望误报率（默认 0.0001 即万分之一，`application.yml:125`）。容量超得越多，fpp 越偏离承诺值，README 口径 :400 写明「插入远超容量会退化误报率」。按标准公式推导（推断，非实测）：10 万条、fpp 万分之一约需 190 万位，约 240 KB 内存，k 约 13 个哈希。一个过滤器不到四分之一兆，这就是「进程内放得起」的底气。`approximateElementCount()`（:206-209）给出估计元素数，播种日志（:102-104）与测试断言（`BloomRebuildIT.java:90-91`）用它。
+`expectedInsertions` 是容量预估（默认 100000，`application.yml:124`），`fpp` 是期望误报率（默认 0.0001 即万分之一，`application.yml:125`）。容量超得越多，fpp 越偏离承诺值，`LinkForgeProperties.java:142-143` 的 Bloom javadoc 写明「插入远超容量会退化误报率」。按标准公式推导（推断，非实测）：10 万条、fpp 万分之一约需 190 万位，约 240 KB 内存，k 约 13 个哈希。一个过滤器不到四分之一兆，这就是「进程内放得起」的底气。`approximateElementCount()`（:206-209）给出估计元素数，播种日志（:102-104）与测试断言（`BloomRebuildIT.java:90-91`）用它。
 
 ### 5.3 CodeBloomFilter 播种：先订阅、先发布后播种
 
@@ -307,8 +307,8 @@ public ApiResponse<Map<String, Object>> rebuild() {
 
 按顺序看两张图：
 
-1. [../../diagrams/archify/html/13-cache-hit-miss-sequence.html](../../diagrams/archify/html/13-cache-hit-miss-sequence.html)（由并行任务产出，若尚未生成本链接暂不可点）：命中与未命中时序。本课节点对应：Bloom 闸 :615-618、空值缓存闸 :623-626、`markAbsent` :653、`clearAbsent` :959。
-2. [../../diagrams/archify/html/06-redis-data-flow.html](../../diagrams/archify/html/06-redis-data-flow.html)（由并行任务产出，若尚未生成本链接暂不可点）：`linkforge:absent:{code}` 的写入方与读取方，以及 `linkforge:bloom:put` 频道从 `publishBloomPut` :44 到 `applyRemotePut` :68-77 的路径。
+1. [../../diagrams/archify/html/13-cache-hit-miss-sequence.html](../../diagrams/archify/html/13-cache-hit-miss-sequence.html)：命中与未命中时序。本课节点对应：Bloom 闸 :615-618、空值缓存闸 :623-626、`markAbsent` :653、`clearAbsent` :959。
+2. [../../diagrams/archify/html/06-redis-data-flow.html](../../diagrams/archify/html/06-redis-data-flow.html)：`linkforge:absent:{code}` 的写入方与读取方，以及 `linkforge:bloom:put` 频道从 `publishBloomPut` :44 到 `applyRemotePut` :68-77 的路径。
 
 `CodeBloomFilter` 与 `BloomAdminController` 的类位置见 [../../diagrams/archify/html/02-function-map.html](../../diagrams/archify/html/02-function-map.html)（已通过）。
 

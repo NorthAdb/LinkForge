@@ -112,7 +112,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
 （ApiKeyAuthFilter.java:32-38，节选）
 
-（框架行为）原因在层级：`@RestControllerAdvice` 由 DispatcherServlet 调用，而 Filter 在 DispatcherServlet 之前。Filter 里抛出的异常不会经过 MVC 的异常解析，只会沿 Servlet 容器一路抛到错误页（500 HTML）。所以 Filter 的每个错误分支必须自己手写响应。数一数本类与 SecurityConfig 里的硬编码 JSON：400 ambiguous（:76）、401 invalid（:82）、401 revoked（:88，对外与 invalid 同文案，只靠 metrics tag 区分）、429 quota（:141）、401 entryPoint（SecurityConfig.java:72-76）、403 denied（:79-83）。六处字面量与 `ApiResponse` 的形状是手工同步的——改 `ApiResponse` 结构必须同步改这些字符串，这是这套架构的真实维护成本（推断：也是课堂讨论「把 Filter 错误统一收敛到 helper」的好起点）。
+（框架行为）原因在层级：`@RestControllerAdvice` 由 DispatcherServlet 调用，而 Filter 在 DispatcherServlet 之前。Filter 里抛出的异常不会经过 MVC 的异常解析，只会进入 Spring Boot 的 /error 兜底（ERROR dispatch），响应形态随请求 Accept 而定（JSON 或白标页）。所以 Filter 的每个错误分支必须自己手写响应。数一数本类与 SecurityConfig 里的硬编码 JSON：400 ambiguous（:76）、401 invalid（:82）、401 revoked（:88，对外与 invalid 同文案，只靠 metrics tag 区分）、429 quota（:141）、401 entryPoint（SecurityConfig.java:72-76）、403 denied（:79-83）。六处字面量与 `ApiResponse` 的形状是手工同步的——改 `ApiResponse` 结构必须同步改这些字符串，这是这套架构的真实维护成本（推断：也是课堂讨论「把 Filter 错误统一收敛到 helper」的好起点）。
 
 对照看正确姿势（:80-84）：
 
@@ -152,7 +152,7 @@ QrShareAuthFilter 只管一件事（QrShareAuthFilter.java:37-43）：GET 且路
 
 ### 5.5 静态控制台与 multipart：两个 profile 两种人生
 
-**静态控制台**。`src/main/resources/static/index.html` 是单文件控制台（1054 行，内联样式与逻辑；写时点注：控制台有独立 FE 波正在改造，本章不钉 DOM 细节）。dev 下 Spring Boot 自动把 static/ 目录映射到 `/`。（本项目实现）prod 下这个映射被关掉（application.yml:251-254）：
+**静态控制台**。`src/main/resources/static/index.html` 是单文件控制台（1055 行，内联样式与逻辑；写时点注：控制台有独立 FE 波正在改造，本章不钉 DOM 细节）。dev 下 Spring Boot 自动把 static/ 目录映射到 `/`。（本项目实现）prod 下这个映射被关掉（application.yml:251-254）：
 
 ```yaml
   web:
@@ -246,7 +246,7 @@ Service 层不信解析器（ShortLinkService.java:349-354）：`file.isEmpty()`
 ## 9. 为什么这样设计
 
 - 认证放 Filter 而不是拦截器：认证要在「选不选得上 Controller」之前完成，且 `/r/**` 这类非 JSON 端点也要受保护。（框架行为）这也是 Spring Security 的原生位置。
-- Filter 内手写 JSON 而不是抛异常：advice 接不到，抛了就变 500 HTML。与其造一个「Filter 专用异常翻译器」，本项目选择字面量复制 ApiResponse 形状（ApiKeyAuthFilter.java:36-37 注释自述）。（推断）只有 6 处、形状稳定时，复制比抽象便宜。
+- Filter 内手写 JSON 而不是抛异常：advice 接不到，抛了就进 Boot 的 /error 兜底（形态随 Accept 而定，还可能 500）。与其造一个「Filter 专用异常翻译器」，本项目选择字面量复制 ApiResponse 形状（ApiKeyAuthFilter.java:36-37 注释自述）。（推断）只有 6 处、形状稳定时，复制比抽象便宜。
 - 静态控制台在 prod 双重关闭：静态页与 API 不同源策略、不同缓存策略、不同审计需求，prod 只留 API 是攻击面最小化。（推断：从 denyAll 注释与 docs-enabled 命名反推。）
 - 门禁页不进模板引擎：三张页、零 JS、强转义需求，手拼文本块加 HtmlUtils 足够，少一个依赖少一类漏洞（GatePages.java:5-8 注释）。
 

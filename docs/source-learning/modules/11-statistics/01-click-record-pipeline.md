@@ -190,7 +190,7 @@ B2 过滤发生在 `recordClick` **之前**（`ShortLinkService.java:568-571`）
 
 ## 7. 可视化
 
-- 主图：[14-click-pipeline-dataflow](../../diagrams/archify/html/14-click-pipeline-dataflow.html)。看「一次点击」节点如何分叉成 lf_click_log 行与 lf_outbox 行，两条路在 lf_consumed_event 汇合。（该图由并行任务产出，若尚未就位，先用下方 Mermaid 备用图。）
+- 主图：[14-click-pipeline-dataflow](../../diagrams/archify/html/14-click-pipeline-dataflow.html)。看「一次点击」节点如何分叉成 lf_click_log 行与 lf_outbox 行，两条路在 lf_consumed_event 汇合。
 - Mermaid 备用：[click-pipeline](../../diagrams/mermaid/click-pipeline.md)。
 - [07-rabbitmq-topology](../../diagrams/archify/html/07-rabbitmq-topology.html)：看 outbox 行被 Relay 抽走后走哪个 exchange/queue，本课的 outbox 行是它的输入。
 - [04-core-class-relations](../../diagrams/archify/html/04-core-class-relations.html)：确认 ClickRecordService 与 ClickOutboxRelay 之间没有箭头，只有表行解耦。

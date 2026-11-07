@@ -24,12 +24,12 @@
 |----|----|----|----|
 | `docker-compose.yml` | 101 | 5 个 service + 5 个命名卷，本课主角 | 1 |
 | `ops/observability/prometheus.yml` | 13 | 抓取配置：目标、路径、token 文件 | 2 |
-| `scripts/smoke.sh` | 94 | 冒烟八步断言 | 3 |
-| `scripts/mq-drill.sh` | 76 | 停 MQ 与追平 | 4 |
-| `scripts/outbox-drill.sh` | 100 | 关同步写后断链追平 | 5 |
-| `scripts/fault-drill.sh` | 255 | redis/webhook/mysql 只读三段降级 | 6 |
-| `scripts/migrate.sh` | 25 | flyway-maven-plugin 包装 | 7 |
-| `scripts/bench.sh` | 107 | wrk 压测三场景（只读头注释与主流程） | 8 |
+| `scripts/smoke.sh` | 93 | 冒烟八步断言 | 3 |
+| `scripts/mq-drill.sh` | 75 | 停 MQ 与追平 | 4 |
+| `scripts/outbox-drill.sh` | 99 | 关同步写后断链追平 | 5 |
+| `scripts/fault-drill.sh` | 254 | redis/webhook/mysql 只读三段降级 | 6 |
+| `scripts/migrate.sh` | 24 | flyway-maven-plugin 包装 | 7 |
+| `scripts/bench.sh` | 106 | wrk 压测三场景（只读头注释与主流程） | 8 |
 | `src/main/resources/application.yml` | 266 | `:247-267` prod 文档三层收紧 | 9 |
 | `security/SecurityConfig.java` + `ProdProfileIT.java` | — | `:29-31` `@Value` 读 `docs-enabled`；收紧回归钉 | 10 |
 

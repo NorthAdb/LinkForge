@@ -40,7 +40,7 @@ GET /r/aB3xK9m
   → resolveForGet → resolveTarget（:601-712）走 12 步
       ├─ 第 1-9 步与普通链一致（限流、Bloom、缓存、行读、状态、URL 校验、B9 BLOCK）
       └─ 第 10 步密码门（:691-695）：行有 accessPasswordHash 且 cookie 无效
-          → 打点 linkforge.locked → 返回 Locked
+          → 打点 linkforge.link.locked → 返回 Locked
   → render（RedirectController.java:98-105）：GET 输出 200 + 解锁页（no-store、CSP、nosniff）
 
 段 B：POST /r/{code}/unlock（匿名表单）
@@ -116,7 +116,7 @@ sequenceDiagram
 |----|----|----|----|
 | t0 | 运营 | 创建链带 accessPassword="abc12345"，4-64 字符校验后 BCrypt 入行 | `encodeAccessPassword` :809-819 |
 | t1 | 访客 | GET /r/{code}，判定链走到第 10 步，行有哈希且无 cookie | :691-695 |
-| t2 | 系统 | 打点 linkforge.locked，render 输出 200 + 解锁页 | `RedirectController.java:98-105` |
+| t2 | 系统 | 打点 linkforge.link.locked，render 输出 200 + 解锁页 | `RedirectController.java:98-105` |
 | t3 | 访客 | 提交表单 POST /r/{code}/unlock（password 表单字段） | :52-56 |
 | t4 | 系统 | 镜像检查过、IP 限流 1/5、码级限流 1/50、BCrypt matches 通过 | `ShortLinkService.java:754-788` |
 | t5 | 系统 | 打点 unlock{result=ok}，issue 签发 cookie 值 | :789-791、`LinkAccessTokens.java:46-51` |
@@ -137,7 +137,7 @@ t8 之后解锁页与警示页都不计点击：Locked 与 Warn 不是 Redirect�
 | 密码空或缺表单字段 | 401（同上，matches 被短路，不跑 BCrypt） | 同上 | :784-785 |
 | 同 IP 对同码 300 秒内第 6 次 | 429 + Retry-After | 打点 unlock{result=rate_limited} | :767-773 |
 | 单码全局 300 秒内第 51 次（换 IP 也撞） | 429 + Retry-After | 同上；分布式爆破挡板 | :774-780 |
-| HEAD 打受保护链（无 cookie 或 cookie 无效） | 401，无正文 | 打点 linkforge.locked | `render` :99-104（withBody=false） |
+| HEAD 打受保护链（无 cookie 或 cookie 无效） | 401，无正文 | 打点 linkforge.link.locked | `render` :99-104（withBody=false） |
 | 解锁的码不存在或 Bloom 负答 | 404 | 无 | :754-755 |
 | 解锁的链已禁用 | 404（与跳转面口径一致） | 无 | :758-760 |
 | 解锁的链已过期 | 410 "short link expired" | 无 | :761-763 |

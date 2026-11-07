@@ -35,7 +35,7 @@
 
 ## 4. 类的定位
 
-webhook 包共 14 个文件，分五层：controller 1、entity 3、mapper 3、service 3、support 5。本课覆盖 controller、service 上半、entity 的 WebhookEndpoint、mapper 的 WebhookEndpointMapper、support 的 WebhookSecretCipher。
+webhook 包共 15 个文件，分五层：controller 1、entity 3、mapper 3、service 3、support 5。本课覆盖 controller、service 上半、entity 的 WebhookEndpoint、mapper 的 WebhookEndpointMapper、support 的 WebhookSecretCipher。
 
 「建在 Outbox 链上」是这个包最重要的架构事实。README 的口径（`README.md:512-516`）说得很直白：投递来源是 `recordClick` 热路径零新增，点击照旧 outbox → MQ → consume，webhook 在消费侧的幂等去重事务里落 `lf_webhook_delivery(PENDING)`，再由独立 relay 轮询 HTTP 投递。换句话说，为支持 Webhook，最热的跳转路径（模块 7 的 302 全链）一行代码都没改。点击事件的采集、传输、去重全部复用模块 10/11 的既有管道，Webhook 只是多了一个「消费者末尾的挂钩」（`ClickStatsService.java:110`）。
 

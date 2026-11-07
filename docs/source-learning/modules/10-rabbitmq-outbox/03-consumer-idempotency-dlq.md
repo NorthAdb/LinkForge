@@ -7,7 +7,7 @@
 学完本课，你应该能：
 
 1. 背出消费幂等三要素：去重表主键 INSERT、确定性 eventId、回填行 event_id 标记，并分别推演出「删掉它」后的双重计数路径。
-2. 逐行解释 `ClickStatsService.consume` 的 47 行：手工 `TransactionTemplate` 短事务、DuplicateKey 早退、UUID 事件回填、日表与维度累加、webhook 钩子。
+2. 逐行解释 `ClickStatsService.consume` 的 48 行（:66-113）：手工 `TransactionTemplate` 短事务、DuplicateKey 早退、UUID 事件回填、日表与维度累加、webhook 钩子。
 3. 说清为什么去重插入和聚合必须在**同一个**短事务里（防中间崩溃）。
 4. 描述异常消息进 DLQ 的完整路径（容器配置→basic.reject→死信参数→click.dlq），以及「毒消息」在本项目的处置方式。
 5. 说出 `ClickLogReconciler` 的门禁条件、扫描 SQL 与重放构造，解释它和幂等体系互为前提。
@@ -29,7 +29,7 @@
 | `src/main/resources/db/migration/V1__baseline_schema.sql` | - | lf_consumed_event DDL :70-73 | 2 |
 | `src/main/java/com/linkforge/stats/entity/ConsumedEvent.java` | 17 | 主键映射 :14-15 | 3 |
 | `src/main/java/com/linkforge/stats/mapper/ConsumedEventMapper.java` | 9 | 空壳 BaseMapper :8 | 4 |
-| `src/main/java/com/linkforge/stats/service/ClickStatsService.java` | 154 | 构造器 :42-54、consume :56-113 | 5 |
+| `src/main/java/com/linkforge/stats/service/ClickStatsService.java` | 154 | 构造器 :42-54、consume :66-113 | 5 |
 | `src/main/java/com/linkforge/stats/service/ClickLogReconciler.java` | 55 | 门禁 :33-35、重放 :37-47 | 6 |
 | `src/main/java/com/linkforge/stats/entity/ClickLog.java` | 28 | event_id 注释 :26-27 | 7 |
 | `src/main/java/com/linkforge/stats/mapper/ClickLogMapper.java` | 32 | selectUnconsumed :14-18 | 8 |
@@ -164,7 +164,7 @@ CREATE TABLE lf_consumed_event (
 
 第二段：**回填**。条件 `!startsWith("log-")` 把事件分成两族：`log-{id}` 事件的明细行在热路径已经写好（10.2 课的 sync 分支），消费端只管聚合；UUID 事件（sync 关闭模式）没有明细行，消费端按事件字段重建一行（:80-88）。重建行的 `clickedAt` 兜底逻辑与 ：67-69 一致。
 
-:91 是幂等三要素的第三要素：**回填行打上自己的 eventId**。没有这行标记，对账重放会把这条已计数的明细再算一遍（5.4 演推）。实体侧注释互证：`ClickLog.java:26-27` 写着 "NULL = hot-path sync row (implicit "log-{id}" eventId); set on consumer backfill"，V2 迁移的注释（`V2__outbox.sql:18-21`）同样强调 "already counted, so ClickLogReconciler must skip it"。
+:91 是幂等三要素的第三要素：**回填行打上自己的 eventId**。没有这行标记，对账重放会把这条已计数的明细再算一遍（5.4 演推）。实体侧注释互证：`ClickLog.java:26-27` 写着 "NULL = hot-path sync row (implicit "log-{id}" eventId); set on consumer backfill"，V2 迁移的注释（`V2__outbox.sql:18-20`）同样强调 "already counted, so ClickLogReconciler must skip it"。
 
 ```java
             clickDailyMapper.incrementClick(event.getTenantId(), event.getLinkId(), event.getCode(), date);

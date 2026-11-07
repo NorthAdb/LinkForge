@@ -48,7 +48,7 @@ pom 不是类，它是 Maven 的输入文件，Maven 按它生成构建过程。
 <description>LinkForge — multi-tenant short link + click analytics platform</description>
 ```
 
-（框架行为）声明 parent 之后继承两样东西。一是两百多个常用依赖的版本托管，引用时不写 version 就用它钦定的；二是编译插件默认参数，`<java.version>` 属性（pom.xml:21）写 17 就是用 Java 17 编译。`<relativePath/>` 空标签表示不从本地文件系统找 parent，去仓库取。（本项目实现）坐标 `com.linkforge:linkforge:2.0.0`，2.0.0 在 5.4 还会出现一次。
+（框架行为）声明 parent 之后继承两样东西。一是两百多个常用依赖的版本托管，引用时不写 version 就用它钦定的；二是编译插件默认参数，`<java.version>` 属性（pom.xml:21）写 17 就是用 Java 17 编译。`<relativePath/>` 空标签表示不从本地文件系统找 parent，去仓库取。（本项目实现）坐标 `com.linkforge:linkforge:2.0.0`，2.0.0 在 5.5 还会出现一次。
 
 ### 5.2 properties：五个自定义版本的来由（pom.xml:20-34）
 
@@ -61,7 +61,7 @@ pom 不是类，它是 Maven 的输入文件，Maven 按它生成构建过程。
 <testcontainers.version>2.0.5</testcontainers.version>
 ```
 
-（pom.xml:24-29，注释原文逐字。每条升级都有注释记录动机，这是本项目的好习惯。）
+（pom.xml:24-29，注释原文逐字。核心四条（commons-lang3/testcontainers/guava/zxing）有动机注释，这是本项目的好习惯；mybatis-plus/jjwt 为裸声明。）
 
 1. `commons-lang3.version=3.18.0`（pom.xml:27）。测试框架 Testcontainers 2.0.5 调用了 `SystemProperties.getUserName` 这个方法，Boot 3.3.5 默认给的 lang3 3.14.0 里没有它，CI 上直接 `NoSuchMethodError`。lang3 官方保证向上二进制兼容，所以一个属性抬高，所有用到 lang3 的组件统一对齐。
 2. `testcontainers.version=2.0.5`（pom.xml:29）。Boot 管理的 testcontainers 1.x 自带的 docker-java 版本太老，Docker Desktop 29 拒绝它。
@@ -216,7 +216,7 @@ JWT 三件套（pom.xml:139-155）：`jjwt-api` 是 compile，`jjwt-impl` 和 `j
 
 ## 9. 为什么这样设计
 
-- 版本属性全部集中在 properties 且带动机注释（pom.xml:24-33）。半年后没人记得 3.18.0 是为什么，注释就是决策记录。推断：作者按「一次事故一条注释」的纪律维护。
+- 版本属性全部集中在 properties；核心四条（commons-lang3/testcontainers/guava/zxing）有动机注释，mybatis-plus/jjwt 为裸声明（pom.xml:24-33）。半年后没人记得 3.18.0 是为什么，注释就是决策记录。推断：作者按「一次事故一条注释」的纪律维护。
 - 双执行而不是两个 profile。时区 fork 每次构建都要跑，做成 profile 就容易忘开。推断：把「必须发生的验证」编码进默认构建，能防回归。
 - jjwt 拆三件、lombok optional、mysql 驱动 runtime。全部是「编译期最小可见」原则的落地：业务代码见到的 API 越窄，替换与裁剪越容易。
 

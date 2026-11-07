@@ -272,8 +272,8 @@ origin 跳过自己（:69-71，D-C2-18）是这套广播里最值得停一步的
 
 按顺序看两张图：
 
-1. [../../diagrams/archify/html/06-redis-data-flow.html](../../diagrams/archify/html/06-redis-data-flow.html)（由并行任务产出，若尚未生成本链接暂不可点）：键空间数据流。本课节点对应：`linkforge:code:*` 的写入方 `cacheUrl` :971 与读取方 :635，`linkforge:l1:invalidate` 频道的发布方 :519/:540/:557 与订阅方 `UrlLocalCache.subscribe` :50-58。
-2. [../../diagrams/archify/html/13-cache-hit-miss-sequence.html](../../diagrams/archify/html/13-cache-hit-miss-sequence.html)（由并行任务产出，若尚未生成本链接暂不可点）：一次跳转的 L1、L2、DB 时序。本课节点对应：L1 查询 :631、L2 查询 :635、L1 回填 :676、L2 回写 `cacheUrl` :679。
+1. [../../diagrams/archify/html/06-redis-data-flow.html](../../diagrams/archify/html/06-redis-data-flow.html)：键空间数据流。本课节点对应：`linkforge:code:*` 的写入方 `cacheUrl` :971 与读取方 :635，`linkforge:l1:invalidate` 频道的发布方 :519/:540/:557 与订阅方 `UrlLocalCache.subscribe` :50-58。
+2. [../../diagrams/archify/html/13-cache-hit-miss-sequence.html](../../diagrams/archify/html/13-cache-hit-miss-sequence.html)：一次跳转的 L1、L2、DB 时序。本课节点对应：L1 查询 :631、L2 查询 :635、L1 回填 :676、L2 回写 `cacheUrl` :679。
 
 Mermaid 备用图 [../../diagrams/mermaid/redirect-decision-chain.md](../../diagrams/mermaid/redirect-decision-chain.md) 的判定链里，L1/L2 是第 4、5 步。
 

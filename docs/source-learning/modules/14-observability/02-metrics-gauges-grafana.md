@@ -35,12 +35,12 @@
 | `src/main/java/com/linkforge/webhook/service/WebhookDeliveryRelay.java` | 167 | 投递结果计数（`:74-165`） | 12 |
 | `src/main/java/com/linkforge/webhook/service/WebhookAggregateFlusher.java` | 237 | 聚合冲刷计数（`:48`、`:106`） | 13 |
 | `src/main/java/com/linkforge/observability/BacklogGauges.java` | 58 | 积压 gauge（本课主角） | 14 |
-| `ops/observability/prometheus.yml` | 14 | 抓取 job | 15 |
+| `ops/observability/prometheus.yml` | 13 | 抓取 job | 15 |
 | `ops/observability/grafana/provisioning/datasources/prometheus.yml` | 10 | datasource，uid=linkforge-prom | 16 |
-| `ops/observability/grafana/provisioning/dashboards/dashboards.yml` | 11 | 看板 provider | 17 |
+| `ops/observability/grafana/provisioning/dashboards/dashboards.yml` | 10 | 看板 provider | 17 |
 | `ops/observability/grafana/dashboards/linkforge-slo.json` | 268 | SLO 看板 24 面板 | 18 |
-| `src/test/java/com/linkforge/observability/PrometheusScrapeIT.java` | 158 | 导出内容回归 | 19 |
-| `src/test/java/com/linkforge/observability/DashboardMetricsIT.java` | 184 | 看板防漂移回归 | 20 |
+| `src/test/java/com/linkforge/observability/PrometheusScrapeIT.java` | 157 | 导出内容回归 | 19 |
+| `src/test/java/com/linkforge/observability/DashboardMetricsIT.java` | 183 | 看板防漂移回归 | 20 |
 
 ## 4. 类的定位
 
@@ -161,11 +161,11 @@ uid 是关键：看板 JSON 里的每个面板都用 `uid: linkforge-prom` 引�
 
 第二层 provider（`provisioning/dashboards/dashboards.yml`）：告诉 Grafana 每 30 秒扫 `/var/lib/grafana/dashboards` 目录（`:7` `updateIntervalSeconds: 30`），JSON 改了自动热加载。
 
-第三层是看板本体 `linkforge-slo.json`：24 个面板、8 个 row 分组，uid `linkforge-slo`，标题「LinkForge SLO (Demo targets, not a production promise)」。Compose 把两个 provisioning 目录与 dashboards 目录只读挂载进 grafana 容器（`docker-compose.yml:90-91`），`--profile observability up -d` 一条命令起全套。
+第三层是看板本体 `linkforge-slo.json`：24 个面板、9 个 row 分组（13 timeseries + 2 stat + 9 row），uid `linkforge-slo`，标题「LinkForge SLO (Demo targets, not a production promise)」。Compose 把两个 provisioning 目录与 dashboards 目录只读挂载进 grafana 容器（`docker-compose.yml:90-91`），`--profile observability up -d` 一条命令起全套。
 
 ### 5.4 看板结构速览与两处诚实口径
 
-8 个 row 与代表面板（查询取自 `linkforge-slo.json`）：
+9 个 row 与代表面板（查询取自 `linkforge-slo.json`）：
 
 | Row | 代表面板与查询 |
 |----|----|
@@ -177,12 +177,14 @@ uid 是关键：看板 JSON 里的每个面板都用 `uid: linkforge-prom` 引�
 | Rate limiting | fail-open：`sum by (reason) (rate(linkforge_ratelimit_failopen_total[5m]))` |
 | Outbox | 积压 gauge 直画 + sent/failed 速率 |
 | Webhook | 积压 + delivery 结果 + blocked/skipped |
-| API keys / Gates / JVM | 认证结果速率、phishing gate、unlock、Heap/Hikari |
+| API keys | 认证结果速率与配额拒绝 |
+| Gates | phishing gate/continue/规则数、unlock 结果与 locked 渲染 |
+| JVM / Hikari | Heap / GC pause / Hikari connections |
 
 两处诚实口径都在标题里：
 
 - **本进程口径**：`linkforge_l1_*` 与 `linkforge_bloom_*` 只计本 JVM。单实例 demo 里图就是全貌；多实例时每个实例的曲线不同，row 标题与 README（`:398`「仍 per-process……看板曲线不是集群汇总」）都写明了。Redis 侧的 `linkforge_cache_l2` 与 absent 是共享口径，可汇总。
-- **Demo 目标口径**：看板标题与 Redirect row 标题都带「not a production promise」。P99 ≤ 100ms 的 SLO 是项目给演示环境定的目标，README `:529` 同口径。依据是 bench 数字全部是 Windows 历史口径（README `:534` 一节明确 B10 Linux bench 未跑），把它们标成生产承诺就是虚构。
+- **Demo 目标口径**：看板标题与 Redirect row 标题都带「not a production promise」。P99 ≤ 100ms 的 SLO 是项目给演示环境定的目标，README `:529` 同口径。依据是 bench 数字全部是 Windows 历史口径（README `:15` 与 `:632` 两处明确 B10 Linux bench 未跑），把它们标成生产承诺就是虚构。
 
 ### 5.5 两个 IT：把「看板与代码不漂移」变成测试
 

@@ -147,7 +147,7 @@ sealed 关键字保证分支穷尽：编译器知道实现类只有四个，`ren
 | 9 | B9 域名门禁 BLOCK | :684-688 | 403 拦截页（`Blocked`） |
 | 10 | 密码门 | :691-695 | 解锁页（`Locked`，GET 200 / HEAD 401） |
 | 11 | B9 域名门禁 WARN | :696-704 | 警示页（`Warn`，200；`lf_continue=1` 可继续） |
-| 12 | B2 分类 + variants 抽签 + 302 | :566-585 与 :705-711 | 无失败；可能不记点击 |
+| 12 | 抽签（:708）→ 返回后 resolveForGet 才做 B2 分类（:568-572）→ 记账 | :705-711 与 :568-582 | 无失败；可能不记点击 |
 
 逐步看关键片段。第 1 步限流（:604-610）在方法最前面，超限直接抛 `RateLimitedException`，算法在 9.1 课专讲。第 2 步的注释（:612-614）讲清了 Bloom 的地位：负答案是权威的（这个码从未被创建），直接 404，省掉一次数据库往返；正答案可能是误报，落到后面的缓存和 DB 路径兜底。第 3 步空值缓存（B7）只存「DB 确认过不存在」的码，注释 :620-622 特意强调：禁用（404）和过期（410）的行还在库里，绝不能进这个缓存，否则状态变化要等 TTL 才生效。
 
@@ -191,8 +191,8 @@ meterRegistry.counter("linkforge.redirects").increment();
 
 按顺序看两张图：
 
-1. [../../diagrams/archify/html/12-redirect-decision.html](../../diagrams/archify/html/12-redirect-decision.html)（由并行任务产出）：12 步判定链的交互流程图。节点对应：步骤 1 对应 `resolveTarget` :604-610，步骤 6 对应 `SingleFlight.run` :57-100，步骤 9-11 对应三道门 :684-704，步骤 12 对应 `VariantPicker.pick`。
-2. [../../diagrams/archify/html/13-cache-hit-miss-sequence.html](../../diagrams/archify/html/13-cache-hit-miss-sequence.html)（由并行任务产出）：L1/L2/DB 三层读路径的时序，对应步骤 4-6。
+1. [../../diagrams/archify/html/12-redirect-decision.html](../../diagrams/archify/html/12-redirect-decision.html)：12 步判定链的交互流程图。节点对应：步骤 1 对应 `resolveTarget` :604-610，步骤 6 对应 `SingleFlight.run` :57-100，步骤 9-11 对应三道门 :684-704，步骤 12 对应 `VariantPicker.pick`。
+2. [../../diagrams/archify/html/13-cache-hit-miss-sequence.html](../../diagrams/archify/html/13-cache-hit-miss-sequence.html)：L1/L2/DB 三层读路径的时序，对应步骤 4-6。
 
 Mermaid 备用图：[../../diagrams/mermaid/redirect-decision-chain.md](../../diagrams/mermaid/redirect-decision-chain.md)。备用图把 L2 画进行读步内，本课把 L2 单列为第 5 步，两者顺序一致，只是分组粒度不同。
 
@@ -223,7 +223,7 @@ Mermaid 备用图：[../../diagrams/mermaid/redirect-decision-chain.md](../../di
 ## 10. 本节总结
 
 - 三入口共用一条判定链：GET 记点击且允许 WARN 继续，HEAD 全不记，unlock 是密码表单提交点。
-- `resolveTarget` 12 步：限流 → Bloom → 空值缓存 → L1 → L2 → 行读 → 状态/过期 → URL 校验 → B9 BLOCK → 密码门 → B9 WARN → B2 + 抽签。
+- `resolveTarget` 12 步：限流 → Bloom → 空值缓存 → L1 → L2 → 行读 → 状态/过期 → URL 校验 → B9 BLOCK → 密码门 → B9 WARN → 抽签（:708）→ 返回后 resolveForGet 才做 B2 分类（:568-572）与记账。
 - 失败分两类出口：404/410/429 走异常，四类门禁结果走 `RedirectOutcome` sealed interface。每请求必读 DB 行；缓存三层只加速不改判定，三处代码可查证。
 
 ## 11. 课后练习

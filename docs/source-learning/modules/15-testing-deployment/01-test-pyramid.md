@@ -27,7 +27,7 @@
 | `src/test/java/com/linkforge/FlywayBaselineIT.java` | 141 | 刻意不继承基类的遗留库升级测试 | 2 |
 | `src/test/java/com/linkforge/webhook/WebhookDeliveryIT.java` | 412 | `@DirtiesContext` 事故注释与两段式断言 | 3 |
 | `src/test/java/com/linkforge/webhook/WebhookRetryClockIT.java` | 199 | 时区 fork 的主角（15.2 深讲，此处读类头注释） | 4 |
-| `src/test/resources/application-test.yml` | 70 | IT 专用 profile：非连接类默认值 | 5 |
+| `src/test/resources/application-test.yml` | 69 | IT 专用 profile：非连接类默认值 | 5 |
 | `src/test/java/com/linkforge/link/support/LinkValidationsTest.java` | 80 | 纯单测样例，含唯一的参数化测试 | 6 |
 | `pom.xml` | 281 | `:219-249` failsafe 双执行（15.2 展开） | 7 |
 
@@ -48,7 +48,7 @@
 - **312** = 源码里 `@Test` 注解总数 = 单测 144 + IT 168。这是静态口径，写代码的人数这一侧。
 - **319** = README 徽章与 CI 汇报的执行实例数 = surefire 151 + failsafe 默认组 166 + 时区 fork 2（`README.md:623`）。这是动态口径，参数化用例按展开次数计数。
 
-166 比 168 少 2，因为 failsafe 默认执行排除了 `WebhookRetryClockIT`（`pom.xml:231`），它的 2 个 `@Test` 在独立 JVM fork 里另跑（15.2 详解）。151 比 144 多 7 的解释曾归给全项目唯一的参数化测试：`LinkValidationsTest.java:62-63` 用 `@ParameterizedTest` 配 `@ValueSource` 的 7 个字符串。但把账算到底：144-1+7=150，静态推演是 150+166+2=**318**，与 319 仍差 1 例——这 1 例无法用注解静态解释（已登记 [reference/issues-and-discrepancies.md](../../reference/issues-and-discrepancies.md) §2.1，待 CI「Tests run」日志复核）。这个 1 例之差本身是教材想教的能力：口径审计要能推导到最后一层，对不平时如实登记，而不是硬凑等式。
+166 比 168 少 2，因为 failsafe 默认执行排除了 `WebhookRetryClockIT`（`pom.xml:231`），它的 2 个 `@Test` 在独立 JVM fork 里另跑（15.2 详解）。surefire 侧：144 这个数只数 `@Test` 注解，不含全项目唯一的参数化方法——`LinkValidationsTest.java:62-63` 的 `@ParameterizedTest` 配 `@ValueSource` 的 7 个字符串是独立方法，展开后 **144+7=151**，与 README 的 surefire 口径精确对平。于是 151+166+2=319，两套账完全可平。这里曾出现另一版推导：编写者把参数化方法误当作已含在 144 内，做了一次双重扣减，推出一个静态解释不了的缺口并登记在 [reference/issues-and-discrepancies.md](../../reference/issues-and-discrepancies.md) §2.1——后来被审计抓出。教训：算式里每一项都要注明出处与含义，口径对账才不会凭空长出幽灵缺口。
 
 ### 5.2 AbstractIntegrationTest 逐段：三个容器与启动块
 
@@ -215,7 +215,7 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
 
 ## 10. 本节总结
 
-- 312 是源码注解口径，319 是执行实例口径，差值=参数化展开 7 例减时区 fork 移交 2 例，两账可平。
+- 312 是源码 `@Test` 注解口径，不含 1 个独立的 `@ParameterizedTest` 方法；319 = 312 + 参数化展开 7 例 = surefire 151（144+7）+ failsafe 166 + 时区 fork 2，两账完全可平。
 - `AbstractIntegrationTest` 四件套：三个 static 容器、`static {}` 单次启动、`@DynamicPropertySource` 懒注入、PATCH 可用的请求工厂；连接预算 27×10+15×4=330 对天花板 500。
 - 基类不带 `@SpringBootTest` 是为让每个子类的配置签名自包含；`FlywayBaselineIT` 不继承是为保住一个未迁移的遗留库。
 - `@DirtiesContext(AFTER_CLASS)` 恰好钉在三个 relay-enabled 的类上，防上下文缓存里的调度线程跨类结算数据。
@@ -225,7 +225,7 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
 
 **练习 1（概念理解）** 同事问：「README 说 319 个测试，我 grep `@Test` 只有 312 个，是不是漏了？」写出你的解释。
 
-答案：312 是 `@Test` 注解的静态计数（单测 144 + IT 168），确定无疑。319 是 README/CI 口径：166 = 168-2（`WebhookRetryClockIT` 被 `pom.xml:231` 排除后在时区 fork 另跑），这段能对平；surefire 151 中可静态解释的是 144-1+7=150（唯一的 `@ParameterizedTest` 展开 7 例），**还差 1 例静态解释不了**（见 issues §2.1）。所以严谨说法是：312 注解口径确定；319 与静态推演 318 差 1 例，引用时注明口径并保留这 1 例的追问。
+答案：不是漏了，是两个口径的统计对象不同。312 是 `@Test` 注解的静态计数（单测 144 + IT 168），它**不含**全项目唯一的 `@ParameterizedTest` 方法（`LinkValidationsTest.java:62-63`，展开 7 例）。319 是 README/CI 的执行实例口径：surefire 151 = 144 个 `@Test` + 参数化展开 7 例；failsafe 默认组 166 = 168 − 2（`WebhookRetryClockIT` 被 `pom.xml:231` 排除），这 2 例在时区 fork 另跑。151+166+2=319，与注解口径 312+7=319 完全可平。引用时注明口径即可，不存在缺口。
 
 **练习 2（源码定位）** 找出钉死 MySQL `max_connections` 的行，并说明为什么调这个参数而不是把每个上下文的 Hikari 池改小。
 
@@ -245,4 +245,4 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
 
 ## 12. 与后续课程的联系
 
-下一课 15.2 从「测试怎么写」转到「测试怎么被编排」：Maven 生命周期里 surefire 与 failsafe 的分工、`webhook-tz-it` 这条时区 fork 执行的完整动机（`WebhookRetryClockIT` 类头注释里的 ~8h 退避事故）、`build-info` 如何让 OpenAPI 版本以 pom 为单一事实源，以及 CI 工作流的缓存键设计。再往后 15.3 离开测试进入运维视角：Compose 五个 service、四个演练脚本与 prod profile 收紧。想看这套测试守护的业务链路，读专题「Webhook 投递与重试」（`docs/source-learning/advanced/11-webhook-delivery-retry.md`，待产出）；想回顾 webhook 退避与双时钟口径本身，回到 [../13-webhook/02-delivery-signing-retry.md](../13-webhook/02-delivery-signing-retry.md)。
+下一课 15.2 从「测试怎么写」转到「测试怎么被编排」：Maven 生命周期里 surefire 与 failsafe 的分工、`webhook-tz-it` 这条时区 fork 执行的完整动机（`WebhookRetryClockIT` 类头注释里的 ~8h 退避事故）、`build-info` 如何让 OpenAPI 版本以 pom 为单一事实源，以及 CI 工作流的缓存键设计。再往后 15.3 离开测试进入运维视角：Compose 五个 service、四个演练脚本与 prod profile 收紧。想看这套测试守护的业务链路，读专题「Webhook 投递与重试」（[../../advanced/11-webhook-delivery-retry.md](../../advanced/11-webhook-delivery-retry.md)）；想回顾 webhook 退避与双时钟口径本身，回到 [../13-webhook/02-delivery-signing-retry.md](../13-webhook/02-delivery-signing-retry.md)。

@@ -33,7 +33,7 @@
 | `src/main/java/com/linkforge/stats/mq/RabbitClickEventPublisher.java` | 68 | confirm+returns 发布 :43-67 | 5 |
 | `src/main/java/com/linkforge/stats/mq/ClickEventConsumer.java` | 28 | 监听入口 :22-27（幂等细节在 10.3） | 6 |
 
-阅读顺序的理由：先看拓扑（哪些容器存在），再看配置（哪些开关打开），然后顺着「消息长什么样 → 谁发 → 谁收」读四个 mq 类。消费者本课只看入口签名，它的 80 行核心逻辑 `consume` 是 10.3 的主角。
+阅读顺序的理由：先看拓扑（哪些容器存在），再看配置（哪些开关打开），然后顺着「消息长什么样 → 谁发 → 谁收」读四个 mq 类。消费者本课只看入口签名，它的 48 行（:66-113）核心逻辑 `consume` 是 10.3 的主角。
 
 ## 4. 类的定位
 

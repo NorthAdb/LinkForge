@@ -66,7 +66,7 @@
 
 ### 2.2 并发维度：singleflight 省的是什么
 
-singleflight 不省单个请求的开销，省的是并发放大。同码 N 个并发只打一次库：首个请求当 Leader 执行行读，其余跟车共享结果，600 毫秒等待上限钉死最坏延迟，超时者退化成自己读（`SingleFlight.java:57-100`、[8.4](../modules/08-redis-cache/04-singleflight.md) 第 9 节）。它解决的具体场景是「热点码缓存失效的瞬间，N 个请求同时打到第 6 步」。Leader 在自己的请求线程上同步执行，没有额外线程池（javadoc :22-23 的 "no extra pool, no async hand-off"）；写路径提交后用 peek 加 forget 两步删除在途键，把与后到飞行的竞争避开（A10 审计 N1，[8.4](../modules/08-redis-cache/04-singleflight.md) 第 9 节）。注意它不跨实例：另一台进程的同码并发各飞各的，这是进程内实现的诚实边界（javadoc 自述，A10 交接口径）。
+singleflight 不省单个请求的开销，省的是并发放大。同码 N 个并发只打一次库：首个请求当 Leader 执行行读，其余跟车共享结果，500 毫秒等待上限钉死最坏延迟，超时者退化成自己读（`SingleFlight.java:57-100`、[8.4](../modules/08-redis-cache/04-singleflight.md) 第 9 节）。它解决的具体场景是「热点码缓存失效的瞬间，N 个请求同时打到第 6 步」。Leader 在自己的请求线程上同步执行，没有额外线程池（javadoc :22-23 的 "no extra pool, no async hand-off"）；写路径提交后用 peek 加 forget 两步删除在途键，把与后到飞行的竞争避开（A10 审计 N1，[8.4](../modules/08-redis-cache/04-singleflight.md) 第 9 节）。注意它不跨实例：另一台进程的同码并发各飞各的，这是进程内实现的诚实边界（javadoc 自述，A10 交接口径）。
 
 想在运行时观察这张开销表，指标是对应物：`linkforge.l1.hit/.miss` 对第 4、5 项，`linkforge.singleflight.loads/.shared` 对并发维度，`linkforge.cache.failopen` 对 L2 降级，`linkforge.click.record.failopen` 对第 9 项的失败侧（`README.md:609-619` 的指标参考表）。这些计数器只能证比例和降级是否发生，不能当延迟数据用；延迟直方图在 `http.server.requests` 的 SLO 桶里，观测栈的接法见 [14.2](../modules/14-observability/02-metrics-gauges-grafana.md)。
 

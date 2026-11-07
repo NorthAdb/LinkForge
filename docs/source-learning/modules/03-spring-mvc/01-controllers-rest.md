@@ -30,7 +30,7 @@
 | `link/dto/CreateShortLinkRequest.java`（78 行） | 创建入参 | 第 9 | Jackson 未知属性捕获 |
 | `config/OpenApiConfig.java`（41 行） | OpenAPI 文档信息 | 第 10 | springdoc 装配 |
 
-路径缩写：`link/` = `src/main/java/com/linkforge/link/`，下同。本节覆盖 8 个 Controller 的全部 26 个端点。
+路径缩写：`link/` = `src/main/java/com/linkforge/link/`，下同。本节覆盖 8 个 Controller 的全部 28 个端点。
 
 ## 4. 类的定位
 
@@ -267,7 +267,7 @@ Controller 在第 4 步之后就退场了。它绑定参数、声明路由、交
 
 ## 10. 本节总结
 
-- 8 个 Controller、26 个端点；门面层薄到每方法 1-4 行，业务全在 Service。
+- 8 个 Controller、28 个端点；门面层薄到每方法 1-4 行，业务全在 Service。
 - 绑定五件套：`@PathVariable`、`@RequestParam(defaultValue)`、`@RequestHeader`、`@RequestBody + @Valid`、`MultipartFile`。
 - 状态码约定：400 输入、401 认证、403 授权、404 存在性与归属伪装、409 冲突、410 过期/坏目标、429 限流、503 暂不可用。
 - Jackson：`@JsonAnySetter` 捕获未知属性交给 Service 裁决；日期固定东八 ISO 文本；只读响应体用 record。

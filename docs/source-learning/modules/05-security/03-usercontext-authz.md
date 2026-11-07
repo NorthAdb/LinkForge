@@ -35,7 +35,7 @@
 
 `UserContext` 是项目自建的「请求级身份快照」。Spring Security 其实自带类似机制（SecurityContext 也是请求级的），项目为什么再造一个：服务层与 Controller 只 import 自己的 `AuthUser`/`UserContext`，不 import Spring Security 的类型。好处是业务层与安全框架解耦，将来换认证方案（比如换掉 Spring Security）业务代码不动；代价是身份存了两份，两处都要清理（两个 Filter 的 finally 都清双份）。这是刻意取舍，不是重复。
 
-`AuthUser` 是载荷本体。四个字段里 `apiKeyScope` 最特别：JWT 用户恒为 null（`JwtAuthFilter.java:44`），key 请求携带 "USER" 或 "TENANT"（`ApiKeyAuthFilter.java:97-98`）。scope 的消费点在 ShortLinkService 的视野判定，第 5.4 节展开。
+`AuthUser` 是载荷本体。四个字段里 `apiKeyScope` 最特别：JWT 用户恒为 null（`JwtAuthFilter.java:44`），key 请求携带 "USER" 或 "TENANT"（`ApiKeyAuthFilter.java:97-98`）。scope 的消费点在 ShortLinkService 的视野判定，第 5.6 节展开。
 
 ## 5. 核心源码详解
 
@@ -223,4 +223,4 @@ UserContext 用 21 行封装了请求级身份，两个 Filter 各管 set 与 fi
 
 ## 12. 与后续课程的联系
 
-12.1 的 ApiKeyAuthFilter 会在 `:97-98` 构造带 scope 的 AuthUser，scope 如何改变服务层视野（TENANT 见全租户）已在 5.6 铺垫。配额检查（filter 里的双闸）与固定窗口日配额的算法细节在模块 9 展开。注册登录的完整时序、租户与用户的两表事务，见专题「注册与登录全链路」（`docs/source-learning/advanced/`，待产出）。
+12.1 的 ApiKeyAuthFilter 会在 `:97-98` 构造带 scope 的 AuthUser，scope 如何改变服务层视野（TENANT 见全租户）已在 5.6 铺垫。配额检查（filter 里的双闸）与固定窗口日配额的算法细节在模块 9 展开。注册登录的完整时序、租户与用户的两表事务，见专题[「注册与登录全链路」](../../advanced/01-registration-login.md)。

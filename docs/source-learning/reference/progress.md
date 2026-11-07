@@ -11,7 +11,7 @@
 - [x] `diagrams/archify/` 项目级图表全部通过 `finalize`（非零退出视为失败），源 JSON 与 HTML 保留，`manifest.md` 含证据表
 - [x] `reference/`：class-coverage-matrix（120 个主源码类全部有去向）、feature-coverage-matrix、diagram-coverage-matrix、technical-glossary、code-navigation-index、issues-and-discrepancies 全部完成
 - [x] QA 校验器（`tools/check_docs.py`）全绿（EXIT=0，84 个计划产物）：文件齐、站内链接有效、课程模板节齐、代码块类名在源码中存在、没有留白待填的内容
-- [x] `git status` 只新增教材文件，业务源码零改动（不 commit/push，等运营者指令）
+- [x] `git status` 只新增教材文件，业务源码零改动（教材本体已按运营者指令提交 6d89797；后续审计迭代改动不提交）
 
 ## 阶段状态
 
@@ -30,7 +30,7 @@
 - 技术：Java 17、Spring Boot 3.3.5、MyBatis-Plus 3.5.9、Flyway 10、MySQL 8、Redis 7、RabbitMQ 3.13、jjwt 0.12.6、Guava 33.4.8（Bloom）、Caffeine（L1）、ZXing 3.5.3（QR）、httpclient5（Webhook 投递）、springdoc 2.6.0、Testcontainers 2.0.5。
 - 表：V1–V10 迁移，核心表 `lf_user / lf_tenant / lf_short_link / lf_link_variant / lf_click_log / lf_click_daily / lf_click_dim_daily / lf_consumed_event / lf_outbox / lf_api_key / lf_webhook_endpoint / lf_webhook_delivery / lf_webhook_agg_buffer`（准确列以 schema 报告为准）。
 - 主源码 120 文件，包：apikey / bootstrap / common(exception,ratelimit,result,util) / config / link(controller,dto,entity,mapper,service,support) / observability / retention / security / stats(controller,dto,entity,mapper,mq,service,support) / user / webhook。
-- 跳转判定总顺序（README 权威口径）：限流 → Bloom → 空值缓存 → L1/L2 → 行读 singleflight → 状态/过期 → URL 校验 → B9 BLOCK → 密码门 → B9 WARN → B2 分类 → variants 抽签 → 302 + 记点击。
+- 跳转判定总顺序（源码实测，7.1 权威口径；README 列表把 B2 排在抽签前，与源码 :708/:568-572 不符）：限流 → Bloom → 空值缓存 → L1/L2 → 行读 singleflight → 状态/过期 → URL 校验 → B9 BLOCK → 密码门 → B9 WARN → variants 抽签 → B2 分类 → 302 + 记点击。
 - 与旧资料关系：`docs/learning/` 是上一版「知识点学习库」（Java 基础到面试），其中 80/81/82 三篇是项目地图/调用链/决策的旧口径；本教材是项目源码为主线的新版体系课程，两者互补，冲突处以本教材与仓库现状为准。
 
 ## 差异与遗留（写入 issues-and-discrepancies 的候选）
@@ -78,3 +78,5 @@
 | 2026-11-03 06:22 | D | 专题批次 5（性能一致性 200 行 + 面试指南 254 行）交付——**Phase D 收官 14/14**；派发 Phase E 代理 2（术语表+代码导航索引） | 在跑：Phase E 矩阵、Phase E 术语/导航；剩余：02 行数微调、终验 |
 | 2026-11-03 06:35 | F | 退出条件 7/7 全勾；全量校验器 EXIT=0；等待独立复查结论后出最终报告 | Phase F 进行中 |
 | 2026-11-03 06:39 | F | 独立复查「有保留通过」（同族新上下文；环境无第二模型族，已如实降级）；2 项中severity发现当场修复（progress 状态表、checker sha256 绑定）；最终报告 .audit/final-report.md；自愈定时任务删除 | **任务完成**：退出条件 7/7，校验器 EXIT=0 |
+| 2026-11-03 23:33 | R1 | 教材审计迭代开工（用户指令：找不一致/表述问题，迭代优化版，不提交）；fidelity 脚本 2040 行抽检 16 未命中（1 真问题）；批次 A/B 审计代理在跑 | 审计批次 C/D 排队 |
+| 2026-11-04 00:53 | R1 | 教材审计迭代完成：4 批审计+保真度脚本共报 1 P0/17 P1/约 35 P2，全部修复或实测否决；319 口径终裁清账（144+7=151，双重扣减错误已全网更正）；12 步链三套口径以 7.1 为唯一权威清账；校验器 EXIT=0；本轮改动未提交（用户指令） | 教材 v2 状态（工作区未提交 diff） |

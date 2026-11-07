@@ -138,7 +138,7 @@
 | 类名 | 所属包 | 一句话职责 | 教材去向 | 讲解方式 |
 |---|---|---|---|---|
 | com.linkforge.observability.BacklogGauges | observability | outbox/webhook 积压 3 个 Gauge，定时采样与抓取解耦 | 14.2 合并讲 | 合并讲 |
-| com.linkforge.observability.HttpUriTagAllowList | observability | http.server.requests 的 uri tag 白名单 MeterFilter | 14.1 合并讲 | 合并讲 |
+| com.linkforge.observability.HttpUriTagAllowList | observability | http.server.requests 的 uri tag 白名单 MeterFilter | 2.2 专属精讲、14.1 合并讲 | 专属精讲 + 合并讲 |
 
 ## com.linkforge.retention（1 类）
 

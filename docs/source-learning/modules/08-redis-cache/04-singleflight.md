@@ -200,10 +200,10 @@ ShortLink link = singleFlight.run(code, () -> rowLoader.load(code));
 
 按顺序看两张图：
 
-1. [../../diagrams/archify/html/13-cache-hit-miss-sequence.html](../../diagrams/archify/html/13-cache-hit-miss-sequence.html)（由并行任务产出，若尚未生成本链接暂不可点）：缓存命中与未命中的时序，本课对应其中「行读 singleflight」节点：Leader 执行 `rowLoader.load`（`SingleFlight.java:68`），Follower 等待 `existing.get`（:80）。
+1. [../../diagrams/archify/html/13-cache-hit-miss-sequence.html](../../diagrams/archify/html/13-cache-hit-miss-sequence.html)：缓存命中与未命中的时序，本课对应其中「行读 singleflight」节点：Leader 执行 `rowLoader.load`（`SingleFlight.java:68`），Follower 等待 `existing.get`（:80）。
 2. [../../diagrams/archify/html/02-function-map.html](../../diagrams/archify/html/02-function-map.html)（已通过）：`SingleFlight` 与 `ShortLinkRowLoader` 在 `link.support` 包的位置，以及 `ShortLinkService` 三条调用边（读 :649/:757，写 :512/:537/:554）。
 
-模块 7.1 的判定链图（12-redirect-decision，由并行任务产出）把本课内容画成第 6 步，与 [../../diagrams/mermaid/redirect-decision-chain.md](../../diagrams/mermaid/redirect-decision-chain.md) 的备用图等价。
+模块 7.1 的判定链图（12-redirect-decision）把本课内容画成第 6 步，与 [../../diagrams/mermaid/redirect-decision-chain.md](../../diagrams/mermaid/redirect-decision-chain.md) 的备用图等价。
 
 ## 8. 项目中的真实执行过程
 

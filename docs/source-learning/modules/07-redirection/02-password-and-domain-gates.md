@@ -184,7 +184,7 @@ controller 给每个 HTML 响应补 `Cache-Control: no-store`、CSP、`X-Content
 
 ## 7. 可视化
 
-1. [../../diagrams/archify/html/12-redirect-decision.html](../../diagrams/archify/html/12-redirect-decision.html)（由并行任务产出）：步骤 9（B9 BLOCK）、10（密码门）、11（B9 WARN）三个节点即本课主干；解锁后的回流（303 → 带 cookie 重走 GET）对应 unlock 分支。
+1. [../../diagrams/archify/html/12-redirect-decision.html](../../diagrams/archify/html/12-redirect-decision.html)：步骤 9（B9 BLOCK）、10（密码门）、11（B9 WARN）三个节点即本课主干；解锁后的回流（303 → 带 cookie 重走 GET）对应 unlock 分支。
 2. [../../diagrams/archify/html/02-function-map.html](../../diagrams/archify/html/02-function-map.html)：功能地图的跳转域，可见「密码解锁」与「域名拦截」两条能力叶。
 
 ## 8. 项目中的真实执行过程

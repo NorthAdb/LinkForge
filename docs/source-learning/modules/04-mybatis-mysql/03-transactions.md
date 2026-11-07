@@ -289,7 +289,7 @@ flushWindow 有两个触发者：计数达到阈值（从 consume 事务内部�
 
 ## 9. 为什么这样设计
 
-- 事务短而少：全项目只有 4 个注解事务位与 5 个模板事务段，每个都圈定在「多行同生死」的最小集合上。缓存、Redis、MQ、BCrypt 一律在外。（推断：从注释反复强调 tail 在 commit 之后反推，作者对连接占用敏感。）
+- 事务短而少：全项目只有 2 个注解事务位（AuthService:64、ClickRecordService:40）与 6 个模板事务段（ShortLinkService 237/506/549 + ClickStatsService 70 + WebhookAggregateFlusher 103/130），每个都圈定在「多行同生死」的最小集合上。缓存、Redis、MQ、BCrypt 一律在外。（推断：从注释反复强调 tail 在 commit 之后反推，作者对连接占用敏感。）
 - 幂等交给唯一索引而不是分布式锁：lf_consumed_event 主键、uk_code、uk_webhook_endpoint_event 都是无外部依赖的互斥器，撞键即「已处理」，天然容忍崩溃重放（Make Operations Idempotent 的教科书落法）。
 - 双写 eventId 的设计：sync 行隐式 "log-{id}"、outbox 行显式持同 ID，让「明细与事件」在两个管道里可对账；sync 关闭时退化为 UUID，Reconciler 按标记补明细（ClickLog.eventId 非 NULL 即已计数）。
 - fail-open 只授权给数据层：限流器的 Redis 故障有自己的 fail-open（RedisRateLimiter 内部），各依赖的降级各管各的，catch 类型就是权限边界。

@@ -112,8 +112,8 @@ sequenceDiagram
 | a3 | 进程内 | L1 命中，拿到 URL，打点 l1.hit | :631-632、`UrlLocalCache.java:76-83` |
 | a4 | MySQL | singleflight 行读（Leader 或跟车），行状态 1 未过期 | :649-661 |
 | a5 | 进程内 | 行 URL 与缓存 URL 均可渲染；L2 值已过双校验，回填 L1 | :663-677 |
-| a6 | MySQL | pickVariant 查 variant 表，无分流返回 null | :708、:715-721 |
-| a7 | 进程内 | 门禁全过，返回 Redirect | :684-711 |
+| a6 | 进程内 | 门禁全过，返回 Redirect | :684-711 |
+| a7 | MySQL | pickVariant 查 variant 表，无分流返回 null | :708-711 |
 | a8 | — | render 输出 302 + Location | `RedirectController.java:86-90` |
 
 时间线 B（冷码全未命中，实例重启后首个请求）：

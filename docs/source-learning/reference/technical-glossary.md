@@ -197,7 +197,7 @@ utm_source/medium/campaign 等归因查询参数。本项目：`UtmMerger` 写�
 ## B. 本项目专有概念
 
 ### 五层读取防护
-跳转读路径的五道闸，README 权威顺序：限流 → Bloom → 空值缓存 → L1/L2 缓存 → 行读 singleflight，之后才进入状态/过期、URL 校验、B9、密码门、B9 WARN、B2、抽签等后续步骤。
+跳转读路径的五道闸，7.1 权威顺序（源码实测）：限流 → Bloom → 空值缓存 → L1/L2 缓存 → 行读 singleflight，之后才进入状态/过期、URL 校验、B9、密码门、B9 WARN、variants 抽签、B2 分类等后续步骤。
 详见 [7.1 跳转判定链](../modules/07-redirection/01-decision-chain.md)、[8.1 Redis 使用面与键空间](../modules/08-redis-cache/01-keys-and-ttl.md)、图 [13-cache-hit-miss-sequence](../diagrams/archify/html/13-cache-hit-miss-sequence.html)。
 
 ### 空值缓存（absent 缓存）
@@ -214,7 +214,7 @@ utm_source/medium/campaign 等归因查询参数。本项目：`UtmMerger` 写�
 
 ### digest（聚合摘要投递）
 Webhook AGGREGATE 模式按时间窗聚合成一条摘要消息。eventId 形如 `digest-{endpointId}-{windowStart}`[-partN]；每片最多 500 个 link 桶，超过 max-parts(10) 只发前 N 片并标 truncated；与 PER_CLICK 共用同一投递状态机。
-详见 [13.2 投递、签名、重试与聚合](../modules/13-webhook/02-delivery-signing-retry.md)、图 [16-webhook-delivery-lifecycle](../diagrams/archify/html/16-webhook-delivery-lifecycle.html)。
+详见 [13.2 投递、签名与重试](../modules/13-webhook/02-delivery-signing-retry.md)、图 [16-webhook-delivery-lifecycle](../diagrams/archify/html/16-webhook-delivery-lifecycle.html)。
 
 ### pwdVer（密码版本指纹）
 解锁 cookie 里绑定的密码哈希指纹（SHA-256 前 8 字节）。改密后 pwdVer 变化，旧 cookie 即刻失效（LinkAccessTokens.java:81-89）；cookie 名 `lf_ac_{code}`（:38-40）。

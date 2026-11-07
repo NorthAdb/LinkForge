@@ -42,7 +42,7 @@
 - `create`（`ShortLinkService.java:129-176`）：身份、限流、夹带检查、幂等调度。它决定「这次请求能不能跑、跑几次」。
 - `doCreate`（`ShortLinkService.java:203-283`）：校验、落库、提交后动作。它决定「一条链怎么被造出来」。
 
-创建时序全景图见 [11-shortlink-create](../../diagrams/archify/html/11-shortlink-create.html)（由并行任务产出，链接暂未生效时稍后再看）。Mermaid 备用图在 [create-flow.md](../../diagrams/mermaid/create-flow.md)，本课第 8 节逐节点核对。
+创建流程全景图见 [11-shortlink-create](../../diagrams/archify/html/11-shortlink-create.html)（流程图，workflow，standard 档）。Mermaid 备用图在 [create-flow.md](../../diagrams/mermaid/create-flow.md)，本课第 8 节逐节点核对。
 
 ## 5. 核心源码详解
 
@@ -280,7 +280,7 @@ private CreateShortLinkResponse doCreate(CreateShortLinkRequest request, AuthUse
 
 ## 7. 可视化
 
-1. [11-shortlink-create](../../diagrams/archify/html/11-shortlink-create.html)：本课专属时序图（并行任务产出，若链接暂未生效请稍后再看）。阅读顺序：先看泳道间的限流与幂等交互，再看事务框内的插入循环，最后看提交后的动作链。
+1. [11-shortlink-create](../../diagrams/archify/html/11-shortlink-create.html)：本课专属流程图（workflow，standard 档）。阅读顺序：先看限流与幂等两道前置闸的交互，再看事务框内的插入循环，最后看提交后的动作链。
 2. [create-flow.md（Mermaid 备用）](../../diagrams/mermaid/create-flow.md)：同一流程的静态版。图中「SETNX pending 5s 超时 / 24h 终值」对应 5.2 与 5.6 两节，「后置动作集合」对应 5.6 的六步。
 3. [02-function-map](../../diagrams/archify/html/02-function-map.html)：确认 create/doCreate 在整个函数地图上的位置，以及 CSV 导入如何汇入 doCreate。
 

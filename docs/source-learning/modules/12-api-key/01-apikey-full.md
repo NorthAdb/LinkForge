@@ -183,7 +183,7 @@ if (Boolean.TRUE.equals(first)) {
 
 1. [05-database-erd](../../diagrams/archify/html/05-database-erd.html)：lf_api_key 表全列与 lf_user 的关系（user_id）。
 2. [02-function-map](../../diagrams/archify/html/02-function-map.html)：「开放能力」域下的 key 能力叶。
-3. [10-auth-sequence](../../diagrams/archify/html/10-auth-sequence.html)：认证时序（并行任务产出，暂未生效稍后再看）。
+3. [10-auth-sequence](../../diagrams/archify/html/10-auth-sequence.html)：认证时序。
 4. 认证决策流：
 
 ```mermaid
@@ -245,4 +245,4 @@ flowchart TD
 
 ## 12. 与后续课程的联系
 
-模块 9 会把两道闸用到的 RedisRateLimiter 拆开：Lua 滑动窗口逐行、fail-open 语义、固定窗口的 INCR/EXPIRE 细节。TENANT scope 对服务层视野的改变（`ShortLinkService.java:906-908`）在 5.3 已铺垫。Webhook 的 endpoint 管理同为 JWT-only，key 触不到，对照模块 13。综合演练见专题「API Key 认证」（`docs/source-learning/advanced/`，待产出）。
+模块 9 会把两道闸用到的 RedisRateLimiter 拆开：Lua 滑动窗口逐行、fail-open 语义、固定窗口的 INCR/EXPIRE 细节。TENANT scope 对服务层视野的改变（`ShortLinkService.java:906-908`）在 5.3 已铺垫。Webhook 的 endpoint 管理同为 JWT-only，key 触不到，对照模块 13。综合演练见专题「API Key 认证」（[../../advanced/10-api-key-auth.md](../../advanced/10-api-key-auth.md)）。

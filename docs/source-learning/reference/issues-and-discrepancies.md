@@ -13,7 +13,7 @@
 
 | # | 发现 | 裁决与现状 |
 |---|------|-----------|
-| 2.1 | README 徽章「tests 319 (151+166+2)」与源码 @Test 注解计数 312 不一致 | 部分对平：IT 侧 168-2=166 ✓（时区 fork 排除）；UT 侧静态推演 144-1+7=**150**（唯一 @ParameterizedTest @ LinkValidationsTest.java:62-63 展开 7 例），与 surefire 口径 151 **差 1 例**，注解静态解释不了，待 CI「Tests run」日志复核。教材按双口径引用并保留追问（15.1） |
+| 2.1 | README 徽章「tests 319 (151+166+2)」与源码 @Test 注解计数 312 不一致 | ✅ 已解决——319 与注解推演 318 的 1 例差系编写者双重扣减错误（把独立的 @ParameterizedTest 误当作已含在 144 内）；实际 144 个 `@Test` 不含参数化方法，`LinkValidationsTest.java:62-63` 的 `@ParameterizedTest` 展开 7 例，144+7=151 与 surefire 精确对平，151+166+2=319 全对平。教训入 15.1 |
 | 2.2 | README 页头压测数字是 Windows 历史实测（2026-10-24，固定窗口时期），不代表当前 tip；B10 Linux bench 未跑 | 全教材只引用该口径并标注，不补造任何数字 |
 | 2.3 | README:414 称 ClickLogReconciler「仅 sync 开启时运行」，代码门禁实为 `asyncClickEnabled && syncClickEnabled`（ClickLogReconciler.java:33-35） | 子集关系（README 描述是代码行为的特例表述），不矛盾；教材按代码门禁表述 |
 

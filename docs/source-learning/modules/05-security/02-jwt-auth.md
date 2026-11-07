@@ -150,7 +150,7 @@ protected void doFilterInternal(HttpServletRequest request, HttpServletResponse 
 
 ## 7. 可视化
 
-1. [10-auth-sequence](../../diagrams/archify/html/10-auth-sequence.html)：注册/登录/过滤器链时序图，本模块专属（并行任务产出，链接暂未生效时稍后再看）。
+1. [10-auth-sequence](../../diagrams/archify/html/10-auth-sequence.html)：注册/登录/过滤器链时序图，本模块专属。
 2. [03-package-map](../../diagrams/archify/html/03-package-map.html)：security 包内部，JwtService 与两个 Filter 的引用方向。
 3. 登录签发与请求校验的对应关系：
 
@@ -214,4 +214,4 @@ JwtService 46 行，管两件事：用 `linkforge.jwt.secret` 签 24 小时有�
 
 ## 12. 与后续课程的联系
 
-5.3 把 finally 双清背后的 ThreadLocal 机制讲透，并讨论服务层如何用 `UserContext` 做授权判定与越权防护。12.1 的 ApiKeyAuthFilter 与本课 Filter 结构同构，可对照阅读。注册登录的完整业务链路（限流、租户创建、BCrypt）在专题「注册与登录全链路」展开（`docs/source-learning/advanced/`，待产出）。
+5.3 把 finally 双清背后的 ThreadLocal 机制讲透，并讨论服务层如何用 `UserContext` 做授权判定与越权防护。12.1 的 ApiKeyAuthFilter 与本课 Filter 结构同构，可对照阅读。注册登录的完整业务链路（限流、租户创建、BCrypt）在专题[「注册与登录全链路」](../../advanced/01-registration-login.md)展开。

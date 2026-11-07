@@ -13,7 +13,7 @@
 
 ### 2. apikey：开放能力
 - 职责：API Key 生命周期与认证过滤。`ApiKeyController`(54 行) / `ApiKeyService`(165) / `ApiKey` 实体 / `ApiKeyMapper`。
-- 认证过滤器 `ApiKeyAuthFilter`(162 行) 放在 security 包（本包共 5 文件）。
+- 认证过滤器 `ApiKeyAuthFilter`(162 行) 放在 security 包（security 包 9 文件，其中 apikey 包 5 文件）。
 - 课程 [12.1 API Key 全流程](../modules/12-api-key/01-apikey-full.md)、[advanced/10 API Key 认证](../advanced/10-api-key-auth.md)。
 - 改动注意：明文只在创建响应返回一次，库里只有 SHA-256 `key_hash`（ApiKeyService.java:119-122、:152-164）；撤销要幂等。
 - 改动注意：scope 双闸 USER|TENANT，TENANT 需 ADMIN（:40-51）；配额是分钟滑窗 + 固定日窗双闸（ApiKeyAuthFilter.java:112-137）。
@@ -29,9 +29,9 @@
 - `exception/` `BizException` 家族与 `GlobalExceptionHandler` 全映射（RateLimitedException→429+Retry-After，:20-25）。
 - `ratelimit/` `RedisRateLimiter`(105)、`RateLimitKeys`、`sliding_window.lua`（限流核心三件）。
 - `util/` `ClientIps`（XFF 默认不信任）、`CsvFormat`（RFC4180 转义）。
-- 课程 [2.1 统一响应与全局异常](../modules/02-common/01-unified-response-exceptions.md)、[2.2 日志与工具类](../modules/02-common/02-logging-utils-clientip.md)、[9.1 滑动窗口限流](../modules/09-rate-limit/01-sliding-window-lua.md)。
+- 课程 [2.1 统一响应与全局异常](../modules/02-common/01-unified-response-exceptions.md)、[2.2 日志、XFF 与 URI tag 白名单](../modules/02-common/02-logging-utils-clientip.md)、[9.1 滑动窗口限流](../modules/09-rate-limit/01-sliding-window-lua.md)。
 - 改动注意：改 `ApiResponse` 形状要同步改认证过滤器里 5 处硬编码 JSON（ApiKeyAuthFilter.java:36-37 注释自述双写漂移）。
-- 改动注意：`RateLimitKeys` javadoc 记录 WRONGTYPE 事故，键名空间勿乱改（:13-15）。
+- 改动注意：`RateLimitKeys` javadoc 记录 WRONGTYPE 事故，键名空间勿乱改（javadoc 事故记录 :3-7，sw() 方法体在 :13-15）。
 
 ### 5. config：配置与装配
 - 职责：`LinkForgeProperties`(239 行，14 个内部类，`linkforge.*` 全部业务配置)；`RedisConfig`（StringRedisTemplate + 监听容器）；`MybatisPlusConfig`（分页插件）；`SchedulingConfig`（仅 @EnableScheduling）；`OpenApiConfig`。
@@ -84,11 +84,11 @@
 - 课程 [5.2 JWT 签发与校验](../modules/05-security/02-jwt-auth.md)、[advanced/01 注册与登录全链路](../advanced/01-registration-login.md)。
 - 注意：注册是事务建租户+首用户，user 插入失败靠回滚防孤儿占名（AuthService.java:59-63）；登录无 IP 限流且 BCrypt 只在租户有效时执行，计时侧信道是课堂讨论点。
 
-### 12. webhook：对外投递（14 文件）
+### 12. webhook：对外投递（15 文件）
 - 职责：`WebhookService`(327) 端点 CRUD + 入队分流（PER_CLICK :280-305 / AGGREGATE :313-326）。
 - 聚合与投递：`WebhookAggregateFlusher`(237，5 秒 sweep)、`WebhookDeliveryRelay`(167，2 秒投递轮)。
 - 安全侧：`WebhookSigner`(35)、`WebhookSecretCipher`(106)、`WebhookTargetGuard`(169)、`PinnedHttpSender`(101)、`AggregateWindows`(54)。
-- 课程 [13.1 端点配置与密钥加密](../modules/13-webhook/01-endpoints-and-cipher.md)、[13.2 投递、签名、重试与聚合](../modules/13-webhook/02-delivery-signing-retry.md)、[13.3 SSRF 防护](../modules/13-webhook/03-ssrf-and-aggregate.md)、[advanced/11 Webhook 投递与重试](../advanced/11-webhook-delivery-retry.md)。
+- 课程 [13.1 端点配置与密钥加密](../modules/13-webhook/01-endpoints-and-cipher.md)、[13.2 投递、签名与重试](../modules/13-webhook/02-delivery-signing-retry.md)、[13.3 SSRF 防护](../modules/13-webhook/03-ssrf-and-aggregate.md)、[advanced/11 Webhook 投递与重试](../advanced/11-webhook-delivery-retry.md)。
 - 配图 [16-webhook-delivery-lifecycle](../diagrams/archify/html/16-webhook-delivery-lifecycle.html)。
 - 改动注意：master key 不可用整批跳过且不耗 attempts（WebhookDeliveryRelay.java:71-76）；`uk_webhook_tenant` 决定每租户仅一个 endpoint。
 - 改动注意：SSRF 防护是「保存 check + 发送 resolve 钉死 + 禁重定向」闭环，拆开任何一环都破防；调度列一律 DB 时钟。
@@ -116,7 +116,7 @@
 |------|----------|-----------|
 | 401 | 三个来源对号：entryPoint "unauthorized"（SecurityConfig.java:72-76）/ 坏 JWT 直写 "invalid token"（JwtAuthFilter.java:51-54）/ 坏 key 或已撤销 "invalid api key"（ApiKeyAuthFilter.java:82,88，对外同文案、metrics tag 区分 revoked） | [5.1](../modules/05-security/01-security-filter-chain.md)、[12.1](../modules/12-api-key/01-apikey-full.md)、图 [10-auth-sequence](../diagrams/archify/html/10-auth-sequence.html) |
 | 404 | 跳转链按序查：Bloom 拒（resolveTarget :615-618，meter bloom.rejected）→ absent 命中（:623-626）→ 行不存在（:650-654）→ status≠1（:656-658）；管理面 404 来自 requireExisting(:882-888) 与越权 getOwnedLink(:890-903)，越权刻意 404 不说 403 | [7.1](../modules/07-redirection/01-decision-chain.md)、[5.3](../modules/05-security/03-usercontext-authz.md)、图 [12-redirect-decision](../diagrams/archify/html/12-redirect-decision.html) |
-| 429 | 查键：`RateLimitKeys.sw()` = `linkforge:rl:sw:{logical}`，entry 有 create/user/redirect/ip/import；API Key 是 `sw(min:{keyId})` 分钟滑窗 + `day:{keyId}:{yyyyMMdd}` 固定日窗（Asia/Shanghai）；Redis 里滑窗键是 ZSET；WRONGTYPE 先看键类型（RateLimitKeys.java:13-15 注释） | [9.1](../modules/09-rate-limit/01-sliding-window-lua.md)、[9.2](../modules/09-rate-limit/02-idempotency-and-quotas.md) |
+| 429 | 查键：`RateLimitKeys.sw()` = `linkforge:rl:sw:{logical}`，entry 有 create/user/redirect/ip/import；API Key 是 `sw(min:{keyId})` 分钟滑窗 + `day:{keyId}:{yyyyMMdd}` 固定日窗（Asia/Shanghai）；Redis 里滑窗键是 ZSET；WRONGTYPE 先看键类型（RateLimitKeys.java:3-7 注释） | [9.1](../modules/09-rate-limit/01-sliding-window-lua.md)、[9.2](../modules/09-rate-limit/02-idempotency-and-quotas.md) |
 | 统计不对 | 顺序查：sync/async 开关（UV 依赖 sync 双写，ClickStatsService.java:122-125）→ B2 过滤（meter click.skipped，prefetch 不计数）→ `lf_consumed_event` 是否已收（DuplicateKey 早退）→ 明细行 event_id 是否回填（NULL=未消费，Reconciler 扫描条件）→ `lf_click_daily` upsert 是否命中唯一索引；对账等 `ClickLogReconciler` 30 秒一轮 | [11.1](../modules/11-statistics/01-click-record-pipeline.md)、[11.3](../modules/11-statistics/03-stats-api-reconciler.md)、[advanced/09](../advanced/09-stats-reconcile.md)、图 [14-click-pipeline-dataflow](../diagrams/archify/html/14-click-pipeline-dataflow.html) |
 | 积压 gauge | `BacklogGauges` 3 个 gauge（outbox/webhook，15 秒采样），看 `/actuator/prometheus`（带 scrape-token，fail-closed）或 Grafana（compose 3001 端口）；积压增长伴随 meter `outbox.failed` 说明有行进终态；MQ 侧看 RabbitMQ 管理 15672 队列深度 | [14.2](../modules/14-observability/02-metrics-gauges-grafana.md)、[10.2](../modules/10-rabbitmq-outbox/02-outbox-relay.md) |
 | DLQ | 队列 `linkforge.click.dlq`（RabbitMQ 管理 UI 15672 查看与重派）；入队原因：消费抛异常 + default-requeue-rejected=false；Jackson converter 缺 JavaTimeModule 是历史全量入 DLQ 的坑（RabbitMqConfig.java:57-62）；重放走 Outbox 行 UPDATE 回 PENDING（手工重放，FAILED 不自动重试） | [10.3](../modules/10-rabbitmq-outbox/03-consumer-idempotency-dlq.md)、图 [07-rabbitmq-topology](../diagrams/archify/html/07-rabbitmq-topology.html)、[15-outbox-lifecycle](../diagrams/archify/html/15-outbox-lifecycle.html) |

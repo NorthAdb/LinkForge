@@ -36,7 +36,7 @@
 - `ApiKeyAuthFilter` 在 `security` 包，是挂进 Spring Security 过滤器链的 `OncePerRequestFilter`。它的完整认证流程（X-API-Key 头解析、吊销检查、UserContext 装配）在模块 12 课讲过，本课只切出其中的配额闸 `withinQuota`。
 - `ShortLinkService` 的幂等段属于 link 域；本课从「键与配额」的视角回看它。
 - 两个 Retry-After 出口分属两层：controller 层异常走 `GlobalExceptionHandler`，filter 层的 `writeQuotaExceeded` 手写响应。
-- Redis 键全景见 [../../diagrams/archify/html/06-redis-data-flow.html](../../diagrams/archify/html/06-redis-data-flow.html)（由并行任务产出）；`lf_api_key` 表结构见 [../../diagrams/archify/html/05-database-erd.html](../../diagrams/archify/html/05-database-erd.html)。
+- Redis 键全景见 [../../diagrams/archify/html/06-redis-data-flow.html](../../diagrams/archify/html/06-redis-data-flow.html)；`lf_api_key` 表结构见 [../../diagrams/archify/html/05-database-erd.html](../../diagrams/archify/html/05-database-erd.html)。
 
 ## 5. 核心源码详解
 
@@ -156,7 +156,7 @@ INCR 返回 1 说明这是窗口内第一个请求，给键武装 TTL 的责任�
 
 ## 7. 可视化
 
-1. [../../diagrams/archify/html/06-redis-data-flow.html](../../diagrams/archify/html/06-redis-data-flow.html)（由并行任务产出）：限流与幂等两类键的读写流。本课对应：日窗键的 INCR/EXPIRE 分支、幂等键的 pending→终值两段。
+1. [../../diagrams/archify/html/06-redis-data-flow.html](../../diagrams/archify/html/06-redis-data-flow.html)：限流与幂等两类键的读写流。本课对应：日窗键的 INCR/EXPIRE 分支、幂等键的 pending→终值两段。
 2. [../../diagrams/archify/html/02-function-map.html](../../diagrams/archify/html/02-function-map.html)：开放能力域的 API Key 叶子，`withinQuota` 挂在它的认证链上。
 
 ## 8. 项目中的真实执行过程
@@ -193,7 +193,7 @@ INCR 返回 1 说明这是窗口内第一个请求，给键武装 TTL 的责任�
 - 幂等两段式：查终值 → 抢 5 秒租约 → 轮询或执行 → 终值 TTL 24 小时；fail-open 不对称，settle 失败的窗口被注释明示。
 - API Key 双闸：分钟滑动窗口（任意 60 秒不超）加日固定窗（上海自然日重置），先分钟后日。
 - 日窗武装失败尽力删键，防「计数永不过期的永久 429」；日期编入键名把最坏持续压到一个自然日。
-- 键族 10 键：8 个 ZSET 全带 `sw:` 段，2 个 STRING 各守其名；幂等键与限流键共享 `rl:` 前缀做环境隔离。
+- 键族 10 键：7 个 ZSET 带 `sw:` 段，3 个 STRING（day/idem/touch）各守其名；幂等键与限流键共享 `rl:` 前缀做环境隔离。
 - Retry-After 三口径（滑窗真实报价、配置拒绝整窗、日窗距午夜）两出口（advice 统一翻译、filter 手写镜像）。
 
 ## 11. 课后练习

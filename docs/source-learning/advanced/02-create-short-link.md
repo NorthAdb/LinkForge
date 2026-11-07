@@ -108,7 +108,7 @@ pending 锁的 5 秒 TTL 是自愈设计：赢家进程崩溃后锁自动消失�
 
 **节点六：requireUser 的纵深防御。** 过滤器链已经保证受保护路径必有身份，`create` 第一步仍然调 `requireUser`（:130，实现在 :910-916，空身份抛 401）。这是纵深防御：链层配置改动、新入口接入时，服务层的判空让错误表现为干净的 401 而不是 NullPointerException 换 500（回看 [5.3](../modules/05-security/03-usercontext-authz.md) 第 5.4 节）。
 
-**节点七：幂等键与限流键共用一套前缀。** 限流键用 `RateLimitKeys.sw` 拼前缀（:133），幂等键用同一个 `keyPrefix` 手工拼接（:142），默认 `linkforge:rl:`（application.yml:204），TTL 各自独立（pending 5 秒硬编码于 :155，终值 86400 秒走配置 :202）。共用前缀意味着排障时按 `linkforge:rl:*` 能同时看到两类键。区别在键的中段语义：限流键带 `create:user:`，幂等键带 `idem:{userId}:`，userId 进幂等键是租户隔离的一部分。
+**节点七：幂等键与限流键共用一套前缀。** 限流键用 `RateLimitKeys.sw` 拼前缀（:133），幂等键用同一个 `keyPrefix` 手工拼接（:142），默认 `linkforge:rl:`（application.yml:205），TTL 各自独立（pending 5 秒硬编码于 :155，终值 86400 秒走配置 :202）。共用前缀意味着排障时按 `linkforge:rl:*` 能同时看到两类键。区别在键的中段语义：限流键带 `create:user:`，幂等键带 `idem:{userId}:`，userId 进幂等键是租户隔离的一部分。
 
 ## 6. 正常流程：带 Idempotency-Key 的一次创建
 

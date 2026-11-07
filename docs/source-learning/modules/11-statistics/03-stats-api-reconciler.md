@@ -194,7 +194,7 @@ Service 侧 `stats`（`ClickStatsService.java:126-142`）：
 ## 7. 可视化
 
 - [08-scheduled-tasks](../../diagrams/archify/html/08-scheduled-tasks.html)：看 ClickLogReconciler 的 30s/15s 节点与 ClickOutboxRelay 的 2s/3s 节点并列，两个搬运工共享调度线程池。
-- [14-click-pipeline-dataflow](../../diagrams/archify/html/14-click-pipeline-dataflow.html)：看「consume」节点同时接 live 与 reconcile 两条入边，dedup 锁是汇合点。（该图由并行任务产出，若尚未就位，先用下方 Mermaid 备用图。）
+- [14-click-pipeline-dataflow](../../diagrams/archify/html/14-click-pipeline-dataflow.html)：看「consume」节点同时接 live 与 reconcile 两条入边，dedup 锁是汇合点。
 - Mermaid 备用：[click-pipeline](../../diagrams/mermaid/click-pipeline.md)。[05-database-erd](../../diagrams/archify/html/05-database-erd.html)：核对 stats 查询涉及的四张表与索引。
 
 阅读顺序：先 08 对上「谁在什么时候跑」，再 14 看双通道汇合，最后 05 对表。节点对应：「stats API」节点 = `StatsController` 三端点；「reconcile」节点 = `ClickLogReconciler.reconcile`；「dedup 锁」节点 = `lf_consumed_event` 主键插入。

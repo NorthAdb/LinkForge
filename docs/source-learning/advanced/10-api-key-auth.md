@@ -112,7 +112,7 @@ public ApiKey authenticate(String plaintextKey) {
 | t4 | 甲撤销：写 revokedAt，幂等（重复撤销直接 return） | `ApiKeyService.java:105-115` |
 | t5 | 下一个带该 key 的请求立刻 401，测试断言文案与「no auth cache」 | `ApiKeyAuthFilter.java:85-90`；`ApiKeyIT.java:92-106` |
 
-TENANT scope 的视野差在服务层生效：`isTenantWide` 只认 `AuthUser.getApiKeyScope()` 为 TENANT 的请求（`ShortLinkService.java:904-906`），TENANT key 见全租户短链，USER key 与 JWT 只见自己，跨租户一律 404（`TenantApiKeyIT.java:119-160` 断言口径）。
+TENANT scope 的视野差在服务层生效：`isTenantWide` 只认 `AuthUser.getApiKeyScope()` 为 TENANT 的请求（`ShortLinkService.java:906-908`），TENANT key 见全租户短链，USER key 与 JWT 只见自己，跨租户一律 404（`TenantApiKeyIT.java:119-160` 断言口径）。
 
 看板侧这条链留下两组指标：`linkforge.apikey.auth{result=ok|invalid|revoked|ambiguous}` 是认证分母与拒绝原因，`linkforge.apikey.quota.rejected{window=minute|day}` 是配额拒绝。两个指标的比值直接回答「key 请求失败在身份还是配额」。
 
@@ -143,7 +143,7 @@ TENANT scope 的视野差在服务层生效：`isTenantWide` 只认 `AuthUser.ge
 
 **一、每请求点查数据库，不建认证缓存。** 撤销即时生效是强保证，缓存就有失效窗口。代价是每次 key 认证付一次走唯一索引的点查，主键级查询在本项目的量级下可负担（推断：代码未写性能依据，取舍理由从「无任何缓存失效逻辑 + 测试钉死即时性」反推）。对照 webhook secret 用 AES-GCM 可逆加密：key 认证只需比对，哈希即可；签名需要明文，才必须可逆（13.1 第 5.5 节口径）。
 
-**二、TENANT scope 扩的是视野，不是身份。** key 始终以创建者身份落库（D-Bw2-3），TENANT 只让查询范围覆盖全租户（`ShortLinkService.java:904-906`）。这把权限模型压成两维：谁在行动（user_id）与看得到什么（scope）。加第三种 scope 时服务层只需要多一个判定分支，矩阵与审计不用动（推断：从常量只有两个值与判定写法推出）。
+**二、TENANT scope 扩的是视野，不是身份。** key 始终以创建者身份落库（D-Bw2-3），TENANT 只让查询范围覆盖全租户（`ShortLinkService.java:906-908`）。这把权限模型压成两维：谁在行动（user_id）与看得到什么（scope）。加第三种 scope 时服务层只需要多一个判定分支，矩阵与审计不用动（推断：从常量只有两个值与判定写法推出）。
 
 **三、能力白名单防横扩。** `/api/links/**` 收 USER 与 API_KEY 两个角色，其余一切 `/api/**` 只认 USER（`SecurityConfig.java:63-64`）。泄露的 key 的爆炸半径因此限于数据面：能读能建短链，不能造新 key、改 webhook 回调地址、看 actuator 指标。矩阵没写的一律拒绝，这比「逐面加黑名单」在新增端点时安全（推断：动机从 12.1 第 9 节与 SecurityConfig 注释归纳）。
 

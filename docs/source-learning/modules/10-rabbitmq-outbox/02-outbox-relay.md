@@ -26,14 +26,14 @@
 | 文件 | 行数 | 本课关注点 | 阅读顺序 |
 |----|----|----|----|
 | `src/main/java/com/linkforge/stats/service/ClickRecordService.java` | 91 | recordClick 全文 :40-75、toJson :77-83 | 1 |
-| `src/main/resources/db/migration/V2__outbox.sql` | 22 | lf_outbox DDL :5-16、event_id 注释 :18-21 | 2 |
+| `src/main/resources/db/migration/V2__outbox.sql` | 21 | lf_outbox DDL :5-16、event_id 注释 :18-20 | 2 |
 | `src/main/java/com/linkforge/stats/entity/Outbox.java` | 29 | 三个状态常量 :25-28 | 3 |
 | `src/main/java/com/linkforge/stats/mapper/OutboxMapper.java` | 36 | 四条状态 SQL :14-35 | 4 |
 | `src/main/java/com/linkforge/stats/service/ClickOutboxRelay.java` | 79 | relay() :39-73、backoffSeconds :75-78 | 5 |
 | `src/main/java/com/linkforge/link/service/ShortLinkService.java` | 1025 | recordClick 调用与 fail-open :565-585 | 6 |
 | `src/main/java/com/linkforge/retention/SentRowCleanup.java` | 73 | outbox 清理分支 :52-72 | 7 |
 | `src/test/java/com/linkforge/stats/OutboxDrillIT.java` | 134 | 两个验收用例 :75-133 | 8 |
-| `scripts/outbox-drill.sh` | 100 | 停 MQ 剧本 :62-99 | 9 |
+| `scripts/outbox-drill.sh` | 99 | 停 MQ 剧本 :62-99 | 9 |
 
 阅读顺序的理由：先看谁在事务里写行（写入方），再看行长什么样（DDL+实体），然后看谁把行抽走（mapper+relay），最后看可靠性如何被测试和演练证明。`ClickLogReconciler` 是另一条安全网，留给 10.3 与 11.3 课。
 
@@ -161,7 +161,7 @@ CREATE TABLE lf_outbox (
 
 注意一个与本课任务书说法相反的事实：**这三条 mark SQL 的 WHERE 条件只有 `id = #{id}`，没有 `AND status = 'PENDING'` 守卫**。对照 webhook 侧的同名方法，那里三条 mark 全部带 `AND status = 'PENDING'`（`WebhookDeliveryMapper.java:27-39`）。outbox 版不守卫是安全的，理由：relay 对某行的「拉取→发布→mark」在同一轮循环内同步完成，中间没有别的写者会改状态（多实例下两个 relay 拿到同一行的窗口见 5.6，markSent 重复执行只是把 SENT 写成 SENT，幂等无害）。webhook 版必须守卫，因为 HTTP 投递最长 7 秒（超时配置 `application.yml:166-167`），远超 2 秒 tick，同一行可能在两个 tick 里各有一份在途尝试，状态守卫让「先到的 markSent」赢（推断：以上差异原因是从 tick 周期与在途时长推出来的，代码注释未明说）。
 
-`markRetry` 的两个细节：`attempts = attempts + 1` 在 DB 端自增，不吃内存旧值；`DATE_ADD(NOW(), ...)` 用 **DB 时钟**写调度列。这是全项目的时钟规则（webhook 侧注释总结过：调度列用 DB 时钟，业务时间戳用 JVM 时钟，`WebhookDeliveryMapper.java:9-15`），测试 `WebhookRetryClockIT` 曾用 JVM+8 与 DB UTC 的偏差抓过这条规则的违规。
+`markRetry` 的两个细节：`attempts = attempts + 1` 在 DB 端自增，不吃内存旧值；`DATE_ADD(NOW(), ...)` 用 **DB 时钟**写调度列。这是全项目的时钟规则（webhook 侧注释总结过：调度列用 DB 时钟，业务时间戳用 JVM 时钟，`WebhookDeliveryMapper.java:14-19`），测试 `WebhookRetryClockIT` 曾用 JVM+8 与 DB UTC 的偏差抓过这条规则的违规。
 
 第四条 SQL 留给清理：
 
@@ -240,7 +240,7 @@ javadoc（:29-32）写明两件事：cutoff 用 DB 时钟（因为 `sent_at` 是
 ```
 `ClickOutboxRelay.java:75-78`
 
-`1L << min(n, 6)` 即 `2^n`，n 被钳到 6（`1<<6=64`），再被 `MAX_BACKOFF_SECONDS=60`（:29）压平。失败序列是 1、2、4、8、16、32，然后恒 60 秒。30 次失败的累计等待约 `1+2+4+8+16+32+60×24 ≈ 1499 秒`，25 分钟量级（推断：按公式手算的算术，非实测）。注意参数语义：`attempts` 是**拉取时读到的已失败次数**，首次发布失败时传 0，退避 1 秒。
+`1L << min(n, 6)` 即 `2^n`，n 被钳到 6（`1<<6=64`），再被 `MAX_BACKOFF_SECONDS=60`（:29）压平。失败序列是 1、2、4、8、16、32，然后恒 60 秒。30 次失败的累计等待约 `1+2+4+8+16+32+60×24 = 1503 秒`，25 分钟量级（推断：按公式手算的算术，非实测）。注意参数语义：`attempts` 是**拉取时读到的已失败次数**，首次发布失败时传 0，退避 1 秒。
 
 ### 5.6 多实例 at-least-once 与消费端兜底
 
@@ -275,7 +275,7 @@ SENT 行的保洁是 `SentRowCleanup.purgeSent`（`SentRowCleanup.java:52-72`）
 
 **指数退避与上限（通用手段）。** 本项目实现 `min(60, 2^n)`：起步快（1 秒，用户几乎无感）、封顶稳（60 秒，最多积 100 行×60 秒的吞吐压力）。上限的必要性：无上限的指数增长会让故障恢复后的第一行等几分钟才被重试；常量上限又让重试风暴可控。30 次上限（FAILED）则是给「必然失败的毒行」一个出口。
 
-**DB 时钟调度（本项目规则）。** `next_attempt_at` 的写入（`DATE_ADD(NOW())`）与比较（`<= NOW()`）都在 MySQL 里，JVM 时区漂移不影响重试节奏。对照：`sent_at` 也是 `NOW()` 写的（`OutboxMapper.java:19-20`），所以清理比较也用 `DATE_SUB(NOW(), ...)`（:33-35）；webhook 的 `sent_at` 是 JVM 写的，清理就传 JVM cutoff。同一规则在两个 mapper 的注释里互相呼应（`OutboxMapper.java:29-32`、`WebhookDeliveryMapper.java:9-15`）。
+**DB 时钟调度（本项目规则）。** `next_attempt_at` 的写入（`DATE_ADD(NOW())`）与比较（`<= NOW()`）都在 MySQL 里，JVM 时区漂移不影响重试节奏。对照：`sent_at` 也是 `NOW()` 写的（`OutboxMapper.java:19-20`），所以清理比较也用 `DATE_SUB(NOW(), ...)`（:33-35）；webhook 的 `sent_at` 是 JVM 写的，清理就传 JVM cutoff。同一规则在两个 mapper 的注释里互相呼应（`OutboxMapper.java:29-32`、`WebhookDeliveryMapper.java:14-19`）。
 
 **at-least-once 语义（通用概念）。** 本项目怎么达成：持久 outbox + 无限重试 + 确认式发布。代价：重复投递窗口（5.6 的两个来源）。为什么可接受：消费端有一条 64 字符主键的去重表，重复的成本是一次撞索引（10.3 课）。这是分布式系统「谁成本低谁兜底」的典型分派。
 
@@ -285,7 +285,7 @@ SENT 行的保洁是 `SentRowCleanup.purgeSent`（`SentRowCleanup.java:52-72`）
 
 按顺序看两图一备用：
 
-1. [../../diagrams/archify/html/15-outbox-lifecycle.html](../../diagrams/archify/html/15-outbox-lifecycle.html)（由并行任务产出，若尚未生成本链接暂不可点）：Outbox 行的完整生命周期，PENDING→SENT 与 PENDING→(retry)→FAILED 的每条边对应 5.5 的一个代码分支。
+1. [../../diagrams/archify/html/15-outbox-lifecycle.html](../../diagrams/archify/html/15-outbox-lifecycle.html)：Outbox 行的完整生命周期，PENDING→SENT 与 PENDING→(retry)→FAILED 的每条边对应 5.5 的一个代码分支。
 2. [../../diagrams/archify/html/08-scheduled-tasks.html](../../diagrams/archify/html/08-scheduled-tasks.html)：relay 与 SentRowCleanup 在共享调度池（size=6）里的位置，能看到它们与 webhook relay、reconciler 的隔离关系。
 3. Mermaid 备用 [../../diagrams/mermaid/click-pipeline.md](../../diagrams/mermaid/click-pipeline.md)：HOT 段双写、RELAY 段抽水/退避/FAILED 三分支，与本课 5.2、5.5 逐行对应。
 

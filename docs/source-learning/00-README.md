@@ -82,4 +82,4 @@ python -I docs/source-learning/tools/check_docs.py
 
 - 教材基线：仓库 `main` @ `911640c`（调查口径）；其后 `01f0b5a` 仅新增 docs。控制台（`static/index.html`）正在经历独立的 FE 波次改造，涉及控制台 UI 的描述均为编写时点口径，API 面不受影响。
 - 性能数字口径见 [01-project-overview.md](01-project-overview.md) 第 9 节：现有数字是 Windows 历史实测，不代表当前版本。
-- 测试例数：README 口径 319 = 151 单测 + 166 IT + 2 时区 fork（按执行实例计数）；源码 @Test 注解合计 312。两口径详见 [reference/issues-and-discrepancies.md](reference/issues-and-discrepancies.md)。
+- 测试例数：README 口径 319 = 151 单测（144 `@Test` + 1 个参数化方法展开 7 例）+ 166 IT + 2 时区 fork；源码 `@Test` 注解计数 312 不含参数化方法，两口径完全可平。详见 [reference/issues-and-discrepancies.md](reference/issues-and-discrepancies.md)。

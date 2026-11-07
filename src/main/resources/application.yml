@@ -28,6 +28,11 @@ management:
     web:
       exposure:
         include: health,info,metrics,prometheus   # B1: scrape endpoint, token-gated (D-Bw345-42)
+    # IDE Spring Boot Dashboard reads beans and mappings over JMX (name=Beans / name=Mappings).
+    # Boot 3.3 exposes only health on JMX unless this is set. HTTP exposure stays the list above.
+    jmx:
+      exposure:
+        include: health,beans,mappings,metrics,env
   endpoint:
     health:
       show-details: always

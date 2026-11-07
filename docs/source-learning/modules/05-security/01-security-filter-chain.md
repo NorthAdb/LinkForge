@@ -184,7 +184,7 @@ MetricsScrapeTokenFilter → JwtAuthFilter → ApiKeyAuthFilter → QrShareAuthF
 
 按顺序看：
 
-1. [10-auth-sequence](../../diagrams/archify/html/10-auth-sequence.html)（本模块专属时序图，注册/登录/过滤器链；由并行任务产出，若链接暂未生效请稍后再看）
+1. [10-auth-sequence](../../diagrams/archify/html/10-auth-sequence.html)（本模块专属时序图，注册/登录/过滤器链）
 2. [03-package-map](../../diagrams/archify/html/03-package-map.html)：security 包 9 个文件的位置与相互引用。
 3. [00-system-architecture](../../diagrams/archify/html/00-system-architecture.html)：安全层在整体架构中的入口位置。
 
@@ -247,4 +247,4 @@ SecurityConfig 用约 60 行 DSL 定义了全项目的访问控制：先关 CSRF
 
 ## 12. 与后续课程的联系
 
-5.2 打开链上第二个槽位：JwtAuthFilter 与 JwtService 的逐行实现，并回答「401 到底有几个来源」。5.3 讲项目自建的 UserContext 与授权判定。12.1 打开第三个槽位 ApiKeyAuthFilter，包括配额双闸与吊销即时性。之后可读专题「注册与登录全链路」「API Key 认证」（`docs/source-learning/advanced/`，待产出）。
+5.2 打开链上第二个槽位：JwtAuthFilter 与 JwtService 的逐行实现，并回答「401 到底有几个来源」。5.3 讲项目自建的 UserContext 与授权判定。12.1 打开第三个槽位 ApiKeyAuthFilter，包括配额双闸与吊销即时性。之后可读专题[「注册与登录全链路」](../../advanced/01-registration-login.md)与[「API Key 认证」](../../advanced/10-api-key-auth.md)。

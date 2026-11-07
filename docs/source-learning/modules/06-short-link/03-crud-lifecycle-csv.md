@@ -38,9 +38,9 @@
 
 如果说 6.2 的 `create` 是这个域的「进水口」，本课的六个方法就是「日常水位调节」。它们共享一条纪律：任何改变跳转行为的写，都要把缓存里的旧值处理干净。这条纪律具体化为一个固定收尾序列，出现在 update、setStatus、delete 三处（`ShortLinkService.java:512-519、537-540、554-557`）：
 
-```java
-singleFlight.forget(code, priorFlight);
+```text
 ... 写库 ...
+singleFlight.forget(code, priorFlight);
 cacheUrl 或 evictCache
 scheduleStaleClear(code);
 cacheBus.publishL1Invalidate(code);
@@ -161,7 +161,7 @@ public void delete(String code) {
 
 setStatus 与 delete 的收尾序列完全一致，差别在中间：delete 是事务内双删（主行逻辑删加 variants 硬删同事务，C3-N3），并且用 `evictCache` 主动删除而不是 `cacheUrl` 写穿。停用后的短链不该再有任何缓存可命中，删干净比预热更符合语义。
 
-delete 之后短码永久保留的机制在 6.1 课讲过：逻辑删不释放 `uk_code`。这里补上 Bloom 侧的另一半：Bloom 过滤器无法撤销已放入的元素（`CodeBloomFilter.java:34-35` javadoc 原文「Deleted codes stay positive (classic Bloom cannot retract)」），已删短码会一直 Bloom 阳性，然后落到行读环节由 `deleted=0` 过滤后 404。`ShortLinkMapper.selectAllCodes`（`ShortLinkMapper.java:13-23`）的注释把这件事讲反了方向，值得原文引用：
+delete 之后短码永久保留的机制在 6.1 课讲过：逻辑删不释放 `uk_code`。这里补上 Bloom 侧的另一半：Bloom 过滤器无法撤销已放入的元素（`CodeBloomFilter.java:34-35` javadoc 原文「Deleted codes stay positive (classic Bloom cannot retract)」），已删短码会一直 Bloom 阳性，然后落到行读环节由 `deleted=0` 过滤后 404。`ShortLinkMapper.selectAllCodes`（`ShortLinkMapper.java:13-23`）的 javadoc 把播种侧的依据讲得很直白，值得原文引用：
 
 ```java
 /**

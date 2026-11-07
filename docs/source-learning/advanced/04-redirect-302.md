@@ -152,9 +152,9 @@ t13 与 t14 即使全部失败，t12 的 302 也早已送达；这就是 outbox 
 | 链已过期 | 410 "short link expired" | 无 | `ShortLinkService.java:659-661` |
 | 行的 URL 脏 / 缓存值脏 | 410 "short link target is invalid" | 无 | `ShortLinkService.java:663-671` |
 | B9 名单 BLOCK | 403 + 拦截页（无目标回显） | 打点 phishing.gate | `ShortLinkService.java:684-688` |
-| 链带密码且 cookie 无效 | GET 200 解锁页 / HEAD 401 | 打点 linkforge.locked | `ShortLinkService.java:691-695`、`RedirectController.java:98-105` |
+| 链带密码且 cookie 无效 | GET 200 解锁页 / HEAD 401 | 打点 linkforge.link.locked | `ShortLinkService.java:691-695`、`RedirectController.java:98-105` |
 | 解锁表单密码错误 | 401 + 错误解锁页 | 打点 unlock{result=bad_password}；两级限流计数 | `RedirectController.java:71-78`、`ShortLinkService.java:767-788` |
-| 对没有密码的链提交 unlock | 303 跳回 /r/{code}，无 Set-Cookie | 两级限流计数（先于判定执行） | `ShortLinkService.java:786-788`、`RedirectController.java:79-81` |
+| 对没有密码的链提交 unlock | 303 跳回 /r/{code}，无 Set-Cookie | 两级限流计数（先于判定执行） | `ShortLinkService.java:781-783`、`RedirectController.java:79-81` |
 | unlock 的 Bloom/行状态镜像不通过 | 404 | 无 | `ShortLinkService.java:754-763`（[7.2](../modules/07-redirection/02-password-and-domain-gates.md) 第 5.3 节） |
 | 短码大小写不匹配 | 404（码是大小写敏感的精确匹配） | 无 | `RedirectController.java:38` 参数说明、`:615-618` |
 | HEAD 撞上 WARN 名单 | 200 无正文（lf_continue 被忽略） | 打点 phishing.gate | `ShortLinkService.java:696-704`、`RedirectController.java:112-114` |

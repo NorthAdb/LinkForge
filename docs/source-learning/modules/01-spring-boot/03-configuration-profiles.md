@@ -17,9 +17,9 @@
 
 | 文件 | 职责 | 阅读顺序 | 为什么读它 |
 |------|------|----------|------------|
-| `src/main/resources/application.yml`（267 行） | 全部配置，默认加 dev 加 prod 三文档 | 第 1，对照 5.1 的地图读 | 配置总集 |
-| `src/main/java/com/linkforge/config/LinkForgeProperties.java`（239 行） | `linkforge` 前缀的绑定树 | 第 2 | 17 个字段、16 个内部类 |
-| `src/test/resources/application-test.yml`（70 行） | test profile 覆盖项 | 第 3 | 看测试如何改写默认行为 |
+| `src/main/resources/application.yml`（266 行） | 全部配置，默认加 dev 加 prod 三文档 | 第 1，对照 5.1 的地图读 | 配置总集 |
+| `src/main/java/com/linkforge/config/LinkForgeProperties.java`（239 行） | `linkforge` 前缀的绑定树 | 第 2 | 18 个字段、16 个内部类 |
+| `src/test/resources/application-test.yml`（69 行） | test profile 覆盖项 | 第 3 | 看测试如何改写默认行为 |
 
 ## 4. 类的定位
 
@@ -136,7 +136,7 @@ public class LinkForgeProperties {
     password: ${LINKFORGE_BOOTSTRAP_PASSWORD:it-not-used}
 ```
 
-test profile 的风格是「关掉一切会漂移的东西」：async-click 关、bootstrap 关、退避压到 1-2 秒、限流阈值放大到 1000（application-test.yml:45-48）、调度延迟统一一小时防测试断言被定时任务打乱（:49-53）。它还把连接类配置整个留空，由 Testcontainers 在运行时注入（:1-3 的注释）。dev 追求「开箱能跑」，test 追求「结果确定」，这是两份配置的设计分歧。
+test profile 的风格是「关掉一切会漂移的东西」：async-click 关、bootstrap 关、退避压到 1-2 秒、限流阈值放大到 1000（application-test.yml:45-48）、统计与 MQ 类定时任务的延迟拉到小时级，防测试断言被定时任务打乱（:49-53）。它还把连接类配置整个留空，由 Testcontainers 在运行时注入（:1-3 的注释）。dev 追求「开箱能跑」，test 追求「结果确定」，这是两份配置的设计分歧。
 
 ### 5.5 两个真实陷阱
 
@@ -202,7 +202,7 @@ management:
 ## 7. 可视化
 
 - [运行时与部署图](../../diagrams/archify/html/01-runtime-deployment.html)（由并行图表任务产出）：环境变量在部署图上的注入点（compose 的 environment 段），对应本节的四必填变量与 LINKFORGE_* 覆盖变量。
-- 结合 1.2 课的[系统架构图](../../diagrams/archify/html/00-system-architecture.html)：每个框的开关几乎都能在 `LinkForgeProperties` 的 17 个字段里找到同名的。
+- 结合 1.2 课的[系统架构图](../../diagrams/archify/html/00-system-architecture.html)：每个框的开关几乎都能在 `LinkForgeProperties` 的 18 个字段里找到同名的。
 
 阅读顺序：先看 5.1 的文档地图，再对照架构图挑三个你感兴趣的开关注回 yml 行号。
 

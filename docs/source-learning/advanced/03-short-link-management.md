@@ -20,7 +20,7 @@
 | `ShortLinkService.update` | 最长的写方法，四段式（:450-521） | [6.3](../modules/06-short-link/03-crud-lifecycle-csv.md) 第 5.3 节 |
 | `ShortLinkService.setStatus/delete` | 两个轻写与一个事务双删（:531-558） | [6.3](../modules/06-short-link/03-crud-lifecycle-csv.md) 第 5.4 节 |
 | `ShortLinkService.getOwnedLink` | 归属判定唯一入口（:890-903） | [6.3](../modules/06-short-link/03-crud-lifecycle-csv.md)、[11.3](../modules/11-statistics/03-stats-api-reconciler.md) |
-| `ShortLinkService.isTenantWide` | TENANT scope 键的视野开关（:905-908） | [6.3](../modules/06-short-link/03-crud-lifecycle-csv.md)、[12.1](../modules/12-api-key/01-apikey-full.md) |
+| `ShortLinkService.isTenantWide` | TENANT scope 键的视野开关（:906-908） | [6.3](../modules/06-short-link/03-crud-lifecycle-csv.md)、[12.1](../modules/12-api-key/01-apikey-full.md) |
 | `UpdateShortLinkRequest` | 三态字段：null 不动、空数组清空、clearAccessPassword 显式表态 | [6.1](../modules/06-short-link/01-data-model.md) |
 | `cacheUrl/evictCache/scheduleStaleClear` | 写穿、失效、延迟双删三件套（:966-999） | [8.2](../modules/08-redis-cache/02-l1-l2-write-through.md) |
 | `SingleFlight.peek/forget` | 写路径的时序纪律（提交前快照、提交后两参删除） | [8.4](../modules/08-redis-cache/04-singleflight.md) 第 5.4 节 |
@@ -94,7 +94,7 @@ sequenceDiagram
 
 **节点一：归属判定只有两个形状，越权统一 404。** 列表走 `pageOwn`（:290-301），视野条件拼进 WHERE，别人的行根本不会从数据库出来。单条走 `getOwnedLink`（:890-903），先按 code 查行，再按身份比对：TENANT scope 比 `tenantId`（:893-897），其余身份比 `createdBy`（:899-901）。查不到与不属于返回同一个 404 文案 "short link not found"，不给枚举者任何信息。detail 的这层校验被三个 stats 端点原样继承（回看 [11.3](../modules/11-statistics/03-stats-api-reconciler.md)），管理面没有第二套权限代码。
 
-**节点二：TENANT scope 键看全租户。** `isTenantWide`（:905-908）只有一行，注释 D-C1-12 写明口径：TENANT scope 的 API Key 见整个租户，JWT 用户与 USER scope 的 Key 只见自己创建的行。同一个 `pageOwn` 在两种身份下产生两条不同的 SQL，`getOwnedLink` 产生两套比对条件。管理员的 JWT 并不比 MEMBER 看得多，视野扩张只随 API Key 的 scope 走，不随租户角色走（回看 [12.1](../modules/12-api-key/01-apikey-full.md)）。
+**节点二：TENANT scope 键看全租户。** `isTenantWide`（:906-908）只有一行，注释 D-C1-12 写明口径：TENANT scope 的 API Key 见整个租户，JWT 用户与 USER scope 的 Key 只见自己创建的行。同一个 `pageOwn` 在两种身份下产生两条不同的 SQL，`getOwnedLink` 产生两套比对条件。管理员的 JWT 并不比 MEMBER 看得多，视野扩张只随 API Key 的 scope 走，不随租户角色走（回看 [12.1](../modules/12-api-key/01-apikey-full.md)）。
 
 **节点三：写路径的组合拳是五步，顺序不可换。** update 的 :492-495 注释把前两步钉死：`peek` 必须在提交前快照，这样提交后的 `forget`（两参删除）永远杀不到「提交后才起飞、必然读到新行」的飞行（A10 audit N1，机制在 [8.4](../modules/08-redis-cache/04-singleflight.md) 第 5.4 节）。中间是写库本体。之后三步各防一种竞态：写穿或失效让本实例与 Redis 立即持有新状态；延迟双删（1 秒后，常量 `STALE_WRITEBACK_CLEAR_MS = 1000` 在 :87，单线程 `cache-evictor` 在 :118-122）清掉并发读者可能迟到的旧值回填；广播让其他实例的 L1 立即作废。广播只在写路径本尊发一次（:517-518，D-C2-16），延迟遍绝不补发。
 

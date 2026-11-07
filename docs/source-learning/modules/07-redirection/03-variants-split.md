@@ -136,7 +136,7 @@ clickRecordService.recordClick(redirect.link(), request, redirect.variantKey());
 
 ## 7. 可视化
 
-1. [../../diagrams/archify/html/12-redirect-decision.html](../../diagrams/archify/html/12-redirect-decision.html)（由并行任务产出）：第 12 步「有 variants?」分支对应 `pickVariant` :715-721 与 `VariantPicker.pick`；「无」分支直接 `302 + Location=original_url`。
+1. [../../diagrams/archify/html/12-redirect-decision.html](../../diagrams/archify/html/12-redirect-decision.html)：第 12 步「有 variants?」分支对应 `pickVariant` :715-721 与 `VariantPicker.pick`；「无」分支直接 `302 + Location=original_url`。
 2. [../../diagrams/mermaid/redirect-decision-chain.md](../../diagrams/mermaid/redirect-decision-chain.md)：备用图的末段画了抽签与记录两条终态。
 3. [../../diagrams/archify/html/05-database-erd.html](../../diagrams/archify/html/05-database-erd.html)：`lf_link_variant` 与 `lf_short_link` 的关系（link_id 逻辑外键），看变体怎么挂在主行下。
 
@@ -156,7 +156,7 @@ clickRecordService.recordClick(redirect.link(), request, redirect.variantKey());
 
 **抽签放在门禁后。** 顺序反过来的世界：先抽签再过门，被 403 拦下的流量也「消耗」了某个桶的份额，B9 拦截页会泄漏「这次本来要去哪个目标」，WARN 页同理。门禁后的抽签保证每一签都对应一次真实的 302，桶数据不被门禁损耗污染。注释 :705 的 D-C3-8 编号表明这是评审定下的决策而非顺手写法。
 
-**缓存只是单 URL 提示。** 变体信息不存在 Redis，缓存里只有主 URL。若允许缓存值压过抽签，分流链会退化成单目标链直到缓存过期。:706-707 注释把这条写成规则：「对分流链，缓存永远不是 Location 真相」。代价是分流链每请求多一次 `selectByLinkId` 查询（:716），换来分流语义百分之百由 DB 决定。
+**缓存只是单 URL 提示。** 变体信息不存在 Redis，缓存里只有主 URL。若允许缓存值压过抽签，分流链会退化成单目标链直到缓存过期。:706-707 注释把这条写成规则：「对分流链，缓存永远不是 Location 真相」。代价是所有跳转（含单目标链）每请求都发一次 `selectByLinkId`（:716），单目标链查空即 null，换来分流语义百分之百由 DB 决定。
 
 **与 Geo 定向的诚实边界。** 这套机制只按权重随机分流，不看请求的任何上下文：不解析 IP 归属、不看 Accept-Language、没有条件表达式。`LinkVariant` 实体只有 `variantKey`、`targetUrl`、`weight` 三个业务字段（:21-23），没有任何匹配条件列。`LinkForgeProperties.Phishing` 的注释 :72-74 有一句同源的坦白：本项目仍是 open redirect，没有信誉服务与内容扫描。要按地域定向，需要加归属地查询与条件路由，那是另一套复杂度（IP 库维护、缓存、隐私合规），本项目刻意没做（推断：这是教学项目主动收缩范围的选择，实体字段即证据）。
 

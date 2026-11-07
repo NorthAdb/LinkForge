@@ -410,7 +410,7 @@ UNIX_TIMESTAMP() 是 DB 时钟，mapper 的时钟注释（`:14-19`）把 window_
 
 ## 7. 可视化
 
-1. [16-webhook-delivery-lifecycle](../../diagrams/archify/html/16-webhook-delivery-lifecycle.html)：PENDING → SENT/FAILED 状态机与退避标注（该图由并行任务产出，暂未生效稍后再看）。
+1. [16-webhook-delivery-lifecycle](../../diagrams/archify/html/16-webhook-delivery-lifecycle.html)：PENDING → SENT/FAILED 状态机与退避标注。
 2. [07-rabbitmq-topology](../../diagrams/archify/html/07-rabbitmq-topology.html)：投递行的上游，点击事件经 exchange/queue 进 consume，DLQ 接回滚的批次。
 3. 状态机：
 
@@ -446,7 +446,7 @@ stateDiagram-v2
 
 ## 10. 本节总结
 
-投递链五步：consume 事务末尾入队（异常回滚进 DLQ，重复吞掉）、relay 每 2 秒扫 50 行、deliver 五分支分流、签名 `v1=` + hex(HMAC-SHA256(secret, ts + "." + body))、退避 `min(1h, 10s × 2^n)` 首次 20 秒上限 8 次。三个状态 PENDING/SENT/FAILED，只有 PENDING 能被三个 mark 语句修改，FAILED 可手工重放。双时钟口径：next_attempt_at 与退避全按 DB 时钟，sent_at 与 createdAt 按 JVM 时钟，WebhookRetryClockIT 在 Asia/Shanghai fork 里钉死这条规则。payload 只给 8 个字段，无 IP 无完整 UA。AGGREGATE 模式把点击攒进（endpoint，窗口，链接）桶，阈值或 5 秒 sweep 封窗，digest 按 500 桶分片、超 10 片截断标记，删除 endpoint 时以 FAILED 留痕，投递全复用同一条链路。
+投递链五步：consume 事务末尾入队（异常回滚进 DLQ，重复吞掉）、relay 每 2 秒扫 50 行、deliver 五分支分流、签名 `v1=` + hex(HMAC-SHA256(secret, ts + "." + body))、退避重试收尾；状态机的五个转移与逐次退避数字已在 5.5 的表格与第 7 节状态图里给全，此处不再重复。双时钟口径：next_attempt_at 与退避全按 DB 时钟，sent_at 与 createdAt 按 JVM 时钟，WebhookRetryClockIT 在 Asia/Shanghai fork 里钉死这条规则。payload 只给 8 个字段，无 IP 无完整 UA。AGGREGATE 模式把点击攒进（endpoint，窗口，链接）桶，阈值或 5 秒 sweep 封窗，digest 按 500 桶分片、超 10 片截断标记，删除 endpoint 时以 FAILED 留痕，投递全复用同一条链路。
 
 ## 11. 课后练习
 
@@ -468,11 +468,11 @@ stateDiagram-v2
 
 **练习 5（设计分析）。** 把 WebhookDeliveryMapper 三个 mark 语句的 `AND status = 'PENDING'` 全删掉，构造一个能暴露 bug 的并发场景。
 
-参考答案：让手工重放与 relay 同时处理一行。relay 正在投递期间，运维把行 UPDATE 回 PENDING（以为投递丢了），relay 完成后 markSent 无守卫覆盖，行变 SENT 且 attempts 又加一。或者更简单：两个 relay 实例同 tick 选中同一行，都发 HTTP，先返回的 markRetry 排了退避，后返回的 markSent 直接把行置 SENT，接收方收到两次、状态却是 SENT，排障无从对账。守卫在场时后到的语句影响行数为 0，状态转移线性化（`WebhookDeliveryMapper.java:27-39`）。OutboxMapper 没有守卫（`OutboxMapper.java:19-27`）是因为写者唯一，不是因为它不需要。
+参考答案：两个 relay 实例同 tick 选中同一行，都发 HTTP：先返回的 markRetry 排了退避，后返回的 markSent 直接把行置 SENT，接收方收到两次、状态却是 SENT，排障无从对账。守卫机制与 OutboxMapper 写者数的完整对照见 5.6，这里只补一句结论：守卫在场时后到的语句影响行数为 0，这条 bug 不可能发生。
 
 **练习 6（执行过程）。** AGGREGATE 窗口 15 秒、阈值 100 万（永远不会到）。t=1000 与 t=1005 各有一次链接 7 的点击，t=1020 时 sweep 到来。说出两次 upsert 的 window_start 与 late 值、digest 的 eventId 与 payload 里的 clicks。
 
-参考答案：t=1000 的点击落窗 floorDiv(1000,15)*15=990，late=false；t=1005 同窗 990，late=false。同（endpoint，990，链接 7）桶第二次 upsert 走 ON DUPLICATE 分支（`WebhookAggregateBufferMapper.java:31`），clicks 变 2，sample_* 保持 t=1000 那次的首击。窗口 990 的最后一秒是 1004，t=1020 时 `selectExpiredWindows` 的条件 990 <= UNIX_TIMESTAMP()-15 成立（`WebhookAggregateBufferMapper.java:65`），冲刷生成 eventId `digest-{endpointId}-990`（单桶单片，无 -partN，`WebhookAggregateFlusher.java:165-166`），payload 的 links 数组一条记录 clicks=2、late=false、sample 带 t=1000 的设备与主机名（`WebhookAggregateFlusher.java:200-212`）。
+参考答案：t=1000 的点击落窗 floorDiv(1000,15)*15=990，late=false；t=1005 正好踩在网格上，floorDiv(1005,15)*15=1005，落新窗 1005（窗口 990 的最后一秒是 1004），此刻 open 窗也是 1005，own=open，late 同样为 false。于是产生（endpoint，990，链接 7）与（endpoint，1005，链接 7）两个桶，各 insert 建桶、clicks=1，谁也走不到 ON DUPLICATE 分支（`WebhookAggregateBufferMapper.java:31`），sample_* 各记本窗首击。t=1020 时 `selectExpiredWindows` 的条件 window_start <= UNIX_TIMESTAMP()-15 是闭边界：990 <= 1005 与 1005 <= 1005 同时成立（`WebhookAggregateBufferMapper.java:65`），窗口 1005 覆盖 1005..1019，t=1020 恰好到期，两个窗口在同一次 sweep 里各冲刷一次，产出两条 digest，eventId 分别为 `digest-{endpointId}-990` 与 `digest-{endpointId}-1005`（各单桶单片，无 -partN，`WebhookAggregateFlusher.java:165-166`），payload 的 links 数组各一条记录 clicks=1、late=false、sample 带各自首击的设备与主机名（`WebhookAggregateFlusher.java:200-212`）。
 
 ## 12. 与后续课程的联系
 

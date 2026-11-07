@@ -247,4 +247,4 @@ jobs:
 
 ## 12. 与后续课程的联系
 
-15.3 是全课程收官：离开 CI 的虚拟机，落到开发者自己的机器上。Compose 的五个 service 是这些 IT 容器的「常驻版」，四个演练脚本把 15.1 里 IT 测过的降级行为（MQ 断链、Redis fail-open、MySQL 只读）变成现场可跑的命令，prod profile 的三层收紧则对应 15.2 见过的 `application.yml` 多文档结构。构建脚本之外想继续深挖依赖仲裁与 BOM 的通用规律，回顾 [../01-spring-boot/01-maven-pom.md](../01-spring-boot/01-maven-pom.md)；时区双口径的业务侧全貌在 [../13-webhook/02-delivery-signing-retry.md](../13-webhook/02-delivery-signing-retry.md)，综合专题「Webhook 投递与重试」（`docs/source-learning/advanced/11-webhook-delivery-retry.md`，待产出）会再走一遍。
+15.3 是全课程收官：离开 CI 的虚拟机，落到开发者自己的机器上。Compose 的五个 service 是这些 IT 容器的「常驻版」，四个演练脚本把 15.1 里 IT 测过的降级行为（MQ 断链、Redis fail-open、MySQL 只读）变成现场可跑的命令，prod profile 的三层收紧则对应 15.2 见过的 `application.yml` 多文档结构。构建脚本之外想继续深挖依赖仲裁与 BOM 的通用规律，回顾 [../01-spring-boot/01-maven-pom.md](../01-spring-boot/01-maven-pom.md)；时区双口径的业务侧全貌在 [../13-webhook/02-delivery-signing-retry.md](../13-webhook/02-delivery-signing-retry.md)，综合专题「Webhook 投递与重试」（`docs/source-learning/advanced/11-webhook-delivery-retry.md）会再走一遍。

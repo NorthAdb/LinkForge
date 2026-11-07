@@ -187,7 +187,7 @@ javadoc 记录了一次真实事故（D-Bw345-10）：历史上固定窗口用 S
 
 ## 7. 可视化
 
-1. [../../diagrams/archify/html/06-redis-data-flow.html](../../diagrams/archify/html/06-redis-data-flow.html)（由并行任务产出）：缓存、限流、幂等三类键的数据流。本课对应限流分支：`acquire` 进出 ZSET 的读写与返回三元组。
+1. [../../diagrams/archify/html/06-redis-data-flow.html](../../diagrams/archify/html/06-redis-data-flow.html)：缓存、限流、幂等三类键的数据流。本课对应限流分支：`acquire` 进出 ZSET 的读写与返回三元组。
 2. [../../diagrams/archify/html/03-package-map.html](../../diagrams/archify/html/03-package-map.html)：`common.ratelimit` 三件套与五个调用包的位置关系。
 
 ## 8. 项目中的真实执行过程

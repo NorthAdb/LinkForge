@@ -44,7 +44,7 @@ flowchart TD
 | 课 | 文件 | 内容要点 |
 |----|------|----------|
 | 2.1 统一响应与全局异常 | [modules/02-common/01-unified-response-exceptions.md](modules/02-common/01-unified-response-exceptions.md) | `ApiResponse`/`PageResponse`、`BizException` 家族、`GlobalExceptionHandler` 全映射、参数校验 |
-| 2.2 日志与工具类 | [modules/02-common/02-logging-utils-clientip.md](modules/02-common/02-logging-utils-clientip.md) | 日志实践、`ClientIps`（XFF 不信任默认）、`CsvFormat` |
+| 2.2 日志、XFF 与 URI tag 白名单 | [modules/02-common/02-logging-utils-clientip.md](modules/02-common/02-logging-utils-clientip.md) | 日志实践、`ClientIps`（XFF 不信任默认）、`CsvFormat`、`HttpUriTagAllowList`（指标 uri 标签白名单塌缩） |
 
 ## 4. 模块 03：Spring MVC 与 HTTP 处理（2 课）
 
@@ -129,7 +129,7 @@ flowchart TD
 | 课 | 文件 | 内容要点 |
 |----|------|----------|
 | 13.1 端点配置与密钥加密 | [modules/13-webhook/01-endpoints-and-cipher.md](modules/13-webhook/01-endpoints-and-cipher.md) | endpoint CRUD、AES-256-GCM `WebhookSecretCipher` |
-| 13.2 投递、签名、重试与聚合 | [modules/13-webhook/02-delivery-signing-retry.md](modules/13-webhook/02-delivery-signing-retry.md) | 投递行生成、`WebhookSigner`、退避状态机、DB 时钟、AGGREGATE digest 双模式 |
+| 13.2 投递、签名与重试 | [modules/13-webhook/02-delivery-signing-retry.md](modules/13-webhook/02-delivery-signing-retry.md) | 投递行生成、`WebhookSigner`、退避状态机、DB 时钟、AGGREGATE digest 双模式 |
 | 13.3 SSRF 防护 | [modules/13-webhook/03-ssrf-and-aggregate.md](modules/13-webhook/03-ssrf-and-aggregate.md) | `WebhookTargetGuard`+`PinnedHttpSender` 钉死 rebinding、IPv6 内嵌 IPv4、与 B9 分工 |
 
 ## 15. 模块 14：可观测性与调度任务（3 课）
