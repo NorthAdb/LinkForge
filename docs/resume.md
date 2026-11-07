@@ -4,21 +4,23 @@
 >
 > **版本**：`pom.xml` 仍是 **2.0.0**。v2.0.0 发布时是 **211** 例；C1–C5 是未发版深化，简历不写 v2.1、不改版本号叙事。
 >
-> **数字纪律**：测试只报 **319 = 151 UT + 166 IT + 2 tz**（surefire 151 + failsafe 166 + `webhook-tz-it` 独立 fork 2）。压测只引用 [`docs/bench.md`](bench.md) 的 **Windows 历史窗**（2026-10-24，`df904f8`，固定窗口限流时期，早于 A7–B8、B6 滑窗和 C1–C5），**不是当前 Linux 性能；B10 Linux bench 仍未跑**，本文不发明新 QPS。不写未实测的词（令牌桶 / 漏桶 / 万级 QPS）。**不做 Geo**。每条 bullet 都能指到测试、`scripts/fault-drill.sh` 或指标。
+> **数字纪律**：测试只报 **366 = 161 UT + 203 IT + 2 tz**（surefire 161 + failsafe 203 + `webhook-tz-it` 独立 fork 2）。压测只引用 [`docs/bench.md`](bench.md) 的 **Windows 历史窗**（2026-10-24，`df904f8`，固定窗口限流时期，早于 A7–B8、B6 滑窗和 C1–C5），**不是当前 Linux 性能；B10 Linux bench 仍未跑**，本文不发明新 QPS。不写未实测的词（令牌桶 / 漏桶 / 万级 QPS）。**不做 Geo**。每条 bullet 都能指到测试、`scripts/fault-drill.sh` 或指标。
 
 ## 项目栏（可直接贴进简历）
 
 **LinkForge｜多租户短链与点击分析** · 个人项目 · 自研骨架（不是开源短链换皮）
 
-技术栈：Spring Boot 3.3.5 / Java 17 / MyBatis-Plus / MySQL 8 / Redis 7 / RabbitMQ 3.13 / Flyway V1–V10 / Testcontainers / Prometheus + Grafana
+技术栈：Spring Boot 3.3.5 / Java 17 / MyBatis-Plus / MySQL 8 / Redis 7 / RabbitMQ 3.13 / Flyway V1–V12 / Testcontainers / Prometheus + Grafana
 
 ### 项目描述
 
-自研多租户短链：创建短码，公开访问走 **302**。读路径是限流 → Bloom → 空值缓存 → Caffeine L1 + Redis L2 → singleflight，**每次仍读库行**，禁用和过期不会被旧缓存放成 302。点击明细和 outbox 行同一事务落库，热路径不直接碰 MQ。开放面做到租户 API Key、点击 Webhook、QR + UTM、**A/B 权重分流**、**批量 CSV 导入**。Webhook 出站把 DNS rebinding 的 TOCTOU 关上：投递时 **一次解析、全部地址校验、只连已校验地址**（httpclient5 + 自定义 DnsResolver）。Redis 宕、点击写库失败、Webhook 5xx 都不挡 302，`fault-drill.sh` 分三段演。测试 **319** 例；功能在 C5 审计后冻结，压测数字保持 Windows 历史窗，Geo 不做。
+自研多租户短链：创建短码，公开访问走 **302**。读路径是限流 → Bloom → 空值缓存 → Caffeine L1 + Redis L2 → singleflight，**每次仍读库行**，禁用和过期不会被旧缓存放成 302。点击明细和 outbox 行同一事务落库，热路径不直接碰 MQ。开放面做到租户 API Key、点击 Webhook、QR + UTM、**A/B 权重分流**、**批量 CSV 导入**。Webhook 出站把 DNS rebinding 的 TOCTOU 关上：投递时 **一次解析、全部地址校验、只连已校验地址**（httpclient5 + 自定义 DnsResolver）。Redis 宕、点击写库失败、Webhook 5xx 都不挡 302，`fault-drill.sh` 分三段演。测试 **366** 例；C5 审计后功能冻结，2026-11 经运营者指令解冻两批（外部审计修复 + 认证重构与团队协作），压测数字保持 Windows 历史窗，Geo 不做。
 
 ### 职责与结果
 
 - **多租户短链与鉴权**：JWT 登录；跨用户访问一律 **404**（集成测试钉住，不靠 403 泄露「码存在」）。注册创办人与 bootstrap 用户是租户 **ADMIN**（`lf_user.tenant_role`）。分钟级限流是 **Redis ZSET + Lua 滑动窗口日志**：用 Redis `TIME` 避免多实例时钟漂移，只有放行的请求占名额，429 都带 `Retry-After`；Redis 故障 **fail-open** 且有指标。短码唯一索引兜住并发创建，短码区分大小写，保留字挡住 `admin` 这类路径词。简历上写「滑窗」不写「令牌桶」。
+
+- **会话与团队协作（解冻批次 2）**：会话从「24h JWT 无撤销」重构为 access 1h + refresh 30 天：服务端只存 refresh 的 SHA-256，family 链轮换、已轮换 token 超宽限重用即判泄露整链撤销；`token_version` + 过滤器每请求回查用户行，禁用/删除/改密让旧凭据下一请求失效；登录双桶限流（IP + 账号）且失败路径恒走一次 BCrypt，时序不泄露账号存在性。多租户从「隔离标签」落成真实协作：链接承载型邀请（单次、7 天、只存哈希、四种失败同一 401 防枚举，建号与认领同事务）、**ADMIN / MEMBER** 两级成员管理、最后 ADMIN 护栏（租户行 `SELECT ... FOR UPDATE` 串行化并发互降）、无邮箱条件下管理员重置 + 强制改密拦截找回密码。
 
 - **跳转读路径五层**：限流 → Bloom（从未出现过的码直接 404，不碰缓存和库）→ 空值缓存 → Caffeine L1 + Redis L2 → 同码并发 **singleflight**（领头读库、跟车共享、等待超时后退化成自己读）。坚持每请求读 DB 行，禁用/过期判定不被旧缓存遮蔽；另有行级 URL 校验，脏行不能借旧缓存放行。缓存 **写穿 + 延迟双删**，最终一致窗口收敛到约 1 秒；TTL 向上抖动，避免同批一起过期。**Bloom / L1 仍是进程内**（Guava / Caffeine，没有 RedisBloom，也没有分布式 L1）。C2 起跨实例靠 Redis pub/sub（`CacheBus`）：创建后广播 Bloom `put`，改链/启停/删除广播 L1 `invalidate`（订阅端跳过自己的 origin，只剔 L1，不碰 L2）；publish **fail-open**。Bloom 另有 24h 旁路 rebuild 和 ADMIN 手动触发，重建仍会装入已逻辑删除的码——经典 Bloom **不能删位**。L1/Bloom 指标是本进程计数，不是集群命中率。
 
@@ -34,7 +36,7 @@
 
 - **压测定位（带时期，不当成当前成绩）**：wrk 写路径分解，数字来自 Windows 历史窗（2026-10-24，固定窗口时期，**早于当前 tip，B10 未跑**）。当时同步明细提交是吞吐支配项——关掉之后跳转 **13→276 QPS，P50 678→31ms（约 21 倍）**；预热后缓存命中率 100%、该段零回源；全链路错误率 0。health 基线约 888 QPS，只说明那次环境的框架底，不代表现在的 `/r` 。v2.0.0 之后的密码、域名门禁、滑窗 ZSET 都在热路径上，当前 tip 的吞吐等以后的 Linux 实测，简历口述时主动把时期说全。
 
-- **工程化**：发布 tag `v2.0.0` 时 **211** 例；C5 冻结线 **319** 例 = 纯单测 **151** + Testcontainers 集成 **166** + 时区 fork **2**（Asia/Shanghai 钉住 Webhook 退避所用的 DB 时钟）。Flyway 停在 V1–V10，C5 没有新 migration。`/actuator/prometheus` 用令牌守卫，令牌没配则 **fail-closed 401**。Grafana 看板自动 provision（P50/P95/P99、Outbox/Webhook 积压）；看板上的 SLO 阈值是 Demo 目标，不是生产承诺；L1/Bloom 面板标明本进程。prod profile 用来收紧暴露面。本地依赖是 Compose 的 MySQL / Redis / RabbitMQ，jar 名是 `target/linkforge-2.0.0.jar`。
+- **工程化**：发布 tag `v2.0.0` 时 **211** 例；C5 冻结线 **319** 例 = 纯单测 **151** + Testcontainers 集成 **166** + 时区 fork **2**（Asia/Shanghai 钉住 Webhook 退避所用的 DB 时钟）。Flyway 停在 V1–V10，C5 没有新 migration。解冻两批后 **366** 例（161 + 203 + 2），Flyway 续到 **V12**（V11 刷新令牌/版本列，V12 邀请表）。`/actuator/prometheus` 用令牌守卫，令牌没配则 **fail-closed 401**。Grafana 看板自动 provision（P50/P95/P99、Outbox/Webhook 积压）；看板上的 SLO 阈值是 Demo 目标，不是生产承诺；L1/Bloom 面板标明本进程。prod profile 用来收紧暴露面。本地依赖是 Compose 的 MySQL / Redis / RabbitMQ，jar 名是 `target/linkforge-2.0.0.jar`。
 
 ## 简历上不要加的句子
 
