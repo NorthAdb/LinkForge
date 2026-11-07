@@ -54,8 +54,10 @@ public class QrMaterialService {
             MatrixToImageWriter.writeToStream(matrix, "PNG", png);
             return png.toByteArray();
         } catch (WriterException | IOException ex) {
-            // bounded short-URL content: only a size/content mismatch lands here
-            throw new BizException(400, "qr rendering failed for the requested size");
+            // bounded short-URL content: only a size/content mismatch lands here.
+            // Keep the cause: without it the original stack vanished entirely
+            // (the handler does not log BizException).
+            throw new BizException(400, "qr rendering failed for the requested size", ex);
         }
     }
 

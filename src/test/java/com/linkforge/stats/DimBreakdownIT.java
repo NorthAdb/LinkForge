@@ -42,9 +42,15 @@ class DimBreakdownIT extends AbstractIntegrationTest {
         getWithHeader("/r/" + code, null, "Referer", "https://sub.other.com/campaign");
 
         String tok = token;
+        // Synchronization point: wait until the consumer has bucketed the clicks.
+        // This used to await stats.totalClicks, which read the same lf_click_daily
+        // aggregate the consumer increments, so reaching 5 implied the buckets
+        // had landed. Since T-M1, totalClicks is read from the click detail rows
+        // (written synchronously at redirect time in this profile), so it can
+        // reach 5 before the buckets exist — await the buckets themselves.
         await().atMost(java.time.Duration.ofSeconds(30))
-                .untilAsserted(() -> assertEquals(5,
-                        body(get("/api/links/" + code + "/stats", tok)).path("data").path("totalClicks").asLong()));
+                .untilAsserted(() -> assertEquals(3,
+                        body(get("/api/links/" + code + "/stats/breakdown?dim=device", tok)).path("data").size()));
 
         var device = body(get("/api/links/" + code + "/stats/breakdown?dim=device", tok)).path("data");
         assertEquals("mobile", device.get(0).path("dimValue").asText());

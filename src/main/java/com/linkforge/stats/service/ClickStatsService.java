@@ -4,11 +4,11 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.linkforge.common.result.PageResponse;
 import com.linkforge.stats.dto.ClickDetail;
+import com.linkforge.stats.dto.DailyClickCount;
 import com.linkforge.stats.dto.DailyClicks;
 import com.linkforge.stats.dto.DailyUv;
 import com.linkforge.stats.dto.DimBreakdown;
 import com.linkforge.stats.dto.LinkStatsResponse;
-import com.linkforge.stats.entity.ClickDaily;
 import com.linkforge.stats.entity.ClickLog;
 import com.linkforge.stats.entity.ConsumedEvent;
 import com.linkforge.stats.mapper.ClickDailyMapper;
@@ -120,23 +120,34 @@ public class ClickStatsService {
     }
 
     /**
-     * Clicks come from lf_click_daily (async aggregate); UV is exact distinct-IP from
-     * the sync lf_click_log detail, available while the D7 double write is on.
+     * One definition throughout (T-M1): every number in this response covers the
+     * same last-{@code days} window and is read from the same source, the
+     * lf_click_log detail rows. A detail row exists from the sync write while
+     * the D7 double write is on, or from the consumer's backfill — written in
+     * the same transaction as the lf_click_daily increment — so a day's clicks
+     * and UV always describe the same set of clicks. Previously totalClicks was
+     * the all-time aggregate total while totalUv was windowed, and the daily
+     * clicks column came from the async aggregate while UV came from the sync
+     * detail, so an MQ backlog could show a day with UV &gt; clicks.
+     * totalClicks is exactly the sum of the daily clicks column; totalUv is the
+     * window-wide distinct-IP count (not the sum of the daily UV column).
      */
     public LinkStatsResponse stats(Long linkId, String code, int days) {
-        long total = clickDailyMapper.sumClicks(linkId);
         LocalDate today = LocalDate.now();
         LocalDate fromDate = today.minusDays(days - 1L);
         LocalDateTime from = fromDate.atStartOfDay();
         LocalDateTime toExclusive = today.plusDays(1).atStartOfDay();
         long totalUv = clickLogMapper.countDistinctIps(linkId, from, toExclusive);
-        Map<LocalDate, Long> byDate = clickDailyMapper.selectRange(linkId, fromDate, today).stream()
-                .collect(Collectors.toMap(ClickDaily::getStatDate, ClickDaily::getClicks));
+        Map<LocalDate, Long> byDate = clickLogMapper.selectDailyClicks(linkId, from, toExclusive).stream()
+                .collect(Collectors.toMap(DailyClickCount::getStatDate, DailyClickCount::getClicks));
         Map<LocalDate, Long> uvByDate = clickLogMapper.selectDailyUv(linkId, from, toExclusive).stream()
                 .collect(Collectors.toMap(DailyUv::getStatDate, DailyUv::getUv));
         List<DailyClicks> daily = new ArrayList<>();
+        long total = 0;
         for (LocalDate d = fromDate; !d.isAfter(today); d = d.plusDays(1)) {
-            daily.add(new DailyClicks(d, byDate.getOrDefault(d, 0L), uvByDate.getOrDefault(d, 0L)));
+            long clicks = byDate.getOrDefault(d, 0L);
+            total += clicks;
+            daily.add(new DailyClicks(d, clicks, uvByDate.getOrDefault(d, 0L)));
         }
         return new LinkStatsResponse(code, total, totalUv, daily);
     }

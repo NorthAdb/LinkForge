@@ -45,6 +45,11 @@ linkforge:
   rate-limit:
     register-max: ${LINKFORGE_REGISTER_MAX:1000}
     register-window-seconds: 600
+    # same headroom as register: the shared IT Redis sees every login in the
+    # suite from one source IP, so the production login limits would throttle
+    # the suite itself (dedicated rate-limit ITs override per class)
+    login-max: ${LINKFORGE_LOGIN_RATE_MAX:1000}
+    login-account-max: ${LINKFORGE_LOGIN_ACCOUNT_RATE_MAX:1000}
     key-prefix: "linkforge:rl:it-default:"
   retention:
     # Shared IT database must not have a cleanup tick race a SENT assertion.

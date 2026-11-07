@@ -16,14 +16,18 @@ public interface OutboxMapper extends BaseMapper<Outbox> {
             + "ORDER BY id ASC LIMIT #{limit}")
     List<Outbox> selectPendingBatch(@Param("limit") int limit);
 
-    @Update("UPDATE lf_outbox SET status = 'SENT', sent_at = NOW() WHERE id = #{id}")
+    // Status guards (T-M3): every mark* is a CAS on the row still being PENDING,
+    // the same standard WebhookDeliveryMapper already follows. Without the guard
+    // a second relay instance (or a stale batch) could flip a row another
+    // instance already SENT back to FAILED and have it replayed once more.
+    @Update("UPDATE lf_outbox SET status = 'SENT', sent_at = NOW() WHERE id = #{id} AND status = 'PENDING'")
     int markSent(@Param("id") long id);
 
-    @Update("UPDATE lf_outbox SET status = 'FAILED' WHERE id = #{id}")
+    @Update("UPDATE lf_outbox SET status = 'FAILED' WHERE id = #{id} AND status = 'PENDING'")
     int markFailed(@Param("id") long id);
 
     @Update("UPDATE lf_outbox SET attempts = attempts + 1, next_attempt_at = "
-            + "DATE_ADD(NOW(), INTERVAL #{backoffSeconds} SECOND) WHERE id = #{id}")
+            + "DATE_ADD(NOW(), INTERVAL #{backoffSeconds} SECOND) WHERE id = #{id} AND status = 'PENDING'")
     int markRetry(@Param("id") long id, @Param("backoffSeconds") long backoffSeconds);
 
     /**

@@ -196,6 +196,10 @@ linkforge:
   rate-limit:
     register-max: ${LINKFORGE_REGISTER_MAX:5}
     register-window-seconds: ${LINKFORGE_REGISTER_WINDOW_SECONDS:600}
+    login-max: ${LINKFORGE_LOGIN_RATE_MAX:5}
+    login-window-seconds: ${LINKFORGE_LOGIN_RATE_WINDOW_SECONDS:600}
+    login-account-max: ${LINKFORGE_LOGIN_ACCOUNT_RATE_MAX:5}
+    login-account-window-seconds: ${LINKFORGE_LOGIN_ACCOUNT_RATE_WINDOW_SECONDS:600}
     create-max: ${LINKFORGE_CREATE_RATE_MAX:30}
     create-window-seconds: ${LINKFORGE_CREATE_RATE_WINDOW_SECONDS:60}
     # D-C3-22: dedicated import bucket (whole request, never per row) so a 100-row
