@@ -2,6 +2,8 @@ package com.linkforge.security;
 
 import com.linkforge.apikey.entity.ApiKey;
 import com.linkforge.apikey.service.ApiKeyService;
+import com.linkforge.user.entity.UserAccount;
+import com.linkforge.user.mapper.UserAccountMapper;
 import com.linkforge.common.ratelimit.RateLimitDecision;
 import com.linkforge.common.ratelimit.RateLimitKeys;
 import com.linkforge.common.ratelimit.RedisRateLimiter;
@@ -45,6 +47,7 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     private static final String TOUCH_KEY_PREFIX = "linkforge:apikey:touch:";
 
     private final ApiKeyService apiKeyService;
+    private final UserAccountMapper userAccountMapper;
     private final RedisRateLimiter rateLimiter;
     private final LinkForgeProperties properties;
     private final MeterRegistry meterRegistry;
@@ -85,6 +88,16 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
             if (key.getRevokedAt() != null) {
                 // still a uniform 401 outside; the tag just separates the reasons (Bw2-N3)
                 meterRegistry.counter("linkforge.apikey.auth", "result", "revoked").increment();
+                writeJson(response, 401, "{\"code\":401,\"message\":\"invalid api key\",\"data\":null}");
+                return;
+            }
+            // Batch 2a owner recheck (the other half of the audit finding): a key
+            // acts as its owning user, so a disabled/removed owner kills the key
+            // on the very next request. Member removal relies on this alone —
+            // key rows are never touched by member management (plan A5/A7).
+            UserAccount owner = userAccountMapper.selectById(key.getUserId());
+            if (owner == null || owner.getStatus() == null || owner.getStatus() != 1) {
+                meterRegistry.counter("linkforge.apikey.auth", "result", "owner_inactive").increment();
                 writeJson(response, 401, "{\"code\":401,\"message\":\"invalid api key\",\"data\":null}");
                 return;
             }

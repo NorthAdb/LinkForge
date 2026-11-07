@@ -82,9 +82,13 @@ public class AuthService {
         if (!tenantOk || !userOk || !passwordOk) {
             throw new BizException(401, "invalid credentials");
         }
-        String token = jwtService.createToken(user.getId(), tenant.getId(), user.getUsername());
-        return new LoginResponse(token, user.getId(), tenant.getId(), user.getUsername(),
+        String token = jwtService.createToken(user.getId(), tenant.getId(), user.getUsername(),
+                user.getTokenVersion() == null ? 0 : user.getTokenVersion());
+        LoginResponse response = new LoginResponse(token, user.getId(), tenant.getId(), user.getUsername(),
                 tenant.getName(), user.getTenantRole());
+        response.setMustChangePassword(
+                user.getMustChangePassword() != null && user.getMustChangePassword() == 1);
+        return response;
     }
 
     /**
@@ -125,8 +129,12 @@ public class AuthService {
         user.setUpdatedAt(LocalDateTime.now());
         userAccountMapper.insert(user);
 
-        String token = jwtService.createToken(user.getId(), tenant.getId(), user.getUsername());
-        return new LoginResponse(token, user.getId(), tenant.getId(), user.getUsername(),
+        // a fresh account sits at token_version 0 / no forced change; the DB
+        // defaults apply on insert, the in-memory row simply predates them
+        String token = jwtService.createToken(user.getId(), tenant.getId(), user.getUsername(), 0);
+        LoginResponse response = new LoginResponse(token, user.getId(), tenant.getId(), user.getUsername(),
                 tenant.getName(), user.getTenantRole());
+        response.setMustChangePassword(false);
+        return response;
     }
 }

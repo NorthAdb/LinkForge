@@ -107,7 +107,10 @@ server:
 linkforge:
   jwt:
     secret: ${JWT_SECRET}
-    expire-hours: ${JWT_EXPIRE_HOURS:24}
+    expire-hours: ${JWT_EXPIRE_HOURS:1}
+  auth:
+    # Batch 2a: refresh-token lifetime (rotation + reuse detection in lf_refresh_token)
+    refresh-expire-days: ${LINKFORGE_REFRESH_EXPIRE_DAYS:30}
   public-base-url: ${LINKFORGE_PUBLIC_BASE_URL:http://localhost:8080}
   qr:
     # C1 wave B: QR share links; blank secret derives the HMAC key from the JWT secret.
@@ -200,6 +203,11 @@ linkforge:
     login-window-seconds: ${LINKFORGE_LOGIN_RATE_WINDOW_SECONDS:600}
     login-account-max: ${LINKFORGE_LOGIN_ACCOUNT_RATE_MAX:5}
     login-account-window-seconds: ${LINKFORGE_LOGIN_ACCOUNT_RATE_WINDOW_SECONDS:600}
+    # Batch 2a: the credential-bearing public entries join the login tier
+    refresh-max: ${LINKFORGE_REFRESH_RATE_MAX:5}
+    refresh-window-seconds: ${LINKFORGE_REFRESH_RATE_WINDOW_SECONDS:600}
+    logout-max: ${LINKFORGE_LOGOUT_RATE_MAX:5}
+    logout-window-seconds: ${LINKFORGE_LOGOUT_RATE_WINDOW_SECONDS:600}
     create-max: ${LINKFORGE_CREATE_RATE_MAX:30}
     create-window-seconds: ${LINKFORGE_CREATE_RATE_WINDOW_SECONDS:60}
     # D-C3-22: dedicated import bucket (whole request, never per row) so a 100-row
