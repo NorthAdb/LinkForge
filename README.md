@@ -5,7 +5,7 @@
 ![Java](https://img.shields.io/badge/Java-17-orange)
 ![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.3.5-6DB33F)
 ![MySQL·Redis·RabbitMQ](https://img.shields.io/badge/MySQL%20%C2%B7%20Redis%20%C2%B7%20RabbitMQ-8%20%C2%B7%207%20%C2%B7%203.13-informational)
-![tests](https://img.shields.io/badge/tests-319%20%28151%2B166%2B2%29-brightgreen)
+![tests](https://img.shields.io/badge/tests-366%20%28161%2B203%2B2%29-brightgreen)
 
 多租户短链 + 访问分析后端服务。**v2.0.0**＝P0–P5 全阶段交付（v1.0.0）+ 深化 A2–A10 + B 档波 1–5（B7/B8、B4/B5、B6/B2/B9/B3/B1），多轮外部审计通过。
 
@@ -31,7 +31,7 @@
 
 | 域 | 能力 | 模块章节 |
 |------|------|------|
-| 认证 | JWT 登录（access 1h + refresh 30 天轮换/重用检测、IP + 账号双限流、失败时序恒定防枚举）/ 开放注册（按 IP 限流）/ bootstrap 演示租户 / 多租户隔离 | [认证与多租户](#认证与多租户) |
+| 认证 | JWT 登录（access 1h + refresh 30 天轮换/重用检测、IP + 账号双限流、失败时序恒定防枚举）/ 开放注册（按 IP 限流）/ bootstrap 演示租户 / 多租户隔离 / **团队协作（邀请制加入、ADMIN·MEMBER 成员管理、最后 ADMIN 护栏、管理员重置密码）** | [认证与多租户](#认证与多租户) |
 | 短链 | CRUD、自定义短码（区分大小写）、过期/禁用、创建幂等、并发不撞码、CSV 导出、QR 物料 + 短时分享链、UTM 写时合并 | [短链管理](#短链管理)、[物料与投放](#物料与投放c1qr--utm) |
 | 短链 | A/B 权重分流：一码多目标（≤10）按权重抽签，密码/门禁/UTM 仍链层，统计按 variant 分桶 | [A/B 权重分流与批量导入](#ab-权重分流与批量导入c3) |
 | 短链 | 批量 CSV 导入：POST /api/links/import 同步 multipart ≤100 行，部分失败返回文件行号+原因，专用 import 限流 | [A/B 权重分流与批量导入](#ab-权重分流与批量导入c3) |
@@ -41,7 +41,7 @@
 | 安全 | BCrypt 密码短链（签名 cookie、先限流后校验）、本地域名名单门禁（BLOCK/WARN）、非人点击不计 | [密码短链](#密码短链b3)、[域名门禁](#目标域名名单门禁b9)、[非人点击](#非人点击b2预取与预览-bot-照常-302-但不计) |
 | 开放 | API Key（哈希存储+配额，USER/TENANT 双 scope、TENANT 仅 ADMIN 签发）、点击 Webhook（HMAC 签名、AES-256-GCM at-rest、SSRF 防护、逐次/聚合双模式） | [开放能力](#开放能力b4-api-key--b5-webhook) |
 | 可观测 | 令牌守卫的 `/actuator/prometheus`、Grafana 自动 provision 看板、积压 gauge | [可观测](#可观测b1-prometheus--grafana) |
-| 工程 | Flyway 版本化迁移（V1–V10）、测试 335 例（含 Testcontainers 集成 174）、GitHub Actions CI、prod profile 一键收紧 | [测试与质量](#-测试与质量) |
+| 工程 | Flyway 版本化迁移（V1–V12）、测试 366 例（含 Testcontainers 集成 205）、GitHub Actions CI、prod profile 一键收紧 | [测试与质量](#-测试与质量) |
 
 **明确不做**（冻结决策，详见[待办](docs/backlog.md)）：AI / PostgreSQL / Supabase / 向量库（整体延期另立方案）；Spring Cloud / Seata / 多机房；独立前端 SPA（静态控制台已够用）；云公网部署（D5=本地 Compose，prod profile 已备好收紧开关）。
 
@@ -343,10 +343,17 @@ flowchart LR
 **令牌模型（批次 2a）**：access token 有效期 1 小时（`JWT_EXPIRE_HOURS` 可调），带 `tv`（token_version）claim；登录/注册同时签发 refresh token（30 天，`LINKFORGE_REFRESH_EXPIRE_DAYS`），服务端只存其 SHA-256 哈希。JwtAuthFilter 每请求回查用户行：用户被禁用/删除、`tv` 与库中 token_version 不符，旧 token 下一请求即失效（API Key 同步复查其所属用户状态）。`must_change_password` 置位时（管理员重置密码后），除改密/登出/刷新外的已认证请求一律 403 `PASSWORD_CHANGE_REQUIRED`。
 
 - **bootstrap**：启动时 `BootstrapDataLoader` 幂等写入演示租户——`LINKFORGE_BOOTSTRAP_TENANT`（默认 `demo`）、`LINKFORGE_BOOTSTRAP_USERNAME`（默认 `admin`）、`LINKFORGE_BOOTSTRAP_PASSWORD`（必填）
-- **开放注册** `POST /api/auth/register`：自助创建全新租户及首个用户，成功即返 access + refresh；无邀请码逻辑
+- **开放注册** `POST /api/auth/register`：自助创建全新租户及首个用户（即该租户 ADMIN），成功即返 access + refresh；加入**已有**租户不走注册，走下面的邀请接受
 - **刷新** `POST /api/auth/refresh`：refresh token 单次轮换（条件更新原子轮换 + 新旧行 replaced_by 互指）；已轮换 token 在 10 秒宽限外被重用即判定泄露——整 family 撤销 + token_version 自增。失败口径统一 401 不区分原因
 - **登出** `POST /api/auth/logout`：撤销该 refresh 的 family（幂等、未知 token 同样成功）；access 自然过期前仍有效。`POST /api/auth/logout-all`（需登录）：全部 refresh 撤销 + token_version 自增，access 下一请求即失效
 - **改密** `POST /api/auth/change-password`（需登录）：验当前密码后换哈希、清强制改密标记、token_version 自增并撤销全部 refresh（含当前会话，强制重新登录）
+
+**团队协作（批次 2b）**：租户内两级角色 `ADMIN` / `MEMBER`（注册创办人与 bootstrap 用户为 ADMIN；V12 把存量空角色回填为 MEMBER，读取处容忍空值）。凭据撤销统一走 2a 的机制——过滤器每请求回查用户行 + token_version + refresh 全撤，没有第二套通道：
+
+- **邀请** `POST /api/tenant/invitations`（ADMIN）：创建一次性邀请（默认 MEMBER，可指定 ADMIN；7 天有效，`LINKFORGE_INVITATION_EXPIRE_DAYS`），明文邀请码只在创建响应回显一次、服务端只存 SHA-256，创建人线下转交（无邮件设施）；`GET` 待接受列表（不含任何 token 材料）；`DELETE /api/tenant/invitations/{id}` 撤销
+- **接受邀请** `POST /api/auth/accept-invitation`（公开，IP 限流 5 次/10 分钟）：凭邀请码 + 自选用户名/口令在目标租户建号并直接返回登录响应；未知/过期/已撤销/已接受四种失败同一 401（防枚举）；建号与邀请认领在同一事务内，用户名冲突 409 且邀请不被消耗
+- **成员管理**（均 ADMIN、限本租户，跨租户 id 一律 404）：`GET /api/tenant/members` 列表；`PATCH /api/tenant/members/{userId}` 改角色或禁用/启用（禁用即 token_version 自增 + refresh 全撤）；`DELETE` 逻辑删除（凭据下一请求全灭，其创建的链接/Webhook 是租户资产保留不动）；`POST /api/tenant/members/{userId}/reset-password` 生成临时密码（只回显一次）+ 置强制改密标记 + 全会话撤销——无邮箱条件下找回密码的落点
+- **护栏**：租户最后一个启用中的 ADMIN 不可被降级/禁用/移除，且不可移除自己；护栏检查与写操作在同一事务内、对租户行 `SELECT ... FOR UPDATE` 串行化，两位 ADMIN 并发互降时后到者被拒
 
 ### 短链管理
 
@@ -383,6 +390,7 @@ flowchart LR
 | 登录 | 5 次 / 10 分钟 / IP，且 5 次 / 10 分钟 / 账号（租户+用户名，双桶任一满即拒） | `LINKFORGE_LOGIN_RATE_MAX`、`LINKFORGE_LOGIN_ACCOUNT_RATE_MAX` `_WINDOW_SECONDS` |
 | 刷新 | 5 次 / 10 分钟 / IP | `LINKFORGE_REFRESH_RATE_MAX` `_WINDOW_SECONDS` |
 | 登出 | 5 次 / 10 分钟 / IP | `LINKFORGE_LOGOUT_RATE_MAX` `_WINDOW_SECONDS` |
+| 接受邀请 | 5 次 / 10 分钟 / IP | `LINKFORGE_ACCEPT_INVITATION_RATE_MAX` `_WINDOW_SECONDS` |
 | 创建（含自定义码） | 30 次 / 分钟 / 用户 | `LINKFORGE_CREATE_RATE_MAX` `_WINDOW_SECONDS` |
 | 导入 | 5 次 / 分钟 / 用户（整次请求计一次，不占创建配额） | `LINKFORGE_IMPORT_RATE_MAX` `_WINDOW_SECONDS` |
 | 跳转 | 300 次 / 分钟 / IP | `LINKFORGE_REDIRECT_RATE_MAX` `_WINDOW_SECONDS` |
@@ -537,7 +545,7 @@ curl -X POST -H "X-API-Key: lfk_xxxxxxxx_xxx" -H "Content-Type: application/json
 - **看板**：跳转 QPS/状态、P50/P95/P99（直方图）、SLO 达标率（≤100ms）与 5xx 率、跳过与限流拒绝、L1（本进程）/ L2（Redis）命中、Bloom（本进程）/ absent、singleflight、fail-open、Outbox/Webhook 积压、API Key、门禁与解锁、JVM/Hikari。L1 与 Bloom 面板不是集群命中率。**SLO 阈值是 Demo 目标不是生产承诺**；`DashboardMetricsIT` 断言看板引用的每个指标都真实存在于 scrape
 - **tag 有界**：任何 tag 不含 code/URL/域名/IP/用户/Key id，`uri` 只出现模板值（`/r/{code}`）；`http.server.requests` 开 percentile 直方图 + SLO 桶（仅该 meter）；积压 gauge（`BacklogGauges` 每 15s 采样，不在 scrape 线程查库，失败保留上次值）
 
-### 数据迁移（Flyway，V1–V10）
+### 数据迁移（Flyway，V1–V12）
 
 schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移（`baseline-on-migrate=true`）：
 
@@ -545,7 +553,7 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 - **已到 v1.0.0 schema 的存量卷**（表齐、无 `flyway_schema_history`）：自动记 baseline（version 1）跳过 V1，无需删卷，幂等可重复跑；`scripts/migrate.sh` 可对存量库单独驱动
 - **更老的卷**（缺 `lf_click_daily`/`lf_consumed_event`）：先按 `db/schema.sql` 里的 `CREATE TABLE IF NOT EXISTS` 补表（幂等）再启动
 
-`db/schema.sql` 仅作历史参考，不再被执行；新增 DDL 一律写 `db/migration` 新版本（V7 = `access_password_hash`；V8 = API Key `scope` + 用户 `tenant_role`；V9 = webhook 聚合三列 + `lf_webhook_agg_buffer`；V10 = `lf_link_variant` + `lf_click_log.variant` 列）。
+`db/schema.sql` 仅作历史参考，不再被执行；新增 DDL 一律写 `db/migration` 新版本（V7 = `access_password_hash`；V8 = API Key `scope` + 用户 `tenant_role`；V9 = webhook 聚合三列 + `lf_webhook_agg_buffer`；V10 = `lf_link_variant` + `lf_click_log.variant` 列；V11 = 用户 `token_version` / `must_change_password` + `lf_refresh_token`；V12 = `lf_tenant_invitation` + 存量空角色回填 MEMBER）。
 
 ## ⚙️ 配置参考
 
@@ -559,11 +567,23 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 | `SPRING_DATASOURCE_PASSWORD` / `SPRING_RABBITMQ_PASSWORD` | MySQL / RabbitMQ 口令 |
 | `JWT_SECRET` | JWT HMAC 密钥 ≥32 字符（也用于解锁 cookie 域分离派生） |
 
+**认证与令牌**
+
+| 变量 | 默认 |
+|------|------|
+| `JWT_EXPIRE_HOURS` | 1（access token 有效期） |
+| `LINKFORGE_REFRESH_EXPIRE_DAYS` | 30（refresh token 每行有效期，轮换滑动续期） |
+| `LINKFORGE_INVITATION_EXPIRE_DAYS` | 7（邀请有效期） |
+
 **限流与网络**
 
 | 变量 | 默认 |
 |------|------|
 | `LINKFORGE_REGISTER_MAX` / `_WINDOW_SECONDS` | 5 / 600 |
+| `LINKFORGE_LOGIN_RATE_MAX` / `_WINDOW_SECONDS`、`LINKFORGE_LOGIN_ACCOUNT_RATE_MAX` / `_WINDOW_SECONDS` | 5 / 600（IP 桶与账号桶，双桶任一满即拒） |
+| `LINKFORGE_REFRESH_RATE_MAX` / `_WINDOW_SECONDS` | 5 / 600 |
+| `LINKFORGE_LOGOUT_RATE_MAX` / `_WINDOW_SECONDS` | 5 / 600 |
+| `LINKFORGE_ACCEPT_INVITATION_RATE_MAX` / `_WINDOW_SECONDS` | 5 / 600 |
 | `LINKFORGE_CREATE_RATE_MAX` / `_WINDOW_SECONDS` | 30 / 60 |
 | `LINKFORGE_IMPORT_RATE_MAX` / `_WINDOW_SECONDS` | 5 / 60（整次 import 计一次，不占 create 配额） |
 | `spring.servlet.multipart.max-file-size` / `max-request-size` | 256KB / 512KB（仅导入端点接收上传；超出 → 400） |
@@ -628,10 +648,10 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 
 ## 🧪 测试与质量
 
-- **319 例**（v2.0.0 发布口径 211 → v2.1 抛光 220 → C1 261 → C2 +20 → C3 +26 → C4 +8 → C5 +4）：surefire 纯单测 **151** + failsafe Testcontainers 集成 **166** + 时区 fork **2**（`WebhookRetryClockIT` 独立 fork 到 Asia/Shanghai，钉 DB 时钟退避）。静态徽章会随例数变化，以本行拆分为准
+- **366 例**（v2.0.0 发布口径 211 → v2.1 抛光 220 → C1 261 → C2 +20 → C3 +26 → C4 +8 → C5 +4 → 批次 1 +16 → 批次 2a +18 → 批次 2b +13）：surefire 纯单测 **161** + failsafe Testcontainers 集成 **203** + 时区 fork **2**（`WebhookRetryClockIT` 独立 fork 到 Asia/Shanghai，钉 DB 时钟退避）。静态徽章会随例数变化，以本行拆分为准
 - **红先纪律**：每个特性先提交测试（CI 红 = 证据）再提交实现（CI 绿）；B 波 3+4+5 轮 13 次分支红全部留档根因（progress.md）
 - **CI**：GitHub Actions `mvn -B verify`（ubuntu + 原生 Docker Testcontainers），push 即跑，main 恒绿
-- **连接预算口径**：集成测试共享一个 Testcontainers MySQL（`--max-connections=500` 是**配置侧天花板**）；上下文峰值 ≈ 27×10+15×4 = **330 是最坏情形推导值**（每上下文 Hikari 同时满池的纸面相加；42 个 *IT、15 个显式 4，其中 C1/C2/C3/C4 新增各 3/4/2/1 个均 4，C5 零新 IT；时区 fork 独立 JVM 另计），余量 170，全绿即零 `Too many connections`。三个 relay-enabled webhook IT 钉 `@DirtiesContext(AFTER_CLASS)`，类结束即关上下文，实际峰值低于纸面
+- **连接预算口径**：集成测试共享一个 Testcontainers MySQL（`--max-connections=500` 是**配置侧天花板**）；上下文峰值 ≈ 27×10+15×4 = **330 是最坏情形推导值**（每上下文 Hikari 同时满池的纸面相加；42 个 *IT、15 个显式 4，其中 C1/C2/C3/C4 新增各 3/4/2/1 个均 4，C5 零新 IT；时区 fork 独立 JVM 另计），余量 170，全绿即零 `Too many connections`。三个 relay-enabled webhook IT 钉 `@DirtiesContext(AFTER_CLASS)`，类结束即关上下文，实际峰值低于纸面。（注：330 是 C5 时点的推导；批次 1/2 新增 19 个 *IT 类后纸面峰值待重算，「全绿即零 `Too many connections`」的实测结论不变）
 - **对账与故障演练**：`scripts/mq-drill.sh` / `scripts/outbox-drill.sh` 断 MQ 追平；`scripts/fault-drill.sh`（C4）redis 停服 / webhook 5xx / mysql 只读三段，本机实测 `FAULT DRILL OK`（C5 于 tip `e0c567c` 复验，2026-11-01：只读态 GET /r 仍 302——点击记账 fail-open，HEAD 保留次要；PASS 行原文见 [docs/progress.md](docs/progress.md) C5 章 Compose 手验证据），回归皆绿
 - 审计证据与逐轮记录：[docs/progress.md](docs/progress.md)（1655 行，每阶段验收、决策、红绿史）
 
@@ -655,6 +675,7 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 
 | 版本 | 日期 | 内容 |
 |------|------|------|
+| **解冻批次 1–2（未发版）** | 2026-11-07 | C5 冻结后经运营者指令解冻：批次 1 审计修复（登录双桶限流 + 失败时序恒定、stats 口径统一、Webhook 冲刷快照删除、Outbox 状态守卫、update 单事务、BizException 拆 httpStatus/code）→ 批次 2a 认证地基（access 1h + refresh 轮换/重用检测、token_version、过滤器状态复查、强制改密；V11）→ 批次 2b 团队协作（邀请、成员管理、最后 ADMIN 护栏、管理员重置；V12）；测试 319→366；两批各带收尾文档对账 |
 | **C5（未发版）** | 2026-11-01 | 收口 C5：点击记账 fail-open（`resolveForGet` 调用点 catch `DataAccessException`、meter `linkforge.click.record.failopen`——主链路 302 不依赖 Redis/点击写/Webhook 任一侧写成功）+ C4 nit 收尾（main tip 记账行、absent fail-open meter、Compose 手验证据入档 progress）+ fault-drill mysql-ro 主探针改 GET 302 + 面试 Demo 五步（README）；测试 315→319；**C5 审计通过后功能冻结** |
 | **C4（未发版）** | 2026-11-01 | 深化 C4：Webhook SSRF DNS rebinding 钉死（httpclient5 + 自定义 DnsResolver——投递时一次解析、全 IP 校验、只连已校验地址，Host/SNI 保原 hostname）+ 故障演练 `scripts/fault-drill.sh`（redis 停服 / webhook 5xx / mysql 只读，SKIP 语义）+ Redis L2/幂等 fail-open（`linkforge.cache.failopen`）+ C3 审计修复并入（S1 建链+variants 同事务 / N2 update 带 variants / N3 delete 清 variants）；测试 307→315；红先三块 CI 留档（conclusion 列） |
 | **C3（未发版）** | 2026-10-31 | 深化 C3：A/B 权重分流（一码多目标 ≤10 按权重抽签、密码/门禁/UTM 仍链层、`dim=variant` 统计分桶）+ 批量 CSV 导入（同步 multipart ≤100 行、部分失败返回文件行号+原因、专用 import 限流）；V10 迁移；测试 281→307；红先两块 CI 留档（conclusion 列） |
