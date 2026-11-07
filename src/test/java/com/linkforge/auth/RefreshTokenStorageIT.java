@@ -1,4 +1,5 @@
 package com.linkforge.auth;
+import com.linkforge.auth.mapper.RefreshTokenMapper;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.linkforge.AbstractIntegrationTest;

@@ -1,6 +1,7 @@
 package com.linkforge.auth;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.linkforge.auth.mapper.RefreshTokenMapper;
 import com.linkforge.common.exception.BizException;
 import com.linkforge.common.exception.RateLimitedException;
 import com.linkforge.common.ratelimit.RateLimitDecision;
