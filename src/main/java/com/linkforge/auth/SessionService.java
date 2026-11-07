@@ -115,20 +115,37 @@ public class SessionService {
     }
 
     /**
-     * A revoked token was presented. ROTATED within the grace window is a benign
-     * race — plain 401, family untouched. Anything else is treated as theft
-     * (RFC 9700 reuse detection): the whole family dies and token_version bumps,
-     * which also kills every outstanding access token on its next request.
-     * Always throws 401.
+     * A revoked token was presented. Always 401; the only question is whether
+     * the presentation itself is a theft signal worth escalating:
+     *
+     * <ul>
+     *   <li>ROTATED within the grace window — benign client race (concurrent
+     *       refresh / retry), family untouched.</li>
+     *   <li>ROTATED past the grace window — the RFC 9700 reuse case: the token
+     *       was retired by a legitimate rotation, so whoever presents it now is
+     *       either a thief or a client holding a stolen copy. The whole family
+     *       dies and token_version bumps, killing every outstanding access
+     *       token on its next request.</li>
+     *   <li>LOGOUT / ADMIN / PASSWORD / REUSE_KILL — a deliberate revocation.
+     *       Re-presentation is most plausibly a stale honest client that has
+     *       not learned of the revocation yet (e.g. a refresh racing the
+     *       logout), and the remediation has already happened, so there is
+     *       nothing to escalate: no family kill, no token_version bump.
+     *       Escalating here would let a single logout log the user out on
+     *       every device the moment any stale client retries — and would make
+     *       "is the logged-out refresh really dead?" untestable, since the
+     *       probe itself would trip the alarm.</li>
+     * </ul>
      */
     private void handleRevoked(RefreshToken row, LocalDateTime now) {
-        boolean withinGrace = RefreshToken.CAUSE_ROTATED.equals(row.getRevokeCause())
-                && row.getRevokedAt() != null
-                && !row.getRevokedAt().plusSeconds(REUSE_GRACE_SECONDS).isBefore(now);
-        if (!withinGrace) {
-            refreshTokenMapper.revokeFamily(row.getFamilyId(), RefreshToken.CAUSE_REUSE_KILL, now);
-            bumpTokenVersion(row.getUserId());
-            meterRegistry.counter("linkforge.refresh.reuse_kill").increment();
+        if (RefreshToken.CAUSE_ROTATED.equals(row.getRevokeCause())) {
+            boolean withinGrace = row.getRevokedAt() != null
+                    && !row.getRevokedAt().plusSeconds(REUSE_GRACE_SECONDS).isBefore(now);
+            if (!withinGrace) {
+                refreshTokenMapper.revokeFamily(row.getFamilyId(), RefreshToken.CAUSE_REUSE_KILL, now);
+                bumpTokenVersion(row.getUserId());
+                meterRegistry.counter("linkforge.refresh.reuse_kill").increment();
+            }
         }
         throw new BizException(401, INVALID_REFRESH);
     }
