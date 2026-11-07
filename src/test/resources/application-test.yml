@@ -53,6 +53,8 @@ linkforge:
     # same headroom for the batch-2a public entries (dedicated ITs override per class)
     refresh-max: 1000
     logout-max: 1000
+    # batch-2b public entry, same treatment
+    accept-invitation-max: 1000
     key-prefix: "linkforge:rl:it-default:"
   retention:
     # Shared IT database must not have a cleanup tick race a SENT assertion.
