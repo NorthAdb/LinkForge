@@ -5,6 +5,7 @@ import com.linkforge.common.exception.BizException;
 import com.linkforge.common.result.ApiResponse;
 import com.linkforge.security.AuthUser;
 import com.linkforge.security.UserContext;
+import com.linkforge.user.dto.AcceptInvitationRequest;
 import com.linkforge.user.dto.ChangePasswordRequest;
 import com.linkforge.user.dto.LoginRequest;
 import com.linkforge.user.dto.LoginResponse;
@@ -12,6 +13,7 @@ import com.linkforge.user.dto.LogoutRequest;
 import com.linkforge.user.dto.RefreshRequest;
 import com.linkforge.user.dto.RegisterRequest;
 import com.linkforge.user.service.AuthService;
+import com.linkforge.user.service.TeamService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -27,6 +29,7 @@ public class AuthController {
 
     private final AuthService authService;
     private final SessionService sessionService;
+    private final TeamService teamService;
 
     @PostMapping("/login")
     public ApiResponse<LoginResponse> login(@Valid @RequestBody LoginRequest request,
@@ -42,6 +45,15 @@ public class AuthController {
         LoginResponse response = authService.register(request, httpRequest);
         response.setRefreshToken(sessionService.startSession(response.getUserId(), httpRequest));
         return ApiResponse.ok(response);
+    }
+
+    /** permitAll by design (batch 2b): the invitation token IS the credential.
+     * The response is a full login response — accepting an invitation creates
+     * the account already signed in. */
+    @PostMapping("/accept-invitation")
+    public ApiResponse<LoginResponse> acceptInvitation(@Valid @RequestBody AcceptInvitationRequest request,
+                                                       HttpServletRequest httpRequest) {
+        return ApiResponse.ok(teamService.acceptInvitation(request, httpRequest));
     }
 
     /** permitAll by design: the refresh token IS the credential (the access token

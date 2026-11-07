@@ -111,6 +111,8 @@ linkforge:
   auth:
     # Batch 2a: refresh-token lifetime (rotation + reuse detection in lf_refresh_token)
     refresh-expire-days: ${LINKFORGE_REFRESH_EXPIRE_DAYS:30}
+    # Batch 2b: bearer-invitation lifetime (single-use, revocable; plan D4)
+    invitation-expire-days: ${LINKFORGE_INVITATION_EXPIRE_DAYS:7}
   public-base-url: ${LINKFORGE_PUBLIC_BASE_URL:http://localhost:8080}
   qr:
     # C1 wave B: QR share links; blank secret derives the HMAC key from the JWT secret.
@@ -208,6 +210,9 @@ linkforge:
     refresh-window-seconds: ${LINKFORGE_REFRESH_RATE_WINDOW_SECONDS:600}
     logout-max: ${LINKFORGE_LOGOUT_RATE_MAX:5}
     logout-window-seconds: ${LINKFORGE_LOGOUT_RATE_WINDOW_SECONDS:600}
+    # Batch 2b: invitation acceptance joins the same public-entry tier
+    accept-invitation-max: ${LINKFORGE_ACCEPT_INVITATION_RATE_MAX:5}
+    accept-invitation-window-seconds: ${LINKFORGE_ACCEPT_INVITATION_RATE_WINDOW_SECONDS:600}
     create-max: ${LINKFORGE_CREATE_RATE_MAX:30}
     create-window-seconds: ${LINKFORGE_CREATE_RATE_WINDOW_SECONDS:60}
     # D-C3-22: dedicated import bucket (whole request, never per row) so a 100-row

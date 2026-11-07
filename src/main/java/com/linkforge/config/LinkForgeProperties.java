@@ -97,6 +97,9 @@ public class LinkForgeProperties {
         /** Batch 2a: refresh-token lifetime; every rotation re-issues a fresh row
          * with this lifetime, so an active session never ages out mid-use. */
         private int refreshExpireDays = 30;
+        /** Batch 2b: invitation lifetime. A bearer link that adds a person to a
+         * tenant stays short-lived (plan D4): single-use, revocable, 7 days. */
+        private int invitationExpireDays = 7;
     }
 
     @Data
@@ -247,6 +250,11 @@ public class LinkForgeProperties {
         /** Sliding-window-log per-IP limit for logout (same tier as login). */
         private int logoutMax = 5;
         private int logoutWindowSeconds = 600;
+        /** Sliding-window-log per-IP limit for invitation acceptance (same tier
+         * as login): the endpoint is public and credential-bearing, so probing
+         * invitation tokens must stay expensive even though only hashes are stored. */
+        private int acceptInvitationMax = 5;
+        private int acceptInvitationWindowSeconds = 600;
         /** Sliding-window-log per-user limit for link creation. */
         private int createMax = 30;
         private int createWindowSeconds = 60;
