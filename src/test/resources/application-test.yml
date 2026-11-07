@@ -50,6 +50,9 @@ linkforge:
     # the suite itself (dedicated rate-limit ITs override per class)
     login-max: ${LINKFORGE_LOGIN_RATE_MAX:1000}
     login-account-max: ${LINKFORGE_LOGIN_ACCOUNT_RATE_MAX:1000}
+    # same headroom for the batch-2a public entries (dedicated ITs override per class)
+    refresh-max: 1000
+    logout-max: 1000
     key-prefix: "linkforge:rl:it-default:"
   retention:
     # Shared IT database must not have a cleanup tick race a SENT assertion.

@@ -19,6 +19,10 @@ public class UserAccount {
     private String passwordHash;
     private Integer status;
     private String tenantRole;
+    /** Access-token revocation counter (V11): the JWT "tv" claim must match this. */
+    private Integer tokenVersion;
+    /** 1 = an admin reset this password; the JWT filter forces a change (V11). */
+    private Integer mustChangePassword;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     @TableLogic

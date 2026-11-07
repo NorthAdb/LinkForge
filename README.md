@@ -31,7 +31,7 @@
 
 | 域 | 能力 | 模块章节 |
 |------|------|------|
-| 认证 | JWT 登录（IP + 账号双限流、失败时序恒定防枚举）/ 开放注册（按 IP 限流）/ bootstrap 演示租户 / 多租户隔离 | [认证与多租户](#认证与多租户) |
+| 认证 | JWT 登录（access 1h + refresh 30 天轮换/重用检测、IP + 账号双限流、失败时序恒定防枚举）/ 开放注册（按 IP 限流）/ bootstrap 演示租户 / 多租户隔离 | [认证与多租户](#认证与多租户) |
 | 短链 | CRUD、自定义短码（区分大小写）、过期/禁用、创建幂等、并发不撞码、CSV 导出、QR 物料 + 短时分享链、UTM 写时合并 | [短链管理](#短链管理)、[物料与投放](#物料与投放c1qr--utm) |
 | 短链 | A/B 权重分流：一码多目标（≤10）按权重抽签，密码/门禁/UTM 仍链层，统计按 variant 分桶 | [A/B 权重分流与批量导入](#ab-权重分流与批量导入c3) |
 | 短链 | 批量 CSV 导入：POST /api/links/import 同步 multipart ≤100 行，部分失败返回文件行号+原因，专用 import 限流 | [A/B 权重分流与批量导入](#ab-权重分流与批量导入c3) |
@@ -340,8 +340,13 @@ flowchart LR
 
 **设计**：bootstrap 演示账号 + 开放注册共存（D3）。口令只从环境变量读取，本地示例值只在 `.env.example`。注册按 IP 滑动窗口限流（默认 5 次/10 分钟）。登录同为滑动窗口双桶限流：IP 与账号（租户+用户名）各 5 次/10 分钟，任一桶满即 429；且无论账号是否存在、是否被禁用，失败登录都恰好执行一次 BCrypt 校验，响应时序不泄露账号存在性。
 
+**令牌模型（批次 2a）**：access token 有效期 1 小时（`JWT_EXPIRE_HOURS` 可调），带 `tv`（token_version）claim；登录/注册同时签发 refresh token（30 天，`LINKFORGE_REFRESH_EXPIRE_DAYS`），服务端只存其 SHA-256 哈希。JwtAuthFilter 每请求回查用户行：用户被禁用/删除、`tv` 与库中 token_version 不符，旧 token 下一请求即失效（API Key 同步复查其所属用户状态）。`must_change_password` 置位时（管理员重置密码后），除改密/登出/刷新外的已认证请求一律 403 `PASSWORD_CHANGE_REQUIRED`。
+
 - **bootstrap**：启动时 `BootstrapDataLoader` 幂等写入演示租户——`LINKFORGE_BOOTSTRAP_TENANT`（默认 `demo`）、`LINKFORGE_BOOTSTRAP_USERNAME`（默认 `admin`）、`LINKFORGE_BOOTSTRAP_PASSWORD`（必填）
-- **开放注册** `POST /api/auth/register`：自助创建全新租户及首个用户，成功即返 JWT；无邀请码逻辑
+- **开放注册** `POST /api/auth/register`：自助创建全新租户及首个用户，成功即返 access + refresh；无邀请码逻辑
+- **刷新** `POST /api/auth/refresh`：refresh token 单次轮换（条件更新原子轮换 + 新旧行 replaced_by 互指）；已轮换 token 在 10 秒宽限外被重用即判定泄露——整 family 撤销 + token_version 自增。失败口径统一 401 不区分原因
+- **登出** `POST /api/auth/logout`：撤销该 refresh 的 family（幂等、未知 token 同样成功）；access 自然过期前仍有效。`POST /api/auth/logout-all`（需登录）：全部 refresh 撤销 + token_version 自增，access 下一请求即失效
+- **改密** `POST /api/auth/change-password`（需登录）：验当前密码后换哈希、清强制改密标记、token_version 自增并撤销全部 refresh（含当前会话，强制重新登录）
 
 ### 短链管理
 
@@ -376,6 +381,8 @@ flowchart LR
 |------|------|------|
 | 注册 | 5 次 / 10 分钟 / IP | `LINKFORGE_REGISTER_MAX` `_WINDOW_SECONDS` |
 | 登录 | 5 次 / 10 分钟 / IP，且 5 次 / 10 分钟 / 账号（租户+用户名，双桶任一满即拒） | `LINKFORGE_LOGIN_RATE_MAX`、`LINKFORGE_LOGIN_ACCOUNT_RATE_MAX` `_WINDOW_SECONDS` |
+| 刷新 | 5 次 / 10 分钟 / IP | `LINKFORGE_REFRESH_RATE_MAX` `_WINDOW_SECONDS` |
+| 登出 | 5 次 / 10 分钟 / IP | `LINKFORGE_LOGOUT_RATE_MAX` `_WINDOW_SECONDS` |
 | 创建（含自定义码） | 30 次 / 分钟 / 用户 | `LINKFORGE_CREATE_RATE_MAX` `_WINDOW_SECONDS` |
 | 导入 | 5 次 / 分钟 / 用户（整次请求计一次，不占创建配额） | `LINKFORGE_IMPORT_RATE_MAX` `_WINDOW_SECONDS` |
 | 跳转 | 300 次 / 分钟 / IP | `LINKFORGE_REDIRECT_RATE_MAX` `_WINDOW_SECONDS` |

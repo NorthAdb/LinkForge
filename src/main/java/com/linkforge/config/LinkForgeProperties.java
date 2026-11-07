@@ -12,6 +12,7 @@ import java.util.List;
 public class LinkForgeProperties {
 
     private Jwt jwt = new Jwt();
+    private Auth auth = new Auth();
     /** C1 wave B: origin scanners see in QR/share material; trailing slash trimmed on use. */
     private String publicBaseUrl = "http://localhost:8080";
     private Qr qr = new Qr();
@@ -88,7 +89,14 @@ public class LinkForgeProperties {
     @Data
     public static class Jwt {
         private String secret;
-        private long expireHours = 24;
+        private long expireHours = 1;
+    }
+
+    @Data
+    public static class Auth {
+        /** Batch 2a: refresh-token lifetime; every rotation re-issues a fresh row
+         * with this lifetime, so an active session never ages out mid-use. */
+        private int refreshExpireDays = 30;
     }
 
     @Data
@@ -231,6 +239,14 @@ public class LinkForgeProperties {
          */
         private int loginAccountMax = 5;
         private int loginAccountWindowSeconds = 600;
+        /** Sliding-window-log per-IP limit for the refresh endpoint (same tier as
+         * login): the endpoint is public and credential-bearing, so guessing raw
+         * refresh tokens must stay expensive even though only hashes are stored. */
+        private int refreshMax = 5;
+        private int refreshWindowSeconds = 600;
+        /** Sliding-window-log per-IP limit for logout (same tier as login). */
+        private int logoutMax = 5;
+        private int logoutWindowSeconds = 600;
         /** Sliding-window-log per-user limit for link creation. */
         private int createMax = 30;
         private int createWindowSeconds = 60;
