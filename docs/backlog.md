@@ -21,7 +21,8 @@
 | # | 事项 | 说明 | 来源 |
 |---|------|------|------|
 | 10 | Webhook SSRF 残余 | DNS rebinding（校验与连接两次解析的 TOCTOU）**已随 C4 闭环 ✅**（投递时一次解析 + 全 IP 校验 + 连接钉死保 Host/SNI，见 `docs/progress.md` C4 章）；端口白名单、出口代理隔离仍开 | B 波 2 诚实限制；C4 收口 |
-| 12 | README「tests 211 green」静态徽章会腐化 | 例数增减时需手改徽章数字（或换 CI 生成/动态方案）；v2.0 发布轮跨模型复审 flag #2；C3 轮（2026-10-31）已同步 307；C4 轮（2026-11-01）已同步 315；C5 轮（2026-11-01）已同步 319 | v2.0 复审 |
+| 12 | README「tests 211 green」静态徽章会腐化 | 例数增减时需手改徽章数字（或换 CI 生成/动态方案）；v2.0 发布轮跨模型复审 flag #2；C3 轮（2026-10-31）已同步 307；C4 轮（2026-11-01）已同步 315；C5 轮（2026-11-01）已同步 319；批次 1 对账（2026-11-07）同步 335；批次 2 收尾对账（2026-11-08）同步 366 | v2.0 复审 |
+| 13 | `DimBreakdownIT` 间歇失败（flaky） | 症状：`breakdownBucketsDeviceAndRefererHost` 期望 device 分桶 `unknown`、偶发读到 `bot`——点击事件异步消费未落齐时断言分桶内容，属等待信号不充分。批次 1 已修过一版（改等分桶数据本身，不再拿 totalClicks 当同步信号），仍未根除：2026-11-08 在 `13de6ec` 的同提交双跑中一红一绿（push 跑绿、PR 跑红），其余轮次全绿。加固方向：断言前按本用例的点击特征等待目标分桶行齐备（或给用例独立的 code 前缀隔离数据），单独小批处理，不并入功能批次 | 批次 2 收尾对账 |
 
 ## 已做的运维项（v2.1 抛光，仍无新版本号）
 
@@ -46,3 +47,5 @@
 > C4 闭环备注（2026-11-01）：**Webhook SSRF 的 DNS rebinding 段已随 C4 闭环**（`feat/deepen-c4-ssrf-rebinding-drills`——投递时一次解析 + 全 IP 校验 + 连接钉死，故障演练与 C3 审计修复并入，见 `docs/progress.md` C4 章）；#10 余下端口白名单/出口代理仍开。#1（B10）/ #6（Geo）不受影响，仍开放。
 >
 > C5 闭环备注（2026-11-01）：**C4-S1/N1/N2/N3 已随 C5 闭环**（`feat/deepen-c5-closeout`——点击记账 fail-open：主链路 302 不依赖 Redis / 点击写 / Webhook 任一侧写成功，fault-drill mysql-ro 主探针改 GET 302；C4 章 main tip 记账行、absent fail-open meter、Compose 手验证据入档，见 `docs/progress.md` C5 章）。**功能冻结声明：C5 审计通过后 LinkForge 功能冻结**——不再开产品能力轮；#1（B10）/ #6（Geo）/ 端口白名单 / 出口代理仍开，但「无萧北指令不开」。
+>
+> 解冻批次闭环备注（2026-11-07/08）：冻结后经运营者指令开两批并已全部合入 main。**批次 1（审计修复，PR #5）**：登录双桶限流 + 失败时序恒定、stats 窗口口径统一、Webhook 聚合冲刷改快照行删除、Outbox 状态守卫、链接 update 单事务、BizException 拆 httpStatus/code + cause 构造。**批次 2（认证重构 + 团队协作，PR #7 + #10）**：access 1h + refresh 30 天轮换/重用检测（V11、`token_version` 即时撤销、过滤器每请求回查用户状态、改密/登出全家桶、控制台静默刷新）；邀请制加入 + ADMIN/MEMBER 成员管理 + 最后 ADMIN 护栏 + 管理员重置密码（V12）。两批收尾各做了一次文档对账（PR #6 与本轮）。测试 319 → 366。#1（B10）/ #6（Geo）仍开放、仍「无指令不开」；新增运维项 #13（DimBreakdownIT flaky）。
