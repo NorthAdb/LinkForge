@@ -493,22 +493,28 @@ public class ShortLinkService {
         // can never kill a flight that started after it and reads the fresh row
         // (A10 audit N1).
         CompletableFuture<ShortLink> priorFlight = singleFlight.peek(code);
-        if (clearPassword) {
-            // MyBatis-Plus's default NOT_NULL update strategy skips null fields in
-            // updateById — the clear must be an explicit SET NULL (D-Bw345-32).
-            shortLinkMapper.update(null, new LambdaUpdateWrapper<ShortLink>()
-                    .eq(ShortLink::getId, link.getId())
-                    .set(ShortLink::getAccessPasswordHash, null));
-            link.setAccessPasswordHash(null);
-        }
-        shortLinkMapper.updateById(link);
-        if (replacement != null) {
-            transactionTemplate.executeWithoutResult(status -> {
+        // L-M1: the password clear, the row update and the variant replacement
+        // commit as ONE unit, the same shape create (C3-S1) and delete already
+        // use. They used to be three separate writes, so a failure in the
+        // variant inserts left "URL changed but variants stale" (or a cleared
+        // password next to an un-updated row) behind. Cache side effects stay
+        // outside the transaction, exactly like delete().
+        transactionTemplate.executeWithoutResult(status -> {
+            if (clearPassword) {
+                // MyBatis-Plus's default NOT_NULL update strategy skips null fields in
+                // updateById — the clear must be an explicit SET NULL (D-Bw345-32).
+                shortLinkMapper.update(null, new LambdaUpdateWrapper<ShortLink>()
+                        .eq(ShortLink::getId, link.getId())
+                        .set(ShortLink::getAccessPasswordHash, null));
+                link.setAccessPasswordHash(null);
+            }
+            shortLinkMapper.updateById(link);
+            if (replacement != null) {
                 variantMapper.delete(new LambdaQueryWrapper<LinkVariant>()
                         .eq(LinkVariant::getLinkId, link.getId()));
                 insertVariants(link, replacement);
-            });
-        }
+            }
+        });
         singleFlight.forget(code, priorFlight);
         // Write-through now, then a delayed delete clears any stale write-back a racing
         // reader may have cached from the pre-commit row. Final consistency window ~1s.

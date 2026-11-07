@@ -29,4 +29,16 @@ public interface ClickLogMapper extends BaseMapper<ClickLog> {
     List<com.linkforge.stats.dto.DailyUv> selectDailyUv(@Param("linkId") Long linkId,
                                                         @Param("from") java.time.LocalDateTime from,
                                                         @Param("toExclusive") java.time.LocalDateTime toExclusive);
+
+    /**
+     * Per-day click counts from the same detail rows as {@link #selectDailyUv}:
+     * the stats response reads its whole daily series from lf_click_log so the
+     * clicks and UV columns of a day always describe the same set of clicks.
+     */
+    @Select("SELECT DATE(clicked_at) stat_date, COUNT(*) clicks FROM lf_click_log "
+            + "WHERE link_id = #{linkId} AND clicked_at >= #{from} AND clicked_at < #{toExclusive} "
+            + "GROUP BY DATE(clicked_at)")
+    List<com.linkforge.stats.dto.DailyClickCount> selectDailyClicks(@Param("linkId") Long linkId,
+                                                                    @Param("from") java.time.LocalDateTime from,
+                                                                    @Param("toExclusive") java.time.LocalDateTime toExclusive);
 }

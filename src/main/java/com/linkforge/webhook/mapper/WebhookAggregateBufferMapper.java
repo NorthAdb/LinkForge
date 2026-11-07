@@ -66,6 +66,15 @@ public interface WebhookAggregateBufferMapper extends BaseMapper<WebhookAggregat
             + "GROUP BY b.endpoint_id, b.window_start ORDER BY b.endpoint_id, b.window_start")
     List<WebhookAggregateBuffer> selectExpiredWindows();
 
-    @Delete("DELETE FROM lf_webhook_agg_buffer WHERE endpoint_id = #{endpointId} AND window_start = #{windowStart}")
-    int deleteWindow(@Param("endpointId") Long endpointId, @Param("windowStart") long windowStart);
+    /**
+     * Flush cleanup (T-M2): delete ONLY the rows the flush actually snapshotted.
+     * The old whole-window delete also removed buckets a concurrent consume had
+     * written into the same window after the snapshot — clicks that never made
+     * any digest and were lost without a trace.
+     */
+    @Delete("<script>DELETE FROM lf_webhook_agg_buffer WHERE endpoint_id = #{endpointId} "
+            + "AND window_start = #{windowStart} AND id IN "
+            + "<foreach item='id' collection='ids' open='(' separator=',' close=')'>#{id}</foreach></script>")
+    int deleteSnapshotRows(@Param("endpointId") Long endpointId, @Param("windowStart") long windowStart,
+                           @Param("ids") List<Long> ids);
 }

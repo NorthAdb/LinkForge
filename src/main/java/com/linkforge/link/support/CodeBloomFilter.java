@@ -170,7 +170,7 @@ public class CodeBloomFilter {
                 meterRegistry.counter("linkforge.bloom.rebuild", "result", "error").increment();
                 log.warn("bloom rebuild failed; previous filter restored: {}", ex.getMessage(), ex);
                 if (manual) {
-                    throw new BizException(500, "bloom rebuild failed: " + ex.getMessage());
+                    throw new BizException(500, "bloom rebuild failed: " + ex.getMessage(), ex);
                 }
                 return 0;
             }

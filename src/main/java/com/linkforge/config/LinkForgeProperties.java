@@ -221,6 +221,16 @@ public class LinkForgeProperties {
         /** Sliding-window-log per-IP limit for open registration (Redis ZSET + Lua, Redis TIME clock). */
         private int registerMax = 5;
         private int registerWindowSeconds = 600;
+        /** Sliding-window-log per-IP limit for login attempts (audit H1: login had no limit at all). */
+        private int loginMax = 5;
+        private int loginWindowSeconds = 600;
+        /**
+         * Sliding-window-log per-account (tenant + username) limit for login attempts.
+         * Second gate beside the per-IP one: rotating source IPs does not reset it, and
+         * many users behind one shared egress IP do not share one bucket.
+         */
+        private int loginAccountMax = 5;
+        private int loginAccountWindowSeconds = 600;
         /** Sliding-window-log per-user limit for link creation. */
         private int createMax = 30;
         private int createWindowSeconds = 60;

@@ -138,7 +138,11 @@ public class WebhookAggregateFlusher {
             return;
         }
         boolean existed = emitParts(endpoint, windowStart, rows, status, lastError);
-        bufferMapper.deleteWindow(endpoint.getId(), windowStart);
+        // T-M2: delete only the snapshotted rows. A bucket a concurrent consume
+        // created in this window after the snapshot is not in the digest, so it
+        // must survive for the next flush instead of being dropped window-wide.
+        bufferMapper.deleteSnapshotRows(endpoint.getId(), windowStart,
+                rows.stream().map(WebhookAggregateBuffer::getId).toList());
         if (WebhookDelivery.STATUS_PENDING.equals(status)) {
             meterRegistry.counter(FLUSH_COUNTER, "result", existed ? "partial" : "ok").increment();
         }

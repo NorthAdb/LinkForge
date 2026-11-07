@@ -26,7 +26,10 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(BizException.class)
     public ResponseEntity<ApiResponse<Void>> handleBiz(BizException ex) {
-        int status = ex.getCode() >= 400 && ex.getCode() <= 599 ? ex.getCode() : 400;
+        // httpStatus drives the wire status, code is body-only. The range guard
+        // stays as a safety net for a dual-written legacy value outside 400-599,
+        // which used to clamp to 400 here.
+        int status = ex.getHttpStatus() >= 400 && ex.getHttpStatus() <= 599 ? ex.getHttpStatus() : 400;
         return ResponseEntity.status(status).body(ApiResponse.fail(ex.getCode(), ex.getMessage()));
     }
 
