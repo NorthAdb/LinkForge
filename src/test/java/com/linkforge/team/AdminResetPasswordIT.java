@@ -25,8 +25,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @ActiveProfiles("test")
 class AdminResetPasswordIT extends AbstractIntegrationTest {
 
-    private static final String MEMBER_PASSWORD = "member-pass-123";
-    private static final String NEW_PASSWORD = "member-new-pass-456";
+    private static final String MEMBER_PASSWORD = "it-member-pass-1";
+    private static final String NEW_PASSWORD = "it-new-pass-123";
     private static final String LINKS = "/api/links?page=1&size=10";
 
     @Autowired
