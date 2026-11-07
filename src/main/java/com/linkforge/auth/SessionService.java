@@ -69,6 +69,15 @@ public class SessionService {
     }
 
     /**
+     * Batch 2b: a full login response (access + a fresh refresh family) for an
+     * account that was just created by accepting an invitation — the invitee
+     * lands already signed in, exactly as if they had registered.
+     */
+    public LoginResponse issueLoginResponse(UserAccount user, HttpServletRequest request) {
+        return buildResponse(user, startSession(user.getId(), request));
+    }
+
+    /**
      * Rotates a refresh token into a fresh access + refresh pair.
      *
      * <p>Deliberately NOT transactional: the reuse path must COMMIT its family
@@ -271,7 +280,9 @@ public class SessionService {
         return user.getMustChangePassword() != null && user.getMustChangePassword() == 1;
     }
 
-    static String sha256Hex(String input) {
+    /** Shared with the batch-2b invitation flow, which stores invitation tokens
+     * under the same hash-only discipline. */
+    public static String sha256Hex(String input) {
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256")
                     .digest(input.getBytes(StandardCharsets.UTF_8));
