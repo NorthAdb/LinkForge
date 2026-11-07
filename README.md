@@ -31,7 +31,7 @@
 
 | 域 | 能力 | 模块章节 |
 |------|------|------|
-| 认证 | JWT 登录 / 开放注册（按 IP 限流）/ bootstrap 演示租户 / 多租户隔离 | [认证与多租户](#认证与多租户) |
+| 认证 | JWT 登录（IP + 账号双限流、失败时序恒定防枚举）/ 开放注册（按 IP 限流）/ bootstrap 演示租户 / 多租户隔离 | [认证与多租户](#认证与多租户) |
 | 短链 | CRUD、自定义短码（区分大小写）、过期/禁用、创建幂等、并发不撞码、CSV 导出、QR 物料 + 短时分享链、UTM 写时合并 | [短链管理](#短链管理)、[物料与投放](#物料与投放c1qr--utm) |
 | 短链 | A/B 权重分流：一码多目标（≤10）按权重抽签，密码/门禁/UTM 仍链层，统计按 variant 分桶 | [A/B 权重分流与批量导入](#ab-权重分流与批量导入c3) |
 | 短链 | 批量 CSV 导入：POST /api/links/import 同步 multipart ≤100 行，部分失败返回文件行号+原因，专用 import 限流 | [A/B 权重分流与批量导入](#ab-权重分流与批量导入c3) |
@@ -41,7 +41,7 @@
 | 安全 | BCrypt 密码短链（签名 cookie、先限流后校验）、本地域名名单门禁（BLOCK/WARN）、非人点击不计 | [密码短链](#密码短链b3)、[域名门禁](#目标域名名单门禁b9)、[非人点击](#非人点击b2预取与预览-bot-照常-302-但不计) |
 | 开放 | API Key（哈希存储+配额，USER/TENANT 双 scope、TENANT 仅 ADMIN 签发）、点击 Webhook（HMAC 签名、AES-256-GCM at-rest、SSRF 防护、逐次/聚合双模式） | [开放能力](#开放能力b4-api-key--b5-webhook) |
 | 可观测 | 令牌守卫的 `/actuator/prometheus`、Grafana 自动 provision 看板、积压 gauge | [可观测](#可观测b1-prometheus--grafana) |
-| 工程 | Flyway 版本化迁移（V1–V10）、测试 319 例（含 Testcontainers 集成 166）、GitHub Actions CI、prod profile 一键收紧 | [测试与质量](#-测试与质量) |
+| 工程 | Flyway 版本化迁移（V1–V10）、测试 335 例（含 Testcontainers 集成 174）、GitHub Actions CI、prod profile 一键收紧 | [测试与质量](#-测试与质量) |
 
 **明确不做**（冻结决策，详见[待办](docs/backlog.md)）：AI / PostgreSQL / Supabase / 向量库（整体延期另立方案）；Spring Cloud / Seata / 多机房；独立前端 SPA（静态控制台已够用）；云公网部署（D5=本地 Compose，prod profile 已备好收紧开关）。
 
@@ -338,7 +338,7 @@ flowchart LR
 
 ### 认证与多租户
 
-**设计**：bootstrap 演示账号 + 开放注册共存（D3）。口令只从环境变量读取，本地示例值只在 `.env.example`。注册按 IP 滑动窗口限流（默认 5 次/10 分钟）。
+**设计**：bootstrap 演示账号 + 开放注册共存（D3）。口令只从环境变量读取，本地示例值只在 `.env.example`。注册按 IP 滑动窗口限流（默认 5 次/10 分钟）。登录同为滑动窗口双桶限流：IP 与账号（租户+用户名）各 5 次/10 分钟，任一桶满即 429；且无论账号是否存在、是否被禁用，失败登录都恰好执行一次 BCrypt 校验，响应时序不泄露账号存在性。
 
 - **bootstrap**：启动时 `BootstrapDataLoader` 幂等写入演示租户——`LINKFORGE_BOOTSTRAP_TENANT`（默认 `demo`）、`LINKFORGE_BOOTSTRAP_USERNAME`（默认 `admin`）、`LINKFORGE_BOOTSTRAP_PASSWORD`（必填）
 - **开放注册** `POST /api/auth/register`：自助创建全新租户及首个用户，成功即返 JWT；无邀请码逻辑
@@ -357,7 +357,7 @@ flowchart LR
 | PATCH | `/api/links/{code}` | 改目标 URL / 备注 / 过期时间；设/换密码用 `accessPassword`、清除用 `clearAccessPassword:true`（两者同发 400）；`variants` 整表替换（不传=不动、空数组=清空） |
 | POST | `/api/links/{code}/disable` `/enable` | 禁用/启用（过期时间不受影响） |
 | DELETE | `/api/links/{code}` | 逻辑删除；**短码永久保留不可复用** |
-| GET | `/api/links/{code}/stats?days=7` | 总量、精确 UV（按 IP 去重）+ 按天序列；days 1..90 |
+| GET | `/api/links/{code}/stats?days=7` | 窗口总量（=按天 clicks 之和，与 UV 同窗同源）、精确 UV（按 IP 去重）+ 按天序列；days 1..90 |
 | GET | `/api/links/{code}/stats/breakdown?dim=device\|referer_host\|os\|browser\|variant` | 维度分布（口径是点击数不是 UV） |
 | GET | `/api/links/{code}/clicks?page=&size=` | 点击明细（时间/IP/UA/Referer） |
 | GET | `/api/links/export` | CSV（UTF-8 BOM；1 万行上限；哈希/明文永不出现在任何导出） |
@@ -375,6 +375,7 @@ flowchart LR
 | 入口 | 限额（默认） | 调整变量 |
 |------|------|------|
 | 注册 | 5 次 / 10 分钟 / IP | `LINKFORGE_REGISTER_MAX` `_WINDOW_SECONDS` |
+| 登录 | 5 次 / 10 分钟 / IP，且 5 次 / 10 分钟 / 账号（租户+用户名，双桶任一满即拒） | `LINKFORGE_LOGIN_RATE_MAX`、`LINKFORGE_LOGIN_ACCOUNT_RATE_MAX` `_WINDOW_SECONDS` |
 | 创建（含自定义码） | 30 次 / 分钟 / 用户 | `LINKFORGE_CREATE_RATE_MAX` `_WINDOW_SECONDS` |
 | 导入 | 5 次 / 分钟 / 用户（整次请求计一次，不占创建配额） | `LINKFORGE_IMPORT_RATE_MAX` `_WINDOW_SECONDS` |
 | 跳转 | 300 次 / 分钟 / IP | `LINKFORGE_REDIRECT_RATE_MAX` `_WINDOW_SECONDS` |
