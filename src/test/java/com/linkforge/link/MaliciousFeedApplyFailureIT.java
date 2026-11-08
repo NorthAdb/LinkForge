@@ -1,7 +1,7 @@
 package com.linkforge.link;
 
 import com.linkforge.AbstractIntegrationTest;
-import com.linkforge.link.mapper.MaliciousFeedMapper;
+import com.linkforge.link.mapper.MaliciousHostMapper;
 import com.linkforge.link.service.MaliciousHostSyncService;
 import com.linkforge.link.support.MaliciousHostSnapshot;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -17,6 +17,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
@@ -43,7 +44,7 @@ import static org.mockito.Mockito.when;
 class MaliciousFeedApplyFailureIT extends AbstractIntegrationTest {
 
     @MockBean
-    private MaliciousFeedMapper feedMapper;
+    private MaliciousHostMapper hostMapper;
 
     @Autowired
     private MaliciousHostSyncService syncService;
@@ -73,9 +74,8 @@ class MaliciousFeedApplyFailureIT extends AbstractIntegrationTest {
     @Test
     void snapshotApplyFailureIsNotSuccess() throws Exception {
         // A known-good snapshot is live and verdicating.
-        when(feedMapper.selectAllHosts()).thenReturn(List.of("known-bad.example"));
-        when(feedMapper.upsertBatch(anyString(), anyList())).thenReturn(2);
-        when(feedMapper.countBySource(anyString())).thenReturn(2);
+        when(hostMapper.selectAllHosts()).thenReturn(List.of("known-bad.example"));
+        when(hostMapper.upsertBatch(anyList(), anyString(), any(java.time.LocalDateTime.class))).thenReturn(2);
         assertTrue(snapshot.refresh(), "baseline snapshot applies");
         assertTrue(snapshot.isMalicious("https://known-bad.example/x"));
 
@@ -87,7 +87,7 @@ class MaliciousFeedApplyFailureIT extends AbstractIntegrationTest {
 
         // The next feed downloads and upserts fine, but the snapshot re-read
         // (the apply step) breaks.
-        when(feedMapper.selectAllHosts())
+        when(hostMapper.selectAllHosts())
                 .thenThrow(new DataAccessResourceFailureException("snapshot read failed"));
         syncService.ingest(fixture());
 
