@@ -189,8 +189,8 @@ class WebhookAggregateIT extends AbstractIntegrationTest {
 
         awaitLatestDigest(token);
         String digestId = String.valueOf(latestDeliveryFor(token).get("event_id"));
-        assertTrue(digestId.matches("digest-\\d+-\\d+"), "event id shape digest-{endpointId}-{windowStart}: "
-                + digestId);
+        assertTrue(digestId.matches("digest-\\d+-\\d+-\\d+"),
+                "event id shape digest-{endpointId}-{windowStart}-{flushSeq} (audit M3): " + digestId);
         assertEquals("SENT", latestDeliveryFor(token).get("status"), "relay must send the digest");
 
         String[] hit = stubHitFor(digestId);
