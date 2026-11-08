@@ -1,10 +1,10 @@
-# LinkForge · Demo 讲稿（10–15 分钟 · C5 功能冻结）
+# LinkForge · Demo 讲稿（10–15 分钟 · v3.0.0 功能冻结）
 
 > **用途**：春招现场照着说。默认 **12 分钟**，卡点可以收到 10 分钟，追问多就用到 15 分钟。  
-> **对齐**：能力是 C5 收口 `f955313`（合并 `e9ffff4`，跳转代码 `e0c567c`）。`d1e94b2` 只补了 progress 里的 CI / PASS 计数，没有新行为。命令以仓库 README「五步跑通」和「面试 Demo 五步」为准。简历口径见 [`docs/resume.md`](resume.md)。  
+> **对齐**：讲的是 **v3.0.0**。产品祖先 `3f545cc`，独立复审 PASS_WITH_NITS，测试 508，Flyway V1–V15。命令以仓库 README「五步跑通」和「面试 Demo 五步」为准。简历口径见 [`docs/resume.md`](resume.md)。  
 > **终端**：提示符是 `PS` 时只贴 PowerShell 代码块。bash 块贴进去会报 `is not recognized`。  
-> **数字**：只报 **508 = 226 UT + 280 IT + 2 tz**。pom **2.0.0**。  
-> **本文件没有新的 Compose 实测。** `SMOKE OK` / `FAULT DRILL OK` 的原文在 [`docs/progress.md`](progress.md) C5 章，实跑日 2026-11-01 Asia/Shanghai，代码 tip **`e0c567c`**（smoke **8** PASS，fault-drill **7** PASS，无 SKIP）。现场要跑就现场跑；没跑就说「证据在 progress，我今天不临时改口」。
+> **数字**：只报 **508 = 226 UT + 280 IT + 2 tz**。pom **3.0.0**。不报 QPS。  
+> **本文件没有新的 Compose 实测。** `SMOKE OK` / `FAULT DRILL OK` 的原文在 [`docs/progress.md`](progress.md) C5 章，实跑日 2026-11-01 Asia/Shanghai，代码 tip **`e0c567c`**（smoke **8** PASS，fault-drill **7** PASS，无 SKIP）。那次跑的是当时的 jar，不是 3.0.0 的新压测。现场要跑就现场跑；没跑就说「证据在 progress，我今天不临时改口」。
 
 ---
 
@@ -33,7 +33,8 @@
 
 - 「现在 Linux 上能到 xxx QPS」「万级」「压测已经复现过当前 tip」。B10 没跑。被问再翻 [`docs/bench.md`](bench.md)，并声明那是 2026-10-24 Windows、固定窗口时期：health 约 888 QPS，关同步明细后跳转 13→276 QPS、P50 678→31ms。那不是今天这个 jar 的成绩。
 - 「做了 Geo / 按地区分流 / 自定义域名 / 已上云 / 集群 Bloom / 出口代理」。
-- 「版本 2.1」。pom 是 **2.0.0**，C1–C5 没另发版。
+- 「版本 2.0.0」或「版本 2.1」。pom 是 **3.0.0**。`v2.0.0` 是 2026-10-25 的 tag，不是现在这份代码。
+- 「浏览器我点过了」「导入崩溃也能恰好一次」「同一个 Idempotency-Key 并发只会建一条」。这三句都超出了复审接受的范围。
 - 「我刚才又跑了一遍 Compose，全绿」。除非你本场确实看到终行 `SMOKE OK` 或 `FAULT DRILL OK`。
 - 现场改 hosts、配恶意 DNS、扫内网来「证明 SSRF」。只讲设计和测试名。
 
@@ -43,15 +44,17 @@
 
 ## 60 秒电梯稿（进门先说完再动手）
 
-我做的是 LinkForge，自研的多租户短链，不是拿开源项目换皮。技术栈是 Spring Boot 3、MySQL、Redis、RabbitMQ，仓库版本停在 2.0.0。
+我做的是 LinkForge，自研的多租户短链，不是拿开源项目换皮。技术栈是 Spring Boot 3、MySQL、Redis、RabbitMQ。仓库版本是 **3.0.0**，功能已经冻结。
 
 跳转是 302。读的时候先限流，再 Bloom，再空值缓存，然后 Caffeine 本地缓存加 Redis，并发用 singleflight 合并。即便缓存命中，每个请求还是读库里的那一行，所以禁用和过期不会被旧缓存放出去。
 
 点击不在热路径上发 MQ。明细和 outbox 行是同一个事务写进去的，后台再投递。断了消息队列，302 还在，恢复以后自己追平。
 
-开放面上我做了租户 API Key、Webhook、二维码和 UTM、A/B 权重分流，还有批量 CSV 导入。Webhook 这边把 DNS rebinding 关掉了：投递时只解析一次，每个 IP 都校验，连接只打到校验过的地址，用的是 httpclient5 的 DnsResolver。Redis 挂了、点击那次写库失败了、Webhook 对方 5xx，用户这边仍然是 302。`fault-drill.sh` 能把这三段演出来。
+3.0.0 比上一版多出来的，我用几句话讲完。登录发的是 1 小时的 access，外加会轮换的 refresh；重用旧 refresh 会把整族撤掉。租户可以发邀请，角色分 ADMIN 和 MEMBER。一条链上的 variant 可以带 `matchRule`，按设备、语言、时间窗先收窄再抽签。A/B 报告如果发现这是条件路由，或者窗口里改过配置，就回 `NOT_APPLICABLE`，不硬给一个拟合结论。管理员重置密码会强制改密，并且把这个人的 API Key 一起撤销。控制台有改密页和邀请接受页，没有成员管理页。
 
-当前这条线 508 个测试是绿的。C5 之后功能冻结过一阵，后来按运营者指令解冻了三批（外部审计修复、认证重构加团队协作、P1 主体批），都合进 main 了；其后外部审计把三批交付判了 FAIL/MUST_FIX，8 项必修又以三个 PR 全数修完合入。修复波之后又按瘦身口径补了一波 S/N 波——S1 给 A/B 报告加了适用性门（条件路由、窗口内改过配置的链直接回 NOT_APPLICABLE，不硬给拟合结论）、控制台补齐强制改密页和邀请接受这些闭环小件，也已合入，就是现在这条线。我先按 README 的五步 Demo，细节你们随时打断，我先把主链路走完。
+开放面上还有 API Key、Webhook、二维码和 UTM、批量 CSV。Webhook 把 DNS rebinding 关掉了：投递时只解析一次，每个 IP 都校验，连接只打到校验过的地址。聚合推送用单调的 `flush_seq`，避免序号撞车把增量吞掉。Redis 挂了、点击那次写库失败了、Webhook 对方 5xx，用户这边仍然是 302。
+
+508 个测试是绿的。独立复审是 PASS_WITH_NITS。我不会说浏览器手点过，也不会说导入在进程崩溃时恰好一次。我先按 README 的五步 Demo 走主链路，细节你们随时打断。
 
 **不要在电梯稿里报 QPS。**
 
@@ -61,10 +64,10 @@
 
 - [ ] 仓库根目录有 `.env`（从 `.env.example` 来，口令不进 git）
 - [ ] `docker compose ps` 里 mysql、redis、rabbitmq 都是 healthy。MySQL 第一次初始化可能要几分钟，别在面试官看着的时候等初始化
-- [ ] `java -jar target/linkforge-2.0.0.jar` 已经在 **8080** 前台或另一个终端里跑着。应用不读 `.env` 文件。启动那个窗口要先导入 `.env`。bash 用 `set -a && source .env && set +a`。Windows PowerShell 用 README 第 3 步的 `Get-Content` 循环，不要用 `source`
+- [ ] `java -jar target/linkforge-3.0.0.jar` 已经在 **8080** 前台或另一个终端里跑着。应用不读 `.env` 文件。启动那个窗口要先导入 `.env`。bash 用 `set -a && source .env && set +a`。Windows PowerShell 用 README 第 3 步的 `Get-Content` 循环，不要用 `source`
 - [ ] 终端字号够大。提示符是 `PS` 时，只贴下面标了 PowerShell 的代码块。`TOKEN=$(...)`、行末 `\`、`source`、`echo "${#TOKEN}"` 都是 bash，贴进 PowerShell 会把整段当成程序名，报 `is not recognized`。请求写 `curl.exe`。`scripts/*.sh` 用 Git Bash 跑
 - [ ] CSV 可以现场生成。PowerShell 写到 `$env:TEMP\links-demo.csv`。bash 写到 `/tmp/links-demo.csv`
-- [ ] 默念：508 · pom 2.0.0 · 不报 B10 · 不说 Geo · SSRF 只口播
+- [ ] 默念：508 · pom 3.0.0 · 不报 B10 · 不说 Geo · 不说手点过浏览器 · 不说崩溃恰好一次 · SSRF 只口播
 - [ ] fault-drill **要么开场前自己跑通过，要么改口播**。不要在面试里第一次调试这个脚本
 - [ ] 若准备实跑 fault-drill：机器上要有 `powershell.exe`（Webhook 的 5xx 桩）和 `.env` 里的 `MYSQL_ROOT_PASSWORD`。Linux 上常常没有 PowerShell，脚本会打印 `SKIP webhook`，那是设计，不是失败
 
@@ -74,7 +77,7 @@
 
 **你说：**
 
-环境是本机 Docker Compose，MySQL、Redis、RabbitMQ 三个依赖。应用是 `linkforge-2.0.0.jar`，端口 8080。口令在 `.env`，没有提交。我按 README 的面试五步走：建链 302、A/B、CSV 部分成功、故障、然后用嘴把 SSRF 讲清楚。冒烟脚本的期望终行是 `SMOKE OK`；C5 收口时在 progress 里留过一次实跑，今天以你们眼前的输出为准。
+环境是本机 Docker Compose，MySQL、Redis、RabbitMQ 三个依赖。应用是 `linkforge-3.0.0.jar`，端口 8080。口令在 `.env`，没有提交。我按 README 的面试五步走：建链 302、A/B、CSV 部分成功、故障、然后用嘴把 SSRF 讲清楚。冒烟脚本的期望终行是 `SMOKE OK`。progress 里留过一次 2026-11-01 的实跑，那不是今天临时补的；今天以你们眼前的输出为准。
 
 **指：** 终端提示符在仓库根目录。可选打开 `http://localhost:8080/`，说明这是可选控制台，底下就是同一套 API。
 
@@ -110,7 +113,7 @@ Get-Content .env | ForEach-Object {
   $name, $value = $_.Split('=', 2)
   Set-Item -Path "Env:$($name.Trim())" -Value $value
 }
-java -jar target/linkforge-2.0.0.jar
+java -jar target/linkforge-3.0.0.jar
 ```
 
 bash。不要把 `source` 贴进 PowerShell。
@@ -119,7 +122,7 @@ bash。不要把 `source` 贴进 PowerShell。
 set -a
 source .env
 set +a
-java -jar target/linkforge-2.0.0.jar
+java -jar target/linkforge-3.0.0.jar
 ```
 
 健康检查在另一个窗口做。期望正文里有 `"status":"UP"`。这个新窗口也要先导入 `.env`，导入不会生成 token。
@@ -380,7 +383,7 @@ curl -s -w '\nHTTP %{http_code}\n' -H "Authorization: Bearer $TOKEN" \
 
 逐行走的是单链创建同一条路径，所以一行坏掉，不会把已经成功的行回滚掉。这次应是 HTTP 200，`data.successCount` 为 2，`data.failureCount` 为 1。失败在 `data.failures` 里：`row` 是**文件行号**，表头算第 1 行，第一条数据是第 2 行，`not-a-url` 在第 **4** 行。不要把它说成「第 3 条数据所以 row=3」。`reason` 应是 `originalUrl must start with http:// or https://`。成功行在 `data.successes` 里带着各自的 `code`，可以再跳一次 302。
 
-结构性问题不一样：缺 `original_url` 列、超过 100 条数据、引号没闭合、文件太大，整单 400，**一行都不写**。专用 import 限流默认 5 次/60 秒，整次请求计一次，不占创建接口那 30 次/60 秒的配额。单链创建用的 `Idempotency-Key`，导入这边故意不认——结果本身就是逐行回报的。
+结构性问题不一样：缺 `original_url` 列、超过 100 条数据、引号没闭合、文件太大，整单 400，**一行都不写**。专用 import 限流默认 5 次/60 秒，整次请求计一次，不占创建接口那 30 次/60 秒的配额。导入认 `Idempotency-Key`：同 key、同一份文件，顺序重放会拿回第一次的结果，不会再造一遍。换了文件是 409。两个人同时用同一把 key 导同一份文件，owner lease 让第二次回到 `IN_PROGRESS`，20 行不会变成 40 行。进程导到一半崩了，不在这句里：租约过期以后重跑，不叫崩溃恰好一次。
 
 控制台若有「导入 CSV」，打的是同一个接口。时间够可以指一下，不够就停在 curl。
 
@@ -393,7 +396,7 @@ curl -s -w '\nHTTP %{http_code}\n' -H "Authorization: Bearer $TOKEN" \
 | 429 | import 限流。说「这是专用窗口，不是创建配额被 100 行打爆」。等窗口，不要改配置。 |
 | 成功 0 失败 0 | 看是不是传成了空文件。curl 的 `@` 不能丢。 |
 
-**别说：** 不要说「导入是队列，稍后一致」。它是同步的。不要说 Idempotency-Key 能对 CSV 去重。
+**别说：** 不要说「导入是队列，稍后一致」。它是同步的。不要说导入不看 `Idempotency-Key`（那是更早的决定，已经推翻）。也不要说崩溃中点恰好一次，或并发创建「同 key 只执行一次」——创建那条路径没有 owner 租约。
 
 ---
 
@@ -415,7 +418,7 @@ bash scripts/fault-drill.sh
 
 **你说（跑之前先讲清楚，避免面试官以为你在打 8080）：**
 
-这个脚本会自己再起一个应用，默认端口 **8083**，用的是 `target/linkforge-*.jar` 里最新的那个，也就是 2.0.0。它会停 Redis、把 MySQL 打成只读，Webhook 那段要用 PowerShell 在本机起一个 5xx 桩。8080 上这个 Demo 进程连的是同一套 MySQL 和 Redis，所以脚本动依赖时，8080 也会感觉到。脚本用 trap 把 Redis 和 `read_only` 拉回来。我不会在脚本跑到一半 Ctrl+C 然后不管。
+这个脚本会自己再起一个应用，默认端口 **8083**，用的是 `target/linkforge-*.jar` 里最新的那个，也就是 3.0.0。它会停 Redis、把 MySQL 打成只读，Webhook 那段要用 PowerShell 在本机起一个 5xx 桩。8080 上这个 Demo 进程连的是同一套 MySQL 和 Redis，所以脚本动依赖时，8080 也会感觉到。脚本用 trap 把 Redis 和 `read_only` 拉回来。我不会在脚本跑到一半 Ctrl+C 然后不管。
 
 期望是逐行 `PASS …`，最后一行 **`FAULT DRILL OK`**，退出码 0。C5 手验（progress，tip `e0c567c`，2026-11-01）是 **7** 行 PASS，没有 SKIP：
 
@@ -441,7 +444,7 @@ bash scripts/fault-drill.sh
 |------|-------------------|
 | `SKIP webhook: no powershell for the 5xx stub` | 这是诚实跳过，不是装绿。Redis 和 mysql-ro 仍可以 PASS。完整 7 行以 progress 那次（有 PowerShell）为准。不要把 SKIP 说成 FAIL。 |
 | `SKIP mysql-ro: no MYSQL_ROOT_PASSWORD` | 只读段需要 root 口令。没有就不要临时猜密码。口播第 3 段，并说明 C5 的 UT 叫 `redirectSurvivesClickRecordFailure`。 |
-| `jar missing` | 先 `mvn -q -DskipTests package`，产物名 `target/linkforge-2.0.0.jar`。现场若编译超过一分钟，放弃实跑改口播。 |
+| `jar missing` | 先 `mvn -q -DskipTests package`，产物名 `target/linkforge-3.0.0.jar`。现场若编译超过一分钟，放弃实跑改口播。 |
 | 脚本中途失败，Redis 还停着 | 看终端最后一行。立刻 `docker compose start redis`。若它把库留在只读，用你自己的 root 口令 `SET GLOBAL read_only=0`，不要在讲稿里写死密码。日志在 `/tmp/linkforge-fault-drill.log`。 |
 | 和 8080 的 Demo 打架 | 等脚本结束再回到步 1 的码上补一次 302。不要两套一起解释。 |
 
@@ -523,7 +526,7 @@ docker compose --profile observability up -d
 
 五步对应五件事：跳转是稳定的 302，并且读行，不靠旧缓存；A/B 在门禁之后抽签，统计能按 variant 拆开；CSV 可以部分成功，失败带文件行号；Redis、点击写库、Webhook 任何一侧写失败，302 还在；Webhook 出站把 DNS 再绑定这一下钉死了。
 
-代码线已经过了 C5：冻结后按运营者指令解冻三批，审计修复、认证重构（refresh 轮换）、团队协作和 P1 主体（标签检索、动态路由、幂等深化、恶意域名 feed）都合进 main 了，其后外部审计复审的 8 项必修也已全数修复合入，其后又补了 S/N 波（A/B 适用性门、控制台闭环）。测试 508。pom 2.0.0。后面再开新批还是等运营者指令，我现在准备的是把这些取舍讲清楚。可以问 Outbox、Bloom 广播、API Key 的两种 scope、refresh 重用检测、动态路由的规则怎么收窄抽签，或者 rebinding 为什么用 httpclient5。
+这是 v3.0.0，功能已经冻结。测试 508。会话会轮换 refresh，邀请能加人，`matchRule` 会先收窄再抽签，不该拟合的 A/B 报告会回 `NOT_APPLICABLE`，重置密码会连带撤销 API Key。成员管理页面、Geo、B10 都只是登记，不是下一波。可以问 Outbox、Bloom 广播、API Key 的两种 scope、refresh 重用、动态路由怎么收窄，或者 rebinding 为什么用 httpclient5。
 
 ---
 
@@ -553,7 +556,7 @@ docker compose --profile observability up -d
 跳转时把抽中的 key 交给 `recordClick`。事件上这个字段可空。消费端只有非空才写 `dim_type=variant`。breakdown 的合法 dim 是 device、referer_host、os、browser、variant。
 
 **3. 导入的幂等和限额？**  
-同步，最多 100 行。每一行调用和单链创建相同的路径，一行失败只影响自己。整次请求打在 `import:user:{userId}` 这个滑窗上，API Key 也是按这一次请求计，不是按行计。`Idempotency-Key` 只对单链创建有意义，导入不看它。
+同步，最多 100 行。每一行走和单链创建相同的路径，一行失败只影响自己。整次请求打在 `import:user:{userId}` 这个滑窗上，按一次请求计，不是按行计。导入认 `Idempotency-Key`：同 key 同文件可以顺序重放；换文件是 409；并发同文件由 owner lease 挡住，不翻倍。崩溃中点靠 TTL 后再跑，不说恰好一次。单链创建的并发首创没有这把租约。
 
 **4. 为什么 CSV 不异步？**  
 Demo 和调用方都要当场看到哪一行成功、哪一行的文件行号失败。异步任务还要进度查询和「当时到底写了几行」的对账，这条面试线没有做。
@@ -580,7 +583,7 @@ L2 的读写删、空值标记、幂等这几处把连接失败接住，打 `lin
 跟 outbox 演练一样：每段自己 PASS，全文最后 `FAULT DRILL OK`，trap 负责恢复。缺 PowerShell 或缺 MySQL root 口令就 SKIP 那一段，不会因此打印 OK 来装全绿。mysql-ro 的主探针是 GET 期望 302。
 
 **12. 你还没做的？**  
-端口白名单、出口代理、B10、Geo、自定义域名、把 Bloom 换成可删除的结构。这些在 backlog 里，冻结之后没有单独指令就不做。
+端口白名单、出口代理、B10、Geo、自定义域名、短码防枚举、成员管理页面、feed 上限、创建租约 CAS、Key 保留期，以及把 Bloom 换成可删除的结构。这些在 backlog 里登记，3.0.0 不排期。没有萧北的明确指令就不做。独立 SPA 是砍掉的，不是还在做。
 
 ---
 

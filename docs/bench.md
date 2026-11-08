@@ -1,7 +1,7 @@
 # LinkForge 压测报告（P4，bench.md）
 
 > 数字纪律：本文所有数字来自 2026-10-24 本机实际运行（`scripts/bench.sh`），命令与原始输出摘要齐备，无任何推算或虚构。复现：`bash scripts/bench.sh`。
-> **时期注（Bw345-F2）**：以下数字是 **Windows 历史实测**，测于 `df904f8`（2026-10-24，Windows 10 + Docker Desktop/WSL2，**固定窗口限流时期**，早于 A7 Outbox / A9 Bloom / A10 singleflight / B7/B8 缓存 / B6 滑窗，也早于当前 tip）。**它们不代表当前版本，也不是 Linux 性能。B10 Linux bench 仍未跑**（backlog Bw345-F2）。未跑出新数字之前，简历与面试引用必须带上这句时期注，不要把表里的 QPS 写成当前 tip 的成绩。
+> **时期注（Bw345-F2）**：以下数字是 **Windows 历史实测**，测于 `df904f8`（2026-10-24，Windows 10 + Docker Desktop/WSL2，**固定窗口限流时期**，早于 A7 Outbox / A9 Bloom / A10 singleflight / B7/B8 缓存 / B6 滑窗，也早于 v3.0.0）。**它们不是 3.0.0 的成绩，也不是 Linux 性能。B10 Linux bench 仍未跑**（backlog #1）。v3.0.0 冻结没有重跑本组，表内一个数都没改。未跑出新数字之前，简历与面试引用必须带上这句时期注。
 
 ## 环境
 

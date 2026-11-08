@@ -1,18 +1,22 @@
 # LinkForge
 
 ![CI](https://github.com/NorthAdb/LinkForge/actions/workflows/ci.yml/badge.svg)
-![release](https://img.shields.io/badge/release-v2.0.0-blue)
+![release](https://img.shields.io/badge/release-v3.0.0-blue)
 ![Java](https://img.shields.io/badge/Java-17-orange)
 ![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.3.5-6DB33F)
 ![MySQL·Redis·RabbitMQ](https://img.shields.io/badge/MySQL%20%C2%B7%20Redis%20%C2%B7%20RabbitMQ-8%20%C2%B7%207%20%C2%B7%203.13-informational)
 ![tests](https://img.shields.io/badge/tests-508%20%28226%2B280%2B2%29-brightgreen)
 
-多租户短链 + 访问分析后端服务。**v2.0.0**＝P0–P5 全阶段交付（v1.0.0）+ 深化 A2–A10 + B 档波 1–5（B7/B8、B4/B5、B6/B2/B9/B3/B1），多轮外部审计通过。
+多租户短链与点击分析。**v3.0.0 功能冻结**（2026-11-08，运营者萧北确认）：产品代码停在审计祖先 `3f545cc`，独立复审 Gate M1–M8 为 **PASS_WITH_NITS**，`mvn -B verify` **508/508**。没有新的明确指令之前，不再加产品功能。
+
+v2.0.0 把短链、302、缓存、Outbox、滑窗限流、API Key 和 Webhook 做完。3.0.0 在这之上收成现在这套：access 1 小时加 refresh 轮换；邀请加入与 ADMIN/MEMBER；variant 的 `matchRule` 先收窄再抽签；A/B 报告在条件路由或窗口内改过配置时返回 `NOT_APPLICABLE`；管理员重置会强制改密，并撤销该成员全部 API Key；聚合冲刷用单调 `flush_seq`；创建幂等指纹含访问密码的 HMAC（v2）；控制台有强制改密页和邀请接受。Flyway 停在 **V1–V15**。Spring Boot 父版本仍是 **3.3.5**，OpenAPI `info.version` 跟 pom 的 build-info 走，不另写一套版本号。
 
 面向 2027 春招实习简历项目：用真实路径练 **MySQL / Redis / RabbitMQ / JWT**，业务壳是短链创建与 302 跳转。
 本仓库为**自研骨架**，不是对任何开源短链项目的换皮。每个模块都写明「诚实边界」——能做到什么、明确不做什么。
 
-> 压测声明：README 与 `docs/bench.md` 中的性能数字是 **Windows 历史实测**（2026-10-24，固定窗口限流时期，早于当前 tip），**不代表当前版本，也不是 Linux 性能**。B10 Linux bench **仍未跑**（见[待办](docs/backlog.md)）。不要把这些数字写成当前 tip 的成绩。
+> 压测声明：README 与 `docs/bench.md` 中的性能数字是 **Windows 历史实测**（2026-10-24，固定窗口限流时期，早于 3.0.0），**不是本版成绩，也不是 Linux 性能**。B10 Linux bench **仍未跑**。3.0.0 不补任何新 QPS。
+>
+> 复审接受的披露：控制台没有真实浏览器手点（证据是 Node 合同测试和 HTTP 集成）；CSV 导入的进程崩溃恢复不宣称恰好一次；`DimBreakdownIT` 历史上偶发不稳。这三件不改变 Gate 通过。
 
 ## 目录
 
@@ -31,19 +35,19 @@
 
 | 域 | 能力 | 模块章节 |
 |------|------|------|
-| 认证 | JWT 登录（access 1h + refresh 30 天轮换/重用检测、IP + 账号双限流、失败时序恒定防枚举）/ 开放注册（按 IP 限流）/ bootstrap 演示租户 / 多租户隔离 / **团队协作（邀请制加入、ADMIN·MEMBER 成员管理、最后 ADMIN 护栏、管理员重置密码）** | [认证与多租户](#认证与多租户) |
+| 认证 | access 1 小时 + refresh 30 天轮换（重用即撤族）；IP + 账号双限流；邀请加入、ADMIN/MEMBER、最后 ADMIN 护栏；管理员重置会强制改密并撤销该成员全部 API Key | [认证与多租户](#认证与多租户) |
 | 短链 | CRUD、自定义短码（区分大小写）、过期/禁用、创建幂等（请求指纹防误用、重放不烧限流）、并发不撞码、CSV 导出、QR 物料 + 短时分享链、UTM 写时合并、**标签 + 关键词检索** | [短链管理](#短链管理)、[物料与投放](#物料与投放c1qr--utm) |
-| 短链 | A/B 权重分流：一码多目标（≤10）按权重抽签，密码/门禁/UTM 仍链层，统计按 variant 分桶；**动态路由**（variant 可带设备/语言/时间窗规则收窄抽签）+ **分布拟合诊断**（观测 vs 权重的卡方检验） | [A/B 权重分流与批量导入](#ab-权重分流与批量导入c3) |
+| 短链 | A/B 权重分流：一码多目标（≤10）。`matchRule`（设备/语言/时间窗）先收窄再抽签；拟合诊断在条件路由或窗口内改过配置时返回 `NOT_APPLICABLE`，不给失真结论 | [A/B 权重分流与批量导入](#ab-权重分流与批量导入c3) |
 | 短链 | 批量 CSV 导入：POST /api/links/import 同步 multipart ≤100 行，部分失败返回文件行号+原因，专用 import 限流 | [A/B 权重分流与批量导入](#ab-权重分流与批量导入c3) |
 | 跳转 | 302 + HEAD 探测；五层读取防护（限流→Bloom→空值缓存→L1/L2→singleflight） | [跳转读取路径](#跳转读取路径五层防护) |
 | 限流 | Redis 滑动窗口日志（精确计数、Redis TIME 时钟、Retry-After）+ 日固定配额 | [限流体系](#限流体系b6滑动窗口) |
 | 统计 | 同事务 Outbox + Relay 投递 + 幂等消费 + 断链自动追平；精确 UV；设备/来源维度；**原始点击 CSV 导出（10 万行上限）** | [点击统计管道](#点击统计管道a7-transactional-outbox)、[维度分析](#维度分析a8-预聚合) |
 | 安全 | BCrypt 密码短链（签名 cookie、先限流后校验）、本地域名名单门禁（BLOCK/WARN，可选 URLhaus 恶意域名 feed 同步，默认关）、非人点击不计 | [密码短链](#密码短链b3)、[域名门禁](#目标域名名单门禁b9)、[非人点击](#非人点击b2预取与预览-bot-照常-302-但不计) |
-| 开放 | API Key（哈希存储+配额，USER/TENANT 双 scope、TENANT 仅 ADMIN 签发）、点击 Webhook（HMAC 签名、AES-256-GCM at-rest、SSRF 防护、逐次/聚合双模式） | [开放能力](#开放能力b4-api-key--b5-webhook) |
+| 开放 | API Key（哈希存储、USER/TENANT 双 scope）；点击 Webhook（HMAC、AES-256-GCM、SSRF 钉死）。聚合冲刷在单事务里分配单调 `flush_seq`，不因 eventId 撞车丢增量 | [开放能力](#开放能力b4-api-key--b5-webhook) |
 | 可观测 | 令牌守卫的 `/actuator/prometheus`、Grafana 自动 provision 看板、积压 gauge | [可观测](#可观测b1-prometheus--grafana) |
-| 工程 | Flyway 版本化迁移（V1–V15）、测试 508 例（含 Testcontainers 集成 282）、GitHub Actions CI、prod profile 一键收紧 | [测试与质量](#-测试与质量) |
+| 工程 | Flyway V1–V15；测试 **508**（226 单测 + 280 集成 + 2 时区 fork）；GitHub Actions `mvn -B verify`；prod profile 收紧暴露面 | [测试与质量](#-测试与质量) |
 
-**明确不做**（冻结决策，详见[待办](docs/backlog.md)）：AI / PostgreSQL / Supabase / 向量库（整体延期另立方案）；Spring Cloud / Seata / 多机房；独立前端 SPA（静态控制台已够用）；云公网部署（D5=本地 Compose，prod profile 已备好收紧开关）。
+**冻结后不做**（详见[待办](docs/backlog.md)，只登记、不排期）：成员管理控制台、feed 条数/字节上限、创建幂等的 owner CAS 租约、API Key retention、短码防枚举、实时点击流、Geo、B10 Linux bench。**明确砍掉**：独立前端 SPA（维持单文件控制台）、重定向逐跳校验、熔断框架。AI / PostgreSQL / Supabase / 向量库、Spring Cloud / Seata / 多机房、云公网部署仍不在本仓库。没有萧北的明确指令，这些都不会开工。
 
 ## 🚀 快速上手
 
@@ -116,7 +120,7 @@ MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD":/app -v linkforge_m2:/root/.m2 -w /
   maven:3.9-eclipse-temurin-17 mvn -B package
 ```
 
-产物是 `target/linkforge-2.0.0.jar`。JDK 17 或更高版本都能编。JDK 21 会按 `pom.xml` 的 `java.version=17` 生成字节码，不必再装一套 JDK 17。
+产物是 `target/linkforge-3.0.0.jar`。JDK 17 或更高版本都能编。JDK 21 会按 `pom.xml` 的 `java.version=17` 生成字节码，不必再装一套 JDK 17。
 
 看不到 jar，或 PowerShell 把 `-DskipTests` 报成参数错误时，先确认命令带了引号，并且当前目录是仓库根目录。
 
@@ -130,7 +134,7 @@ Get-Content .env | ForEach-Object {
   $name, $value = $_.Split('=', 2)
   Set-Item -Path "Env:$($name.Trim())" -Value $value
 }
-java -jar target/linkforge-2.0.0.jar
+java -jar target/linkforge-3.0.0.jar
 ```
 
 bash：
@@ -139,7 +143,7 @@ bash：
 set -a
 source .env
 set +a
-java -jar target/linkforge-2.0.0.jar
+java -jar target/linkforge-3.0.0.jar
 ```
 
 导入那段把 `.env` 里的每一行放进当前窗口的环境变量。它跳过空行和 `#` 注释。这些变量只活在这个窗口里。`java -jar` 启动第 2 步打出来的包，占住这个窗口。默认端口 8080，Spring profile 是 `dev`。
@@ -261,7 +265,7 @@ PowerShell 里通常没有 `bash`。Git 默认只把 `Git\cmd` 放进 PATH。打
 
 浏览器入口是 `http://localhost:8080/`。那是一个极简控制台，能登录、注册、建链、看列表、启停、删除、看统计、导入导出 CSV、设访问密码、管 API Key 和点击 Webhook。控制台走的是同一套 API，没有另一套接口。接口文档是 `http://localhost:8080/swagger-ui/index.html`。springdoc 生成这个页面，prod profile 下关闭。
 
-**控制台闭环小件组（S/N 波，审计 S2）**：被管理员重置密码后登录会先进**强制改密页**（改完按服务端合同回登录页重新登录），不再撞满屏 403；邀请链接 `/?invite=` 打开即进**邀请接受视图**（设用户名/口令直接入租户）；设访问密码改走页内 modal（原生 `prompt()` 已移除）；打开页面会先用存量 refresh **恢复会话**再决定落点；CSV 导入走与其它请求一致的 401 刷新重试；页眉有 **logout-all** 按钮；链接列表带 keyword/tag 筛选输入。**仍未进控制台**：团队成员管理区（邀请/成员/重置的后端 API 已在，UI 未做，排批次 4 池）与 A/B 报告、原始点击导出的控制台入口。**验证口径**：控制台流程由 Node 合同测试（`scripts/ui-contract-test.mjs`，纯逻辑）+ 后端 IT 覆盖，**真实浏览器 E2E 未做**，不宣称已浏览器验证。
+**控制台能做的**：被重置密码后先进入强制改密页，改完按服务端合同回登录页；`/?invite=` 打开邀请接受（地址栏上的 token 会立刻抹掉）；设访问密码用页内 modal，不再调用 `prompt()`；打开页面会先用 refresh 恢复会话；CSV 导入走同一条 401 刷新重试；页眉有 logout-all；列表可以按关键词和标签筛。**控制台没有的**（后端有，UI 未做，冻结后只登记）：成员列表、改角色、移除、重置，以及 A/B 报告和原始点击导出的按钮。这些页面没有在真实浏览器里手点过。证据是 `scripts/ui-contract-test.mjs` 和后端集成测试。复审接受这项披露，不把「没手点」说成已验证。
 
 ### 常见坑
 
@@ -272,7 +276,7 @@ PowerShell 里通常没有 `bash`。Git 默认只把 `Git\cmd` 放进 PATH。打
 - **Linux 上 Prometheus 抓不到宿主机应用**：Compose 已为 Prometheus 配 `host.docker.internal:host-gateway`；自己起容器跑应用/测试时用 `--network host` 并把连接变量指向 `127.0.0.1`。
 - **scrape-token 文件权限**（Linux 踩坑实录）：Prometheus 容器内进程（`prom/prometheus` 以 nobody 运行）必须能读 `/etc/linkforge/scrape-token`。宿主机上该文件若是 `600` 且属主是登录用户，容器内读取被拒、target 永久 down。Linux 下 `chmod 644 ops/observability/scrape-token`（Windows / Docker Desktop 不校验 Unix 权限位，无此坑）。文件内容须与 `.env` 的 `LINKFORGE_METRICS_SCRAPE_TOKEN` 逐字一致，末尾不要换行。bash 用 `printf '%s' "$token" > ops/observability/scrape-token`。PowerShell 用 `Set-Content -NoNewline -Path ops/observability/scrape-token -Value $token`。
 - **本机开 Clash/Surge fake-IP**：198.18.0.0/15 段会被 Webhook SSRF 防护拒掉，保存公网 webhook 目标返回 400；联调前关 fake-IP 或改 redir-host。
-- **jar 名随版本走**：v2.0.0 起 jar 为 `target/linkforge-2.0.0.jar`。
+- **jar 名随版本走**：v3.0.0 的产物是 `target/linkforge-3.0.0.jar`。v2.0.0 的 tag 仍对应旧文件名 `linkforge-2.0.0.jar`。
 
 ### 面试 Demo 五步（可照读）
 
@@ -332,7 +336,7 @@ flowchart LR
 9. **B3 密码门**：无有效凭证 → 200 解锁页（HEAD 401），不计点击
 10. **B9 WARN** → 200 警示中间页，`?lf_continue=1` 只跳过 WARN 门
 11. **B2 分类**：预取/预览 bot 照常 302 但全链路不计
-12. **302 + 记点击**：有 variants 时先按权重抽签、`Location` 以抽签为准（见[A/B 权重分流与批量导入](#ab-权重分流与批量导入c3)）；同事务写明细（含所抽 variant）+ outbox → 消费端幂等聚合；记账写库失败 fail-open（meter `linkforge.click.record.failopen`，C5）——302 不变，`linkforge.redirects` 照常 +1
+12. **302 + 记点击**：有 variants 时先按 `matchRule` 收窄候选，再按权重抽签，`Location` 以抽签为准（无一命中则回退全体，见[A/B 权重分流与批量导入](#ab-权重分流与批量导入c3)）；同事务写明细（含所抽 variant）+ outbox → 消费端幂等聚合；记账写库失败 fail-open（meter `linkforge.click.record.failopen`）——302 不变，`linkforge.redirects` 照常 +1
 
 管理 API 的越权访问统一 404（不泄露他人短码存在性）；未携带/无效凭证 401；注册租户名冲突、短码占用 409。
 
@@ -385,7 +389,7 @@ flowchart LR
 
 **标签与检索（批次 3a）**：`tags` 是链接上的规范化标签集（小写、去重、单标签 `[a-z0-9_-]{1,32}`、最多 10 个），存单列逗号串（本量级不建关联表），更新三态与 variants 同款（不传=不动、空数组=清空）；列表/导出用 `tag` 整词筛选（子串不误命中）、`keyword` 子串检索，二者可组合。
 
-**缓存一致性**：更新/禁用走**写穿 + 1 秒延迟双删**（清并发读旧库行回填的脏值），最终一致窗口约 1 秒、上限为 TTL（默认 3600 秒）。过期链路不依赖缓存（每次跳转都校验 DB 行）。缓存键 `linkforge:code:{code}`；幂等键 Redis 两段式（pending→`v3:<指纹v2>:<code>`）保留 24h，重放先于限流判定、指纹不一致 409（批次 3b）；**指纹含访问密码的 HMAC**（服务端 pepper，`LINKFORGE_IDEMPOTENCY_PEPPER`）——同 key 换密码不再静默重放旧链，存量无密码指纹遇带密码请求一律 409 fail-closed（外部审计 M4）。CSV 导入的同 key 并发由 owner lease 互斥（同文件回 IN_PROGRESS、异文件回 REUSED，外部审计 M5）。**创建幂等的并发口径（S/N 波文档修正，S4-2）**：上面的 settle 后重放去重只覆盖**顺序重放**；同 key 的并发首创**不被租约串行化**——`pending` 只是 5 秒的尽力而为在途标记（无 owner 校验、Redis 故障即 fail-open，输者短轮询等 settle、等不到回 503 重试），并发首创仍可能双双执行，冲突最终由短码唯一索引等唯一约束兜底；把 pending 升级为带 owner 的 CAS 租约在批次 4 池，未做之前不宣称「同 key 只执行一次」。
+**缓存一致性**：更新/禁用走**写穿 + 1 秒延迟双删**（清并发读旧库行回填的脏值），最终一致窗口约 1 秒、上限为 TTL（默认 3600 秒）。过期链路不依赖缓存（每次跳转都校验 DB 行）。缓存键 `linkforge:code:{code}`；幂等键 Redis 两段式（pending→`v3:<指纹v2>:<code>`）保留 24h，重放先于限流判定、指纹不一致 409（批次 3b）；**指纹含访问密码的 HMAC**（服务端 pepper，`LINKFORGE_IDEMPOTENCY_PEPPER`）——同 key 换密码不再静默重放旧链，存量无密码指纹遇带密码请求一律 409 fail-closed。**创建幂等的并发口径**：settle 之后的重放去重只覆盖**顺序重放**。同 key 的并发首创没有 owner 租约——`pending` 是 5 秒的尽力而为标记（无 owner 校验，Redis 故障即 fail-open）。两个并发请求仍可能都执行，最后由短码唯一索引兜底。带 owner 的 CAS 租约只登记在 backlog，3.0.0 不宣称「同 key 只执行一次」。CSV 导入是另一条合同：同 key 同文件的并发由 owner lease 互斥（同文件 `IN_PROGRESS`、异文件 `REUSED`）；进程在导入中途崩溃靠 TTL 过期后重跑，不宣称崩溃恰好一次。
 
 ### 限流体系（B6：滑动窗口）
 
@@ -663,42 +667,44 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 
 ## 🧪 测试与质量
 
-- **508 例**（v2.0.0 发布口径 211 → v2.1 抛光 220 → C1 261 → C2 +20 → C3 +26 → C4 +8 → C5 +4 → 批次 1 +16 → 批次 2a +18 → 批次 2b +13 → 批次 3a +34 → 批次 3b +40 → 外部审计修复波 +32 → S/N 波 +36）：surefire 纯单测 **226** + failsafe Testcontainers 集成 **280** + 时区 fork **2**（`WebhookRetryClockIT` 独立 fork 到 Asia/Shanghai，钉 DB 时钟退避）。静态徽章会随例数变化，以本行拆分为准
+- **508 例**（tag v2.0.0 时 211 → 抛光 220 → C1 261 → C2 +20 → C3 +26 → C4 +8 → C5 +4 → 批次 1 +16 → 批次 2a +18 → 批次 2b +13 → 批次 3a +34 → 批次 3b +40 → 外部审计修复波 +32 → S/N 波 +36）：surefire 纯单测 **226** + failsafe Testcontainers 集成 **280** + 时区 fork **2**（`WebhookRetryClockIT` 独立 fork 到 Asia/Shanghai，钉 DB 时钟退避）。静态徽章会随例数变化，以本行拆分为准
 - **红先纪律**：每个特性先提交测试（CI 红 = 证据）再提交实现（CI 绿）；B 波 3+4+5 轮 13 次分支红全部留档根因（progress.md）
 - **CI**：GitHub Actions `mvn -B verify`（ubuntu + 原生 Docker Testcontainers），push 即跑，main 恒绿
 - **连接预算口径**：集成测试共享一个 Testcontainers MySQL（`--max-connections=500` 是**配置侧天花板**）；上下文峰值 ≈ 27×10+15×4 = **330 是最坏情形推导值**（每上下文 Hikari 同时满池的纸面相加；42 个 *IT、15 个显式 4，其中 C1/C2/C3/C4 新增各 3/4/2/1 个均 4，C5 零新 IT；时区 fork 独立 JVM 另计），余量 170，全绿即零 `Too many connections`。三个 relay-enabled webhook IT 钉 `@DirtiesContext(AFTER_CLASS)`，类结束即关上下文，实际峰值低于纸面。（注：330 是 C5 时点的推导；批次 1–3 累计新增 25 个 *IT 类（现共 67 个）后纸面峰值待重算，「全绿即零 `Too many connections`」的实测结论不变）
 - **对账与故障演练**：`scripts/mq-drill.sh` / `scripts/outbox-drill.sh` 断 MQ 追平；`scripts/fault-drill.sh`（C4）redis 停服 / webhook 5xx / mysql 只读三段，本机实测 `FAULT DRILL OK`（C5 于 tip `e0c567c` 复验，2026-11-01：只读态 GET /r 仍 302——点击记账 fail-open，HEAD 保留次要；PASS 行原文见 [docs/progress.md](docs/progress.md) C5 章 Compose 手验证据），回归皆绿
-- 审计证据与逐轮记录：[docs/progress.md](docs/progress.md)（1770 行，每阶段验收、决策、红绿史）
+- 审计证据与逐轮记录：[docs/progress.md](docs/progress.md)。P0–FE 各章是历史快照；文末索引和 v3.0.0 冻结章对应当前口径
 
 ## 📈 性能与压测
 
-见 [docs/bench.md](docs/bench.md)。下面是 **Windows 历史数字**（`df904f8`，2026-10-24，Docker Desktop/WSL2，固定窗口限流时期，早于 A7–B8、B6 滑窗和当前 tip），**不是当前 Linux 性能**：health 基线 888 QPS；跳转写路径分解：关同步明细后 13→276 QPS、P50 678→31ms；缓存命中率 100%。**B10 Linux bench 仍未跑**，这里不补任何新数字。v2.0.0 起的门禁（密码、域名名单、滑窗 ZSET）都会进热路径，当前 tip 的吞吐以将来的 Linux 实测为准。
+见 [docs/bench.md](docs/bench.md)。下面是 **Windows 历史数字**（`df904f8`，2026-10-24，Docker Desktop/WSL2，固定窗口限流时期，早于 A7–B8、B6 滑窗，也早于 3.0.0），**不是本版成绩**：health 基线 888 QPS；跳转写路径分解：关同步明细后 13→276 QPS、P50 678→31ms；缓存命中率 100%。**B10 Linux bench 仍未跑**，3.0.0 不补任何新数字。密码门、域名名单和滑窗 ZSET 都在热路径上，本版吞吐没有新的实测。
 
 ## 🗺️ 待办与后续
 
-集中登记在 [docs/backlog.md](docs/backlog.md)，要点：
+集中登记在 [docs/backlog.md](docs/backlog.md)。3.0.0 冻结之后这里不是排期表：
 
-| 优先 | 事项 |
+| 状态 | 事项 |
 |------|------|
-| 高 | **B10：Linux 复跑 bench 刷新数字**（现有数字是 Windows 历史 / 固定窗口时期，不代表当前 tip；Linux bench 仍未跑） |
-| 中 | 维度扩展 Geo（os/browser 已于 C2 关闭；L1 失效广播 / Bloom 广播与 rebuild 已于 C2 关闭） |
-| 低 | 维度扩展 Geo；Webhook 端口白名单 / 出口代理隔离（DNS rebinding 已于 C4 钉死） |
+| 登记，不排期 | B10 Linux bench（上节数字不是 3.0.0 的成绩）；Geo；短码防枚举、实时点击流、UTM 构建器、Bot 过滤扩展 |
+| 登记，不排期 | 成员管理控制台；feed 条数/字节上限与流式落库；创建幂等 owner CAS；API Key retention；端口白名单 / 出口代理 |
+| 明确砍掉 | 独立 SPA；恶意 feed 的逐跳重定向校验；熔断框架 |
+| 上云再议 | 自定义域名、多实例指标聚合（当前没有云部署） |
 
-按范围纪律：开新轮次需运营者指令。
+没有萧北的明确指令，上表不会开工。
 
 ## 📜 版本历史
 
 | 版本 | 日期 | 内容 |
 |------|------|------|
-| **解冻批次 1–2（未发版）** | 2026-11-07 | C5 冻结后经运营者指令解冻：批次 1 审计修复（登录双桶限流 + 失败时序恒定、stats 口径统一、Webhook 冲刷快照删除、Outbox 状态守卫、update 单事务、BizException 拆 httpStatus/code）→ 批次 2a 认证地基（access 1h + refresh 轮换/重用检测、token_version、过滤器状态复查、强制改密；V11）→ 批次 2b 团队协作（邀请、成员管理、最后 ADMIN 护栏、管理员重置；V12）；测试 319→366；两批各带收尾文档对账 |
-| **解冻批次 3（未发版）** | 2026-11-08 | P1 主体：3a 链接标签/关键词检索 + variant 动态路由（设备/语言/时间窗规则收窄抽签；V13）→ 3b 原始点击导出（10 万行上限）、A/B 分布拟合诊断、幂等深化（请求指纹 409、重放不烧限流、导入支持 Idempotency-Key）、URLhaus 恶意域名 feed 同步（默认关；V14）；测试 366→440；收尾文档对账随批完成 |
-| **外部审计修复波（未发版）** | 2026-11-08 | 批次 1–3 交付经外部审计（Grok）复审判 FAIL/MUST_FIX，8 项必修以三 PR 全数修复并合入：PR-A 会话撤销原子化（refresh/logout-all 同锁串行、token_version 原子自增）+ 最后 ADMIN 护栏改锁内当前读 + 管理员重置连带永久撤销 API Key 且改密墙覆盖被撤 Key（M1/M2/M7）；PR-B 聚合冲刷改单事务 drain + 单调 flush_seq（V15）、幂等指纹纳入密码 HMAC、CSV 导入 owner lease 互斥（M3/M4/M5）；PR-C 控制台编辑无损保存 matchRule、CSV 导出公式中和（M6/M8）；并发合同测试以屏障交错钉住竞态。测试 440→472；收尾文档对账随波完成。审计的 Should-fix（S1–S4/N1/N2）排下一波，S1 优先 |
-| **S/N 波（未发版）** | 2026-11-08 | 审计 Should-fix 的瘦身一波（两 PR 合入）：PR-α（#25）S1 A/B 报告适用性门（条件路由/窗口内配置变更/配置史不可证时返回 NOT_APPLICABLE + 理由码，不再对失真分布硬给拟合结论）、S4-4 跨午夜时间窗改开窗日星期归属、S4-1 stats 总量/按天/UV 改同一可重复读快照、N1 异常日志卫生（带 cause 的 BizException 服务端恰记一次 + X-Correlation-Id 贯穿）、S4-5 认证存储故障时双过滤器回稳定 503、S3 feed `last_success` 改「最后成功应用」口径；PR-γ（#24）S2 控制台闭环小件组（强制改密页、邀请接受、`prompt()` 移除改 modal、启动会话恢复、导入 refresh 重试、logout-all 按钮、列表关键词/标签筛选）。测试 472→508（226+280+2），无新迁移（V15 仍最新）。S2 成员管理区、S3 上限/阈值、S4-2 lease CAS、S4-3 retention 推迟批次 4 池；Grok 复审待本波后随修复波一并提交 |
-| **C5（未发版）** | 2026-11-01 | 收口 C5：点击记账 fail-open（`resolveForGet` 调用点 catch `DataAccessException`、meter `linkforge.click.record.failopen`——主链路 302 不依赖 Redis/点击写/Webhook 任一侧写成功）+ C4 nit 收尾（main tip 记账行、absent fail-open meter、Compose 手验证据入档 progress）+ fault-drill mysql-ro 主探针改 GET 302 + 面试 Demo 五步（README）；测试 315→319；**C5 审计通过后功能冻结** |
-| **C4（未发版）** | 2026-11-01 | 深化 C4：Webhook SSRF DNS rebinding 钉死（httpclient5 + 自定义 DnsResolver——投递时一次解析、全 IP 校验、只连已校验地址，Host/SNI 保原 hostname）+ 故障演练 `scripts/fault-drill.sh`（redis 停服 / webhook 5xx / mysql 只读，SKIP 语义）+ Redis L2/幂等 fail-open（`linkforge.cache.failopen`）+ C3 审计修复并入（S1 建链+variants 同事务 / N2 update 带 variants / N3 delete 清 variants）；测试 307→315；红先三块 CI 留档（conclusion 列） |
-| **C3（未发版）** | 2026-10-31 | 深化 C3：A/B 权重分流（一码多目标 ≤10 按权重抽签、密码/门禁/UTM 仍链层、`dim=variant` 统计分桶）+ 批量 CSV 导入（同步 multipart ≤100 行、部分失败返回文件行号+原因、专用 import 限流）；V10 迁移；测试 281→307；红先两块 CI 留档（conclusion 列） |
-| **C2（未发版）** | 2026-10-31 | 深化 C2：Bloom put 广播 + 定时 rebuild（24h + ADMIN 手动、单飞、旁路原子替换）+ L1 失效广播（origin 跳过、只剔 L1）；维度 os/browser（轻量 UA 规则，Geo 不做）；C1 审计 N1/N4 docs；测试 261→281；红先四轮 CI 留档（conclusion 列） |
-| **C1（未发版）** | 2026-10-31 | 深化 C1：QR 物料 + 短时签名分享链（ZXing 3.5.3）+ UTM 写时合并；API Key 双 scope（TENANT 仅租户 ADMIN 签发，租户级可见性）；Webhook 聚合推送（双触发 digest、at-least-once、part 续篇、late 标记）；V8/V9 迁移；测试 220→261；红先三轮 CI 留档 |
+| **v3.0.0** | 2026-11-08 | 功能冻结。pom 升到 3.0.0（OpenAPI 随 build-info）。产品祖先 `3f545cc`：Muse 批次 1–3 与修复波、S/N 波都已在这条线上。独立复审 **PASS_WITH_NITS**，508/508，Gate M1–M8 通过。接受的披露：浏览器未手点；导入崩溃不宣称恰好一次；`DimBreakdownIT` 历史 flaky。延期项只登记。无新迁移（V1–V15），无新功能。C5 那次冻结后来按指令解冻过；这一版是重新冻结 |
+| **解冻批次 1–2（含于 v3.0.0）** | 2026-11-07 | C5 冻结后经运营者指令解冻：批次 1 审计修复（登录双桶限流 + 失败时序恒定、stats 口径统一、Webhook 冲刷快照删除、Outbox 状态守卫、update 单事务、BizException 拆 httpStatus/code）→ 批次 2a 认证地基（access 1h + refresh 轮换/重用检测、token_version、过滤器状态复查、强制改密；V11）→ 批次 2b 团队协作（邀请、成员管理、最后 ADMIN 护栏、管理员重置；V12）；测试 319→366；两批各带收尾文档对账 |
+| **解冻批次 3（含于 v3.0.0）** | 2026-11-08 | P1 主体：3a 链接标签/关键词检索 + variant 动态路由（设备/语言/时间窗规则收窄抽签；V13）→ 3b 原始点击导出（10 万行上限）、A/B 分布拟合诊断、幂等深化（请求指纹 409、重放不烧限流、导入支持 Idempotency-Key）、URLhaus 恶意域名 feed 同步（默认关；V14）；测试 366→440；收尾文档对账随批完成 |
+| **外部审计修复波（含于 v3.0.0）** | 2026-11-08 | 批次 1–3 交付经外部审计（Grok）复审判 FAIL/MUST_FIX，8 项必修以三 PR 全数修复并合入：PR-A 会话撤销原子化（refresh/logout-all 同锁串行、token_version 原子自增）+ 最后 ADMIN 护栏改锁内当前读 + 管理员重置连带永久撤销 API Key 且改密墙覆盖被撤 Key（M1/M2/M7）；PR-B 聚合冲刷改单事务 drain + 单调 flush_seq（V15）、幂等指纹纳入密码 HMAC、CSV 导入 owner lease 互斥（M3/M4/M5）；PR-C 控制台编辑无损保存 matchRule、CSV 导出公式中和（M6/M8）；并发合同测试以屏障交错钉住竞态。测试 440→472。当时列出的 Should-fix 已由下一行的 S/N 波交付或改为登记，不再是待办队列 |
+| **S/N 波（含于 v3.0.0）** | 2026-11-08 | 审计 Should-fix 的瘦身一波（两 PR 合入）：PR-α（#25）S1 A/B 报告适用性门（条件路由/窗口内配置变更/配置史不可证时返回 NOT_APPLICABLE + 理由码，不再对失真分布硬给拟合结论）、S4-4 跨午夜时间窗改开窗日星期归属、S4-1 stats 总量/按天/UV 改同一可重复读快照、N1 异常日志卫生（带 cause 的 BizException 服务端恰记一次 + X-Correlation-Id 贯穿）、S4-5 认证存储故障时双过滤器回稳定 503、S3 feed `last_success` 改「最后成功应用」口径；PR-γ（#24）S2 控制台闭环小件组（强制改密页、邀请接受、`prompt()` 移除改 modal、启动会话恢复、导入 refresh 重试、logout-all 按钮、列表关键词/标签筛选）。测试 472→508（226+280+2），无新迁移（V15 仍最新）。成员管理 UI、feed 上限、创建租约 CAS、Key retention 改为登记、不排期。独立复审随后判 PASS_WITH_NITS，随 v3.0.0 冻结 |
+| **C5（含于 v3.0.0）** | 2026-11-01 | 收口 C5：点击记账 fail-open（`resolveForGet` 调用点 catch `DataAccessException`、meter `linkforge.click.record.failopen`——主链路 302 不依赖 Redis/点击写/Webhook 任一侧写成功）+ C4 nit 收尾（main tip 记账行、absent fail-open meter、Compose 手验证据入档 progress）+ fault-drill mysql-ro 主探针改 GET 302 + 面试 Demo 五步（README）；测试 315→319。当时宣布过一次功能冻结，随后按运营者指令解冻；现行冻结是 v3.0.0 |
+| **C4（含于 v3.0.0）** | 2026-11-01 | 深化 C4：Webhook SSRF DNS rebinding 钉死（httpclient5 + 自定义 DnsResolver——投递时一次解析、全 IP 校验、只连已校验地址，Host/SNI 保原 hostname）+ 故障演练 `scripts/fault-drill.sh`（redis 停服 / webhook 5xx / mysql 只读，SKIP 语义）+ Redis L2/幂等 fail-open（`linkforge.cache.failopen`）+ C3 审计修复并入（S1 建链+variants 同事务 / N2 update 带 variants / N3 delete 清 variants）；测试 307→315；红先三块 CI 留档（conclusion 列） |
+| **C3（含于 v3.0.0）** | 2026-10-31 | 深化 C3：A/B 权重分流（一码多目标 ≤10 按权重抽签、密码/门禁/UTM 仍链层、`dim=variant` 统计分桶）+ 批量 CSV 导入（同步 multipart ≤100 行、部分失败返回文件行号+原因、专用 import 限流）；V10 迁移；测试 281→307；红先两块 CI 留档（conclusion 列） |
+| **C2（含于 v3.0.0）** | 2026-10-31 | 深化 C2：Bloom put 广播 + 定时 rebuild（24h + ADMIN 手动、单飞、旁路原子替换）+ L1 失效广播（origin 跳过、只剔 L1）；维度 os/browser（轻量 UA 规则，Geo 不做）；C1 审计 N1/N4 docs；测试 261→281；红先四轮 CI 留档（conclusion 列） |
+| **C1（含于 v3.0.0）** | 2026-10-31 | 深化 C1：QR 物料 + 短时签名分享链（ZXing 3.5.3）+ UTM 写时合并；API Key 双 scope（TENANT 仅租户 ADMIN 签发，租户级可见性）；Webhook 聚合推送（双触发 digest、at-least-once、part 续篇、late 标记）；V8/V9 迁移；测试 220→261；红先三轮 CI 留档 |
 | **v2.0.0** | 2026-10-25 | 深化 A2–A10（保留字/HEAD 探测/Flyway/Outbox/维度/Bloom/singleflight）+ B 档波 1–5：B7 空值缓存+TTL 抖动、B8 L1、B4 API Key、B5 Webhook、B6 滑动窗口限流、B2 非人点击不计、B9 域名名单门禁、B3 密码短链、B1 Prometheus+Grafana；测试 155→211；多轮审计（含两次修复轮）通过；tag `v2.0.0` |
 | v1.0.0 | 2026-10-24 | P0–P5 完整交付：Compose 三件套、认证、短链 CRUD、缓存跳转（写穿+双删）、MQ 异步聚合（幂等/对账/断链追平）、创建幂等、并发不撞码、限流、Testcontainers CI、bench、prod profile；tag `v1.0.0` |
 
