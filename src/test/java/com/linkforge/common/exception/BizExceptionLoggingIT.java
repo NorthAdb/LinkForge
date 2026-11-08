@@ -3,6 +3,7 @@ package com.linkforge.common.exception;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.core.read.ListAppender;
 import com.linkforge.AbstractIntegrationTest;
 import org.junit.jupiter.api.AfterEach;
@@ -88,10 +89,20 @@ class BizExceptionLoggingIT extends AbstractIntegrationTest {
 
     private long markerEvents() {
         return appender.list.stream()
-                .filter(e -> e.getThrowableProxy() != null
-                        && e.getThrowableProxy().getMessage() != null
-                        && e.getThrowableProxy().getMessage().contains(MARKER))
+                .filter(e -> chainCarriesMarker(e.getThrowableProxy()))
                 .count();
+    }
+
+    /** The handler logs the BizException itself; the marker rides in its
+     * CAUSE, one level down the proxy chain. */
+    private static boolean chainCarriesMarker(IThrowableProxy proxy) {
+        while (proxy != null) {
+            if (proxy.getMessage() != null && proxy.getMessage().contains(MARKER)) {
+                return true;
+            }
+            proxy = proxy.getCause();
+        }
+        return false;
     }
 
     @Test
@@ -121,8 +132,14 @@ class BizExceptionLoggingIT extends AbstractIntegrationTest {
         assertEquals(cid, event.getMDCPropertyMap().get("cid"),
                 "the log line must carry the same correlation id the client got");
         assertNotNull(event.getThrowableProxy());
+        assertEquals(BizException.class.getName(),
+                event.getThrowableProxy().getClassName(),
+                "the handler logs the BizException itself");
+        assertNotNull(event.getThrowableProxy().getCause());
         assertEquals(IllegalStateException.class.getName(),
-                event.getThrowableProxy().getClassName());
+                event.getThrowableProxy().getCause().getClassName(),
+                "with the original cause chained under it");
+        assertTrue(event.getThrowableProxy().getCause().getMessage().contains(MARKER));
         assertEquals(1, markerEvents(), "the cause stack is logged exactly once");
     }
 
