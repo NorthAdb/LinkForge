@@ -27,7 +27,7 @@ Maven 本身的安装与命令（`mvn clean package` 等）属于工程操作，
 
 ## 4. 类的定位
 
-pom 不是类，它是 Maven 的输入文件，Maven 按它生成构建过程。但它决定了一件对学源码最要紧的事：你的 classpath 上有哪些库、什么版本。第 1.2 课讲 Spring 容器装配对象，本课讲的是「装配之前，东西从哪来」。整个项目 120 个主源码类用到的第三方库，全部由这份 pom 声明。
+pom 不是类，它是 Maven 的输入文件，Maven 按它生成构建过程。但它决定了一件对学源码最要紧的事：你的 classpath 上有哪些库、什么版本。第 1.2 课讲 Spring 容器装配对象，本课讲的是「装配之前，东西从哪来」。整个项目 150 个主源码文件用到的第三方库，全部由这份 pom 声明。
 
 ## 5. 核心源码详解
 
@@ -43,12 +43,12 @@ pom 不是类，它是 Maven 的输入文件，Maven 按它生成构建过程。
 
 <groupId>com.linkforge</groupId>
 <artifactId>linkforge</artifactId>
-<version>2.0.0</version>
+<version>3.0.0</version>
 <name>linkforge</name>
 <description>LinkForge — multi-tenant short link + click analytics platform</description>
 ```
 
-（框架行为）声明 parent 之后继承两样东西。一是两百多个常用依赖的版本托管，引用时不写 version 就用它钦定的；二是编译插件默认参数，`<java.version>` 属性（pom.xml:21）写 17 就是用 Java 17 编译。`<relativePath/>` 空标签表示不从本地文件系统找 parent，去仓库取。（本项目实现）坐标 `com.linkforge:linkforge:2.0.0`，2.0.0 在 5.5 还会出现一次。
+（框架行为）声明 parent 之后继承两样东西。一是两百多个常用依赖的版本托管，引用时不写 version 就用它钦定的；二是编译插件默认参数，`<java.version>` 属性（pom.xml:21）写 17 就是用 Java 17 编译。`<relativePath/>` 空标签表示不从本地文件系统找 parent，去仓库取。（本项目实现）坐标 `com.linkforge:linkforge:3.0.0`，3.0.0 在 5.5 还会出现一次。
 
 ### 5.2 properties：五个自定义版本的来由（pom.xml:20-34）
 
@@ -133,13 +133,13 @@ JWT 三件套（pom.xml:139-155）：`jjwt-api` 是 compile，`jjwt-impl` 和 `j
                         .version(build != null ? build.getVersion() : "dev")
 ```
 
-链路完整走一遍：pom 的 version 2.0.0 → build-info 写入属性文件 → `BuildProperties` Bean → Swagger 页面 info.version 显示 2.0.0。`ObjectProvider` 是「可选注入」，从 IDE 里直接跑 main 时没有 build-info 文件，这个 Bean 不存在，`getIfAvailable()` 返回 null，页面显示 "dev"。如果这里写普通注入 `BuildProperties buildProperties`，IDE 裸跑会启动失败。1.2 课会把这个注入方式作为范例细讲。
+链路完整走一遍：pom 的 version 3.0.0 → build-info 写入属性文件 → `BuildProperties` Bean → Swagger 页面 info.version 显示 3.0.0。`ObjectProvider` 是「可选注入」，从 IDE 里直接跑 main 时没有 build-info 文件，这个 Bean 不存在，`getIfAvailable()` 返回 null，页面显示 "dev"。如果这里写普通注入 `BuildProperties buildProperties`，IDE 裸跑会启动失败。1.2 课会把这个注入方式作为范例细讲。
 
 插件还有一段 excludes（pom.xml:206-213）把 lombok 从最终 fat jar 里剔掉，运行期用不到它，jar 能小一点。
 
 ### 5.6 failsafe 双执行与时区 fork（pom.xml:215-249）
 
-先说分工。（框架行为）Maven 的 `test` 阶段跑 surefire 插件，`verify` 阶段跑 failsafe 插件。本项目靠类名区分：`*Test` 是纯单元测试，不起 Spring 容器，由 surefire 跑；`*IT` 是集成测试，用 Testcontainers 起真实 MySQL/Redis/RabbitMQ，由 failsafe 跑。两端加起来 319 个执行实例（151 单测 + 166 IT + 2 时区 fork，口径见 [progress.md](../../reference/progress.md)）。
+先说分工。（框架行为）Maven 的 `test` 阶段跑 surefire 插件，`verify` 阶段跑 failsafe 插件。本项目靠类名区分：`*Test` 是纯单元测试，不起 Spring 容器，由 surefire 跑；`*IT` 是集成测试，用 Testcontainers 起真实 MySQL/Redis/RabbitMQ，由 failsafe 跑。两端加起来 508 个执行实例（226 单测 + 280 IT + 2 时区 fork，口径见 [progress.md](../../reference/progress.md)）。
 
 ```xml
 <execution>
@@ -199,7 +199,7 @@ JWT 三件套（pom.xml:139-155）：`jjwt-api` 是 compile，`jjwt-impl` 和 `j
 
 ## 7. 可视化
 
-- [运行时与部署图](../../diagrams/archify/html/01-runtime-deployment.html)（由并行图表任务产出）。看构建产物 linkforge-2.0.0.jar 与五个容器的部署关系；Testcontainers 在 CI 里临时扮演 MySQL/Redis/RabbitMQ 的角色。
+- [运行时与部署图](../../diagrams/archify/html/01-runtime-deployment.html)（由并行图表任务产出）。看构建产物 linkforge-3.0.0.jar 与五个容器的部署关系；Testcontainers 在 CI 里临时扮演 MySQL/Redis/RabbitMQ 的角色。
 
 阅读顺序：先 5.6 的双执行，再看部署图确认「测试容器是部署容器的替身」。1.2 课会引用[系统架构图](../../diagrams/archify/html/00-system-architecture.html)。
 
@@ -208,11 +208,11 @@ JWT 三件套（pom.xml:139-155）：`jjwt-api` 是 compile，`jjwt-impl` 和 `j
 以 CI 上一次 `mvn -B verify` 为时间线。
 
 1. Maven 读 pom，解析 parent 与 BOM，确定全部依赖版本。lang3 此时是 3.18.0，testcontainers 是 2.0.5。
-2. 编译主代码，lombok 在编译期展开 `@Data` 等注解（1.2 课细讲）；`build-info` 写入 META-INF/build-info.properties，version 为 2.0.0。
-3. surefire 在构建 JVM 里跑 151 个 `*Test`。
-4. failsafe 的 default 执行 fork 一个 JVM 跑 165 个 `*IT`（166 减去被排除的 WebhookRetryClockIT），Testcontainers 拉起三个容器。
+2. 编译主代码，lombok 在编译期展开 `@Data` 等注解（1.2 课细讲）；`build-info` 写入 META-INF/build-info.properties，version 为 3.0.0。
+3. surefire 在构建 JVM 里跑 226 个 `*Test`。
+4. failsafe 的 default 执行 fork 一个 JVM 跑 280 个 `*IT`（282 个 @Test 减去被默认执行排除的 WebhookRetryClockIT 的 2 个），Testcontainers 拉起三个容器。
 5. failsafe 的 webhook-tz-it 执行再 fork 一个 JVM，时区 Asia/Shanghai，只跑 WebhookRetryClockIT 的 2 个用例。
-6. 全绿后 verify 阶段结束。（第 4、5 步的数量按 151+166+2=319 的口径，实际拆分以测试报告为准。）
+6. 全绿后 verify 阶段结束。（第 4、5 步的数量按 226+280+2=508 的口径，实际拆分以测试报告为准；总数自初版教材的 319 一路涨到 508，增长史见 README 与 15.1。）
 
 ## 9. 为什么这样设计
 
@@ -242,9 +242,9 @@ JWT 三件套（pom.xml:139-155）：`jjwt-api` 是 compile，`jjwt-impl` 和 `j
 
 答案解析：只在 1 个 JVM 里运行。default 执行把它排除（pom.xml:230-233），webhook-tz-it 执行 include 它并给该 fork 传 `-Duser.timezone=Asia/Shanghai`（pom.xml:242）。MySQL 容器时区与 JVM 无关，保持镜像默认 UTC，错位由此而来。
 
-**练习 4（调用链）**：从 pom 到 Swagger 页面，版本号 2.0.0 经过哪几站？
+**练习 4（调用链）**：从 pom 到 Swagger 页面，版本号 3.0.0 经过哪几站？
 
-答案解析：pom.xml:16 `<version>2.0.0` → build-info 目标写入 `META-INF/build-info.properties` → Spring Boot 自动配置注册 `BuildProperties` Bean → OpenApiConfig.java:20 `getIfAvailable()` 取到 → OpenApiConfig.java:24 `build.getVersion()` 填进 Info → springdoc 渲染到 /swagger-ui 页面。IDE 裸跑时第二站缺失，页面显示 "dev"。
+答案解析：pom.xml:16 `<version>3.0.0` → build-info 目标写入 `META-INF/build-info.properties` → Spring Boot 自动配置注册 `BuildProperties` Bean → OpenApiConfig.java:20 `getIfAvailable()` 取到 → OpenApiConfig.java:24 `build.getVersion()` 填进 Info → springdoc 渲染到 /swagger-ui 页面。IDE 裸跑时第二站缺失，页面显示 "dev"。
 
 **练习 5（设计分析）**：`jjwt-impl` 为什么可以是 runtime，改成 compile 会怎样？
 

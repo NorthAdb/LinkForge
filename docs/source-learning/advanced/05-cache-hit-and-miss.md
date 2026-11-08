@@ -16,8 +16,8 @@
 |----|----|----|
 | `ShortLinkService.resolveTarget` | 12 步判定主干（:601-712），四条时间线都发生在它身上 | [7.1](../modules/07-redirection/01-decision-chain.md) 第 5.4 节 |
 | `RedisRateLimiter` | 第 1 步限流，滑窗 Lua，故障 fail-open（:48-53） | [9.1](../modules/09-rate-limit/01-sliding-window-lua.md) |
-| `CodeBloomFilter` | 第 2 步，进程内，负答案权威（:612-618） | [8.3](../modules/08-redis-cache/03-negative-cache-bloom.md) |
-| `absentKnown/markAbsent` | 第 3 步空值缓存，Redis 哨兵键（:926-964） | [8.3](../modules/08-redis-cache/03-negative-cache-bloom.md) 第 5.1 节 |
+| `CodeBloomFilter` | 第 2 步，进程内，负答案权威（:1078-1081） | [8.3](../modules/08-redis-cache/03-negative-cache-bloom.md) |
+| `absentKnown/markAbsent` | 第 3 步空值缓存，Redis 哨兵键（:1404-1442） | [8.3](../modules/08-redis-cache/03-negative-cache-bloom.md) 第 5.1 节 |
 | `UrlLocalCache` | 第 4 步 L1，Caffeine，最大 1 万条，写后 10 秒过期 | [8.2](../modules/08-redis-cache/02-l1-l2-write-through.md) 第 5.1 节 |
 | `StringRedisTemplate`（L2） | 第 5 步，键 `linkforge:code:{code}`，TTL 3600+300 秒抖动 | [8.1](../modules/08-redis-cache/01-keys-and-ttl.md) 第 5.2 节 |
 | `SingleFlight` + `ShortLinkRowLoader` | 第 6 步行读，并发同码合并（:649） | [8.4](../modules/08-redis-cache/04-singleflight.md) |
@@ -155,7 +155,7 @@ Redis 恢复后无需任何干预：下一次回填或写路径写穿自然把�
 
 | 触发条件 | 返回 | 副作用 | 出处 |
 |----|----|----|----|
-| Bloom 负答（码从未创建） | 404，不碰 MySQL、不碰缓存键 | 打点 bloom.rejected | :615-618 |
+| Bloom 负答（码从未创建） | 404，不碰 MySQL、不碰缓存键 | 打点 bloom.rejected | :1078-1081 |
 | Bloom 正答但行读为 null（首次） | 404 | markAbsent 写哨兵，TTL 60+30 秒 | :650-654、:939-952 |
 | 同一幽灵码 60-90 秒内重复请求 | 404，行读不再发生 | 打点 cache.absent.hit | :623-626 |
 | 已删码（Bloom 恒阳性） | 404，每 60-90 秒付一次行读 | 无累积污染 | `ShortLinkMapper.java:13-23` |

@@ -1,6 +1,7 @@
 # 功能覆盖矩阵：README 功能总览 → 功能行 → 课程/调用链/配图
 
 > 口径：2026-11-03。功能行拆自 `D:\LinkForge\README.md` 的「功能总览」表（11 行能力）与「明确不做」以外的全部能力，按 9 个功能域重排。调用链节点取自五份调查报告（`D:\LinkForge\.audit\inventory\`），行号级细节见各课正文。基线 911640c（docs 侧 01f0b5a）。
+> **3.0.0 更新（2026-11-08）**：基线升至 tag `3.0.0`。批次 1–3、修复波与 S/N 波的新能力补为 F45–F56（文末专节），F38/F39 两行按新基线修订；F1–F44 的课程去向未动。
 > 课程列写法：`6.2` 指 `docs/source-learning/modules/06-short-link/02-create-flow.md`，`advanced/N` 指 `docs/source-learning/advanced/` 综合专题。配图列为 slug，对应 `docs/source-learning/diagrams/archify/html/<NN>-<slug>.html`（共 17 张，全部已通过 finalize）。
 
 ## 域到 README 行的映射
@@ -104,13 +105,32 @@ README 功能总览 11 行 → 本矩阵 44 个功能行。拆分规则：
 
 | # | 功能 | HTTP 入口或触发点 | 核心类 | 调用链摘要 | 对应课程 | 配图 |
 |---|---|---|---|---|---|---|
-| F38 | Flyway 版本化迁移（V1–V10，13 表） | 应用启动 / migrate.sh | （Flyway + SQL 脚本，无 Java 业务类） | 启动 → baseline-on-migrate 兜底遗留库 → V1..V10 顺序执行 → flyway_schema_history 记账 | 4.2 | 05-database-erd |
-| F39 | 测试体系（319 例，IT 166） | mvn verify | AbstractIntegrationTest（Testcontainers 单例容器） | surefire 跑 27 UT 类 → failsafe 起 42 IT 类（Testcontainers 三容器）→ 时区 fork 跑 WebhookRetryClockIT | 15.1 | 09-test-ci-pipeline |
+| F38 | Flyway 版本化迁移（V1–V15，17 表） | 应用启动 / migrate.sh | （Flyway + SQL 脚本，无 Java 业务类） | 启动 → baseline-on-migrate 兜底遗留库 → V1..V15 顺序执行 → flyway_schema_history 记账（V11 会话、V12 邀请、V13 标签/规则、V14 恶意主机、V15 冲刷状态） | 4.2 | 05-database-erd（图冻结在 V10 口径，见图表覆盖矩阵时效表） |
+| F39 | 测试体系（508 例：226 单测 + 280 IT + 2 时区 fork） | mvn verify | AbstractIntegrationTest（Testcontainers 单例容器） | surefire 跑 UT 类 → failsafe 起 IT 类（Testcontainers 三容器）→ 时区 fork 跑 WebhookRetryClockIT（初版口径 319 例，3.0.0 冻结口径 508） | 15.1 | 09-test-ci-pipeline（图内数字为旧口径） |
 | F40 | GitHub Actions CI | push / 全 PR 触发 | （ci.yml，无 Java 类） | checkout@v4 → setup-java temurin 17 → 缓存 ~/.m2 → mvn -B verify | 15.2 | 09-test-ci-pipeline |
 | F41 | prod profile 一键收紧 | SPRING_PROFILES_ACTIVE=prod | SecurityConfig（@Value docs-enabled）、application.yml prod 文档 | prod 生效 → 静态资源 add-mappings=false → springdoc 关 → docs-enabled=false 收紧角色矩阵 → health when_authorized | 1.3、15.3 | 01-runtime-deployment |
 | F42 | Compose 一键环境（5 service） | docker compose up | （docker-compose.yml，无 Java 类） | up → mysql/redis/rabbitmq 健康检查 → 可选 observability profile 追加 prometheus/grafana → 5 命名卷持久化 | 15.3 | 01-runtime-deployment |
 | F43 | OpenAPI 文档与双安全方案 | /v3/api-docs、swagger-ui | OpenApiConfig | 启动 → build-info 注入版本 → bearer + X-API-Key 两套 securityScheme → docs-enabled=false 分支整体关闭 | 15.2、3.1 | — |
 | F44 | 故障演练与压测脚本 | 人工执行 scripts/*.sh | （bash 脚本+compose+wrk，无 Java 类） | smoke 冒烟 → bench 压测三场景 → mq-drill 断 MQ → outbox-drill 断链追平 → fault-drill（redis/webhook/mysql-ro 三段）验证自愈 | 15.3 | 01-runtime-deployment（部署面） |
+
+---
+
+## 3.0.0 增补（F45-F56，批次 1–3 / 修复波 / S-N 波）
+
+| # | 功能 | HTTP 入口或触发点 | 核心类 | 调用链摘要 | 对应课程 | 配图 |
+|---|---|---|---|---|---|---|
+| F45 | 登录双桶限流 + 哑哈希抹时（批次 1） | POST /api/auth/login | AuthService, RedisRateLimiter | IP 桶 login:{ip} 5/600 → 账号桶 login-acct:{tenant}:{user} 小写归一 5/600 → 账号不存在/停用照样对 DUMMY_PASSWORD_HASH 跑一次 matches → 失败统一 401 | 5.2；advanced/01、advanced/15 | — |
+| F46 | refresh 会话族（轮换+重用侦测+全会话撤销，批次 2a） | POST /api/auth/refresh、/logout、/logout-all | SessionService, RefreshTokenMapper, JwtService | 登录开新 family → refresh 在用户行锁内 rotate+插后继 → ROTATED 超 10s 宽限再出示整族 REUSE_KILL+tv 自增（主动撤销的只回 401）→ 改密/logout-all 原子撤全族 | 5.2；advanced/15 | — |
+| F47 | 每请求回查 + 强制改密墙（批次 2a/2b，M7 补全） | 每个带凭据的请求 | JwtAuthFilter, ApiKeyAuthFilter, UserAccountMapper | 验签后回查用户行（status/tv/must_change）→ 身份取行不取 claim → must_change 时两凭据同体 403（豁免改密/登出/刷新）→ 存储故障稳定 503（S4-5） | 5.1、5.2；advanced/15、advanced/10 | — |
+| F48 | 团队邀请与成员管理（批次 2b） | /api/tenant/invitations、/members、POST /api/auth/accept-invitation | TeamService, TeamController, TenantInvitationMapper | ADMIN 建邀请（只存哈希，链接带外投递）→ 接受 = 建账号 + 条件 UPDATE 单次认领同事务 → 成员改角色/启停/移除/重置全走租户行锁 + 锁内护栏（M2）→ 重置永久撤销全部 API Key（M7） | 5.3；advanced/15 | — |
+| F49 | 标签与列表搜索（批次 3a） | GET /api/links、/export（keyword/tag 参数）、PATCH tags 三态 | LinkTags, ShortLinkService | tags 单列归一化存储（小写去重、至多 10）→ keyword 对 code/url/title 转义 LIKE → tag 走 FIND_IN_SET 整词 → 导出同筛选集 | 6.3；advanced/16 | — |
+| F50 | 动态路由 match_rule（批次 3a，S4-4 修订星期语义） | GET /r/{code}（判定链末段） | MatchRule, ClickDimensions, VariantPicker | 门禁全过 → parseLenient 逐 variant 求值（设备/OS/语言前缀/时间窗）→ 候选收窄后权重抽签 → 全落选回退完整集；跨午夜尾段按开窗日读 weekdays | 7.3；advanced/16 | 12-redirect-decision（图冻结在无规则口径） |
+| F51 | 原始点击导出（批次 3b，M8 中和） | GET /api/links/{code}/clicks/export | ClickStatsService, ClickLogMapper, CsvFormat | id 游标分批（批 1000）拼 CSV → 上限 100,000 行触顶加注释行 + X-Export-Truncated → 全部文本格 escapeSpreadsheet 中和公式注入 | 11.3；advanced/16 | — |
+| F52 | A/B 拟合诊断 + 适用性门（批次 3b，S1 补门） | GET /api/links/{code}/ab-report | AbReport, ClickStatsService | 当前配置 × 窗口 variant 桶 → 先过 checkApplicability（CONDITIONAL_ROUTING > CONFIG_CHANGED_IN_WINDOW > CONFIG_HISTORY_UNKNOWN）→ 过门才卡方拟合（CONSISTENT/SKEWED），NA 时拟合字段全 null | 11.3；advanced/16 | — |
+| F53 | 恶意主机 feed（批次 3b，S3 修顺序） | @Scheduled（默认关，6 小时）+ 创建/跳转判定 | MaliciousHostSyncService, MaliciousHostSnapshot, PhishingPolicy | fetch URLhaus hostfile → ingest 入库 lf_malicious_host → snapshot.refresh() 应用成功才推进 last_success → 判定读内存快照并入 B9 名单（纯本地） | 7.2；advanced/16 | — |
+| F54 | 幂等深化（批次 3b + M4/M5） | POST /api/links、/import（Idempotency-Key） | ShortLinkService, ImportIdempotencyLease | 创建指纹 create-v2 含密码 HMAC（pepper）+ 信封 v3，同 key 异体 409、旧信封带密码 fail-closed → 导入加在途租约（SET NX + Lua CAS，同文件 409 IN_PROGRESS、异文件 409 REUSED），重放不烧限流 | 9.2、6.3；advanced/16 | 06-redis-data-flow（图为两段式旧口径） |
+| F55 | 请求关联 id 与恰记一次（S/N 波 N1） | 每个 HTTP 请求 | CorrelationIdFilter, GlobalExceptionHandler | 链首服务端铸 cid → MDC + 请求属性 + X-Correlation-Id 响应头 → handleBiz 对 5xx/带 cause 恰记一次（wire 体不带 cause） | 2.2；advanced/17 | — |
+| F56 | Webhook 聚合 drain 事务化（修复波 M3） | 阈值 inline / 5 秒 sweep | WebhookAggregateFlusher, WebhookFlushStateMapper | 锁行读桶 → 分配 flush_seq（V15）→ 以 digest-{ep}-{ws}-{seq} 插投递 → 只删锁行，整单同事务回滚 | 13.2；advanced/11、advanced/17 | 16-webhook-delivery-lifecycle（状态机仍准，drain 细节见专题） |
 
 ---
 
@@ -142,11 +162,11 @@ README 功能总览 11 行 → 本矩阵 44 个功能行。拆分规则：
 
 | 项 | 数 |
 |---|---|
-| 功能行总数 | 44（F1-F44） |
-| 有模块课的功能行 | 44 / 44 |
-| 有调用链摘要的功能行 | 44 / 44 |
-| 有专属配图的功能行 | 36 / 44（8 行无专属图，见下） |
-| 有 advanced 专题复现的功能行 | 22（F1、F2、F4、F5、F6、F7、F12、F13、F14、F16、F17、F18、F19、F20、F21、F22、F23、F24、F26、F29、F30、F31） |
+| 功能行总数 | 56（F1-F44 初版 + F45-F56 的 3.0.0 增补） |
+| 有模块课的功能行 | 56 / 56 |
+| 有调用链摘要的功能行 | 56 / 56 |
+| 有专属配图的功能行 | 36 / 56（无专属图行见下；3.0.0 增补行多无新图，靠专题正文与 mermaid 备用图） |
+| 有 advanced 专题复现的功能行 | 34（初版 22：F1、F2、F4、F5、F6、F7、F12、F13、F14、F16、F17、F18、F19、F20、F21、F22、F23、F24、F26、F29、F30、F31；增补 12：F45-F56 全部） |
 
 ### 缺口检查
 

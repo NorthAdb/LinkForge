@@ -5,7 +5,7 @@
 ## 1. 本节学习目标
 
 1. 复述造钥流程：随机串怎么生成、为什么库里只有 SHA-256 哈希、明文为什么只在创建响应里出现一次。
-2. 逐步跟踪 ApiKeyAuthFilter 的认证六步：混发 400、哈希点查、吊销即时拒绝、配额双闸、SETNX 节流的 last_used 更新、身份建立。
+2. 逐步跟踪 ApiKeyAuthFilter 的认证九步：混发 400、哈希点查、存储故障 503、吊销墓碑分流、属主回查、强制改密墙、配额双闸、SETNX 节流的 last_used 更新、身份建立。
 3. 解释 USER/TENANT 双 scope 的语义与租户 ADMIN 铸钥门，说出 key 的权限白名单与摸管理面时的 403。
 4. 把 ApiKeyIT 与 TenantApiKeyIT 的 10 个测试用例对应到源码行为。
 
@@ -20,12 +20,12 @@
 
 | 文件 | 行数 | 职责 | 阅读顺序 |
 |----|----|----|----|
-| `src/main/java/com/linkforge/apikey/service/ApiKeyService.java` | 165 | 造钥、列表、撤销、authenticate | 1 |
+| `src/main/java/com/linkforge/apikey/service/ApiKeyService.java` | 195 | 造钥（含 must_change 铸造拒绝）、列表、撤销、authenticate | 1 |
 | `src/main/java/com/linkforge/apikey/dto/ApiKeyDtos.java` | 57 | CreateRequest/Created/View | 2 |
 | `src/main/java/com/linkforge/apikey/entity/ApiKey.java` | 31 | lf_api_key 实体 | 3 |
 | `src/main/java/com/linkforge/apikey/mapper/ApiKeyMapper.java` | 18 | BaseMapper + touchLastUsed | 4 |
 | `src/main/java/com/linkforge/apikey/controller/ApiKeyController.java` | 54 | /api/keys 增列撤 | 5 |
-| `src/main/java/com/linkforge/security/ApiKeyAuthFilter.java` | 162 | X-API-Key 认证与配额 | 6 |
+| `src/main/java/com/linkforge/security/ApiKeyAuthFilter.java` | 220 | X-API-Key 认证、属主回查与配额 | 6 |
 | `src/test/java/com/linkforge/apikey/ApiKeyIT.java` | 215 | 6 个生命周期测试 | 7 |
 | `src/test/java/com/linkforge/apikey/TenantApiKeyIT.java` | 223 | 4 个 scope 测试 | 8 |
 
@@ -92,47 +92,63 @@ public ApiKey authenticate(String plaintextKey) {
 
 ### 5.4 revoke：幂等与不泄露存在性
 
-revoke 只有 11 行（`ApiKeyService.java:105-115`），三个行为：不存在的 key 与别人的 key 同样 404（`:106-109`，与 5.3 课的越权 404 语义一致）；已吊销的 key 再撤一次直接 return（`:110-112`，幂等）；吊销即写 revokedAt 时间戳（`:113-114`）。只允许吊自己的 key，没有租户管理员越级吊销成员 key 的通道。
+revoke 的三个行为：不存在的 key 与别人的 key 同样 404（与 5.3 课的越权 404 语义一致）；已吊销的 key 再撤一次直接 return（幂等）；吊销即写 revokedAt 时间戳。自助通道只允许吊自己的 key。
+
+批次 2/修复波另开了一条「越级全撤」的通道，但它不在 ApiKeyService 里：管理员重置成员口令时，`TeamService.resetPassword` 在同一事务里调 `apiKeyMapper.revokeAllForUser(memberId)` 把该成员的全部 key 一次性永久撤销（M7 的决定，5.4 课）。注意区分：成员被**禁用/移除**时 key 行**不被触碰**——它们靠 5.6 的属主回查在下一次请求时自然死亡（属主行禁用/逻辑删 → 401 owner_inactive）。「重置 = 主动全撤」与「禁用/移除 = 回查致死」是两种不同的关停机制，前者防的是「被重置的人手里还留着能用的凭据」，后者省的是逐行清理。
 
 ### 5.5 ApiKeyAuthFilter 的势力范围
 
 `shouldNotFilter`（`ApiKeyAuthFilter.java:55-62`）：`/api/**` 全查；`/actuator/**` 除 health 外也查；`/r/**` 与 health 不查。类注释（`:53-54`）解释了 actuator 为什么进范围：带 key 访问 actuator，应当得到「干净的 403」（白名单拒绝），而不是先被 MetricsScrapeTokenFilter 打成 401。角色矩阵 `SecurityConfig.java:68` 要求 USER，key 的 ROLE_API_KEY 必然被拒。health 保持开放，探针不带凭据。
 
-### 5.6 doFilterInternal：认证六步
+### 5.6 doFilterInternal：认证九步（批次 2a 回查 + M7 墙 + S4-5）
 
 ```java
-String authorization = request.getHeader(HttpHeaders.AUTHORIZATION);
-if (authorization != null && authorization.startsWith("Bearer ")) {
-    meterRegistry.counter("linkforge.apikey.auth", "result", "ambiguous").increment();
-    writeJson(response, 400, "{\"code\":400,\"message\":\"ambiguous credentials: send either a bearer token or X-API-Key\",\"data\":null}");
-    return;
-}
-ApiKey key = apiKeyService.authenticate(apiKey);
-if (key == null) {
-    meterRegistry.counter("linkforge.apikey.auth", "result", "invalid").increment();
-    writeJson(response, 401, "{\"code\":401,\"message\":\"invalid api key\",\"data\":null}");
-    return;
-}
-if (key.getRevokedAt() != null) {
-    // still a uniform 401 outside; the tag just separates the reasons (Bw2-N3)
-    meterRegistry.counter("linkforge.apikey.auth", "result", "revoked").increment();
-    writeJson(response, 401, "{\"code\":401,\"message\":\"invalid api key\",\"data\":null}");
-    return;
-}
-if (!withinQuota(key, response)) {
-    return;
-}
+            ApiKey key = null;
+            UserAccount owner = null;
+            try {
+                key = apiKeyService.authenticate(apiKey);
+                if (key == null) { /* 401 invalid */ }
+                // The owner row decides both the tombstone distinction below and
+                // the live-key rechecks; selectById hides logically deleted owners.
+                owner = userAccountMapper.selectById(key.getUserId());
+            } catch (DataAccessException | PersistenceException ex) {
+                // S/N wave (audit S4-5 ...): the authentication STORE failed —
+                // not a credential verdict. Same stable 503 as JwtAuthFilter ...
+                writeJson(response, 503, JwtAuthFilter.STORE_UNAVAILABLE_BODY);
+                return;
+            }
+            if (key.getRevokedAt() != null) {
+                // Audit M7 tombstone: a KNOWN revoked key whose owner is still
+                // behind the forced-change wall earns the wall's 403 ...
+                if (owner != null && isMustChange(owner)) { /* 403 FORCED_CHANGE_BODY */ }
+                /* 401 revoked（统一文案） */
+            }
+            // Batch 2a owner recheck ... a disabled/removed owner kills the key
+            // on the very next request.
+            if (owner == null || owner.getStatus() == null || owner.getStatus() != 1) {
+                /* 401 owner_inactive（统一文案） */
+            }
+            // Audit M7: the forced-change wall covers API keys too ...
+            if (isMustChange(owner)) { /* 403 FORCED_CHANGE_BODY */ }
+            if (!withinQuota(key, response)) {
+                return;
+            }
 ```
-（`ApiKeyAuthFilter.java:73-93`，节选）
+（`ApiKeyAuthFilter.java` 的 doFilterInternal，节选）
 
-六步读法：
+九步读法：
 
-1. **无头放行**（`:67-71`）：没带 X-API-Key 的请求与本 Filter 无关，匿名进链。
-2. **混发 400**（`:73-78`）：同时带 Bearer 与 key，报 `ambiguous credentials` 并打 metrics 标签。类注释（`:32-38`）交代背景（决策号 D-Bw2-2）：key 走 X-API-Key，永远不走 Authorization，避免非 JWT 的 bearer 串被 JwtAuthFilter 误报 401。
-3. **点查失败 401**（`:79-84`）：authenticate 返回 null，打 invalid 标签。
-4. **吊销即时 401**（`:85-90`）：对外与 invalid 完全同文案，对内 metrics 多一个 revoked 标签，即「对外不泄露、对内可排障」范式（注释标 Bw2-N3）。没有认证缓存，吊销后的下一个请求立刻失败。
-5. **配额双闸**（`:91-93`，实现在 `:112-137`）：不过则直写 429，见 5.7。
-6. **身份建立**（`:94-103`）：AuthUser 的 username 是 `apikey:{prefix}`（日志好认），scope 原样透传，角色 ROLE_API_KEY；finally 双清（`:104-107`）与 JwtAuthFilter 完全同构。
+1. **无头放行**：没带 X-API-Key 的请求与本 Filter 无关，匿名进链。
+2. **混发 400**：同时带 Bearer 与 key，报 `ambiguous credentials` 并打 ambiguous 标签。类注释交代背景（决策号 D-Bw2-2）：key 走 X-API-Key，永远不走 Authorization，避免非 JWT 的 bearer 串被 JwtAuthFilter 误报 401。
+3. **点查失败 401**：authenticate 返回 null，打 invalid 标签。
+4. **存储故障 503（S4-5）**：点查或属主回查抛数据访问异常 → 直写与 JwtAuthFilter **逐字节相同**的 503 固定文案（共用常量 `STORE_UNAVAILABLE_BODY`），打 db_error 标签，日志只带 keyId（若已解析出）绝不带明文 key。这是「凭据判定」与「判定设施故障」的严格区分：DB 挂了不许说成 key 无效。
+5. **吊销分流（M7 墓碑）**：key 已撤销时看属主——属主仍在强制改密墙后 → 403 `PASSWORD_CHANGE_REQUIRED`（墓碑：持有者显然持有这把已死的 key，告诉他先改密不泄漏任何东西，打 forced_change 标签）；属主已改完密或不存在 → 回统一 401（revoked 标签）。同一个已撤销 key 在属主改密前后得到不同响应，是刻意的。
+6. **属主回查（批次 2a）**：活 key 的属主行不存在（被移除，逻辑删对 selectById 不可见）或 status≠1（被禁用）→ 统一 401（owner_inactive 标签）。成员管理从不触碰 key 行，关停全靠这一步（5.4）。
+7. **强制改密墙（M7 本体）**：活 key + 属主 must_change → 403 墙（与 JWT 侧同一 body）。管理员重置若只墙住网页登录、放行 API Key，等于给被重置者留了一把能用的凭据——墙必须覆盖两种认证。
+8. **配额双闸**：不过则直写 429，见 5.7。
+9. **身份建立**：ok 标签 + touchLastUsed 节流（5.8）；AuthUser 的 username 是 `apikey:{prefix}`（日志好认），scope 原样透传，角色 ROLE_API_KEY；finally 双清与 JwtAuthFilter 完全同构。
+
+铸造侧还有一道配套门（`ApiKeyService.create` 开头）：属主处于 must_change 时**拒绝铸造新 key**——墙后的人先改密，别想着绕去造新凭据。
 
 ### 5.7 withinQuota：分钟滑窗加日固定窗
 

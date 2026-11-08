@@ -38,7 +38,7 @@
 
 ## 4. 类的定位（在整个项目中的位置）
 
-`ShortLink` 与 `LinkVariant` 是整个短链域的两个「名词」。其余所有 link 包的类（Service、Controller、support 下 18 个辅助类）都在围绕这两张表的行做动作：创建、改状态、抽签、跳转。它们位于 `link/entity` 包，共 2 个文件，是全项目 120 个主源码类里最薄的一层。
+`ShortLink` 与 `LinkVariant` 是整个短链域的两个「名词」。其余所有 link 包的类（Service、Controller、support 下 23 个辅助类）都在围绕这两张表的行做动作：创建、改状态、抽签、跳转。它们位于 `link/entity` 包，共 2 个文件，是全项目 150 个主源码文件里最薄的一层。
 
 DTO 在 `link/dto` 包，共 8 个文件。它们是 API 的「外交语言」：JSON 进出系统的形状由它们决定，表结构从不直接暴露。`ShortLinkService.toDetail`（`ShortLinkService.java:1020-1024`）是实体变 DTO 的唯一转换点，这一行代码就是本课要讲的边界。
 
@@ -68,9 +68,11 @@ public class ShortLink {
     private Integer deleted;
     /** B3: BCrypt hash of the access password; null = the link is public. */
     private String accessPasswordHash;
+    /** Batch 3a: canonical comma-joined tag set (LinkTags), V13. */
+    private String tags;
 }
 ```
-（`src/main/java/com/linkforge/link/entity/ShortLink.java:11-29`）
+（`src/main/java/com/linkforge/link/entity/ShortLink.java:11-31`）
 
 逐字段对应 DDL（`V1__baseline_schema.sql:28-42`）：
 
@@ -87,6 +89,7 @@ public class ShortLink {
 | createdAt / updatedAt | 同名列 | 时间戳 | 代码里手工 set（`ShortLinkService.java:227-228`） |
 | deleted | deleted | 逻辑删标记 | `@TableLogic` 的作用对象 |
 | accessPasswordHash | access_password_hash | BCrypt 哈希 | V7 加列，null 表示公开 |
+| tags | tags | 标签集的规范逗号串 | V13 加列；写入前经 LinkTags 规范化（小写、去重、排序），读侧 FIND_IN_SET 精确命中；为什么不用关联表见 4.2 的 V13 段 |
 
 三个语言/框架点就地补课：
 
@@ -109,7 +112,7 @@ public class ShortLink {
  * the link, so both deletes commit as one unit; cache evictions stay outside. */
 public void delete(String code) {
 ```
-（`src/main/java/com/linkforge/link/service/ShortLinkService.java:543-546`）
+（`src/main/java/com/linkforge/link/service/ShortLinkService.java:1003-1005`）
 
 这不是实现巧合，是设计决策。短码一旦印在海报、传单、物料上，被人抢注改指向就是安全事故。永久保留是唯一安全的语义。代价是码空间只出不进，靠 62 字符 7 位长度（约 3.5 万亿组合）撑住余量。
 
@@ -144,16 +147,20 @@ public class LinkVariant {
     private String variantKey;
     private String targetUrl;
     private Integer weight;
+    /** Batch 3a: dynamic-routing rule JSON (MatchRule); null = unconditional. */
+    private String matchRule;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }
 ```
-（`src/main/java/com/linkforge/link/entity/LinkVariant.java:10-25`）
+（`src/main/java/com/linkforge/link/entity/LinkVariant.java:10-27`）
 
 它是 `ShortLink` 的镜像反例：刻意**没有** `@TableLogic` 字段。原因有两条，都写在代码注释里。
 
 1. 生命周期上，variants 是主行的附属品。主链删了，variants 必须跟着消失，逻辑删会让死行长期滞留（`V10__link_variant.sql:3` 与 `ShortLinkService.java:544-545`）。
-2. 业务上，改一组分流配置是「整组替换」：先 `DELETE` 全部旧行，再插入新行，永远不更新单行（`ShortLinkService.java:505-511`）。替换语义下没有「标记删除后还能查到历史」的需求，硬删即可。
+2. 业务上，改一组分流配置是「整组替换」：先 `DELETE` 全部旧行，再插入新行，永远不更新单行（`ShortLinkService.update` 的事务段）。替换语义下没有「标记删除后还能查到历史」的需求，硬删即可。
+
+批次 3a 给变体行加了 `match_rule`（V13）：一段 JSON，描述这个变体在什么条件下才参与抽签（设备、系统、语言、带时区与星期的工作时窗）。它与 weight 是两个正交维度：match_rule 先把候选集收窄，weight 再在候选里抽签。规则的语法、校验与跨午夜语义在 7.3 课完整展开；这里先记住数据形状：**一行一个规则、规则随行整组替换、坏规则在读侧降级为无条件**（存量数据鲁棒性优先于严格性）。
 
 `variantKey` 在建表时内联了 `utf8mb4_0900_bin`（`V10__link_variant.sql:11`），与 V4 同理由：A 和 a 是两个实验组。建表内联还省掉一次 V4 式的列重建。
 
@@ -211,7 +218,7 @@ void captureUnknown(String name, Object value) {
 
 更新请求和创建请求长得很像，但有两个关键差异，都是「三态」设计。
 
-差异一：`variants` 字段用 null 和空数组表达两种不同意图（`UpdateShortLinkRequest.java:55-57` 注释原文：「whole-set replace semantics — a submitted array is the link's complete variant collection (empty clears back to single-target), null = untouched」）。
+差异一：`variants` 字段用 null 和空数组表达两种不同意图（`UpdateShortLinkRequest.java:55-57` 注释原文：「whole-set replace semantics — a submitted array is the link's complete variant collection (empty clears back to single-target), null = untouched」）。批次 3a 的 `tags` 字段（:59-61）**照抄了同一套三态形状**（注释明说 "the same three-state shape as variants"）：接口语义一旦定型，新字段对齐旧形状而不是各发明一套——这是 API 设计里最便宜的一致性。
 
 | 客户端发什么 | Service 怎么做 |
 |----|----|
@@ -246,7 +253,7 @@ public class ShortLinkDetail {
 ```
 （`src/main/java/com/linkforge/link/dto/ShortLinkDetail.java:9-26`）
 
-注意这里没有 `accessPasswordHash` 字段。实体里的 BCrypt 哈希在转换时被主动降级成一个布尔值（`ShortLinkService.java:1023`）：
+注意这里没有 `accessPasswordHash` 字段。实体里的 BCrypt 哈希在转换时被主动降级成一个布尔值（`ShortLinkService` 的 toDetail 转换处）：
 
 ```java
 link.getAccessPasswordHash() != null, null);
@@ -255,7 +262,7 @@ link.getAccessPasswordHash() != null, null);
 
 BCrypt 哈希虽然不可逆，但可以离线暴力试密码。把它发给前端没有任何必要，只有「有没有密码」这一个比特有展示价值。V7 迁移的注释就是这层意思（`V7__link_access_password.sql:1`：「NULL = not protected; the hash never leaves the DB」）。
 
-`variants` 字段也是视图级的取舍：列表页每行 20 条链，逐条去查 variants 是 20 次额外查询，所以列表行恒为 null，只有单链详情走 `toDetailWithVariants`（`ShortLinkService.java:1010-1017`）。
+`variants` 字段也是视图级的取舍：列表页每行 20 条链，逐条去查 variants 是 20 次额外查询，所以列表行恒为 null，只有单链详情走 `toDetailWithVariants`。详情里的每个变体出参带 `matchRule` 的解析形态，与 tags 一起构成控制台编辑表单的数据源（M6 的「不丢规则」修复正是保住了这条往返链，见 6.3 与专题 16）。
 
 ## 6. 技术原理补充
 
@@ -318,7 +325,7 @@ BCrypt 哈希虽然不可逆，但可以离线暴力试密码。把它发给前�
 
 ## 12. 与后续课程的联系
 
-- 6.2 课用这节课的字段表走完创建流程：`doCreate` 逐字段填一个新 `ShortLink` 对象（`ShortLinkService.java:220-229`），撞 `uk_code` 后的重试也发生在那张表上。
+- 6.2 课用这节课的字段表走完创建流程：`doCreate` 逐字段填一个新 `ShortLink` 对象，撞 `uk_code` 后的重试也发生在那张表上。
 - 6.3 课讲 list/detail/update/delete 的方法级实现，是本课「三态语义」的代码现场。
 - 6.4 课讲 `VariantSpec` 之外的字段（UTM）如何写时合并进 `originalUrl`。
 - 模块 7 讲跳转时，`status`、`expireAt`、`accessPasswordHash` 三个字段会成为门禁链的三道关卡。

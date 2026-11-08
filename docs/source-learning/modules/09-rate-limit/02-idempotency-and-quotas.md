@@ -40,18 +40,19 @@
 
 ## 5. 核心源码详解
 
-### 5.1 创建幂等：两段式回顾与分工声明
+### 5.1 创建与导入幂等：两段式回顾与分工声明
 
-6.2 课已经逐行讲过机制，这里只做六句回顾，行号以本课亲测为准：
+6.2/6.3 课已经逐行讲过机制，这里只做回顾，细节以那两课为准：
 
-1. 客户端带 `Idempotency-Key` 头，service 拼键 `linkforge:rl:idem:{userId}:{key}`（`ShortLinkService.java:142`；键名含 `rl:` 前缀，见 5.4 键族表）。
-2. 先查终值 `replayIdempotentCreate`（:143 调 :182-201）：键里存着已完成的短码且行归属本人，直接重放响应。
-3. 没有终值就抢 5 秒租约：`setIfAbsent(idemKey, "pending", 5s)`（:154-155）。抢到的执行 `doCreate`。
-4. 没抢到的轮询 10 次、每次 200ms 等终值（:164-170），等不到按 503 让客户端重试（:171-173），绝不自己再建一条。
-5. `doCreate` 提交后把短码写回键，TTL 换成 86400 秒（:271-274）。
-6. 两处 fail-open 不对称：抢锁失败按抢到处理（:152-160，宁可并发双建）；settle 失败只打点（:275-280），键停在 pending，停机期同键重试真的会再造一条——:276-277 的注释自己承认这一点。
+1. 客户端带 `Idempotency-Key` 头，service 拼键 `linkforge:rl:idem:{userId}:{key}`（键名含 `rl:` 前缀，见 5.4 键族表）。
+2. 先查结算 `replayIdempotentCreate`：键里存着信封 `v3:{指纹}:{短码}` 且指纹与本次请求一致、行归属本人，直接重放响应——**且发生在限流之前**（批次 3b），重放不烧 create 桶；同 key 异体当场 409 `IDEMPOTENCY_KEY_REUSED`（指纹含 UTM 五项、tags、变体与口令 HMAC，见 6.2 的 M4 段）。
+3. 没有结算就抢 5 秒租约：`setIfAbsent(idemKey, "pending", 5s)`。抢到的执行 `doCreate`。
+4. 没抢到的轮询 10 次、每次 200ms 等结算，等不到按 503 让客户端重试，绝不自己再建一条。
+5. `doCreate` 提交后经 Lua CAS 把键结算为信封，TTL 换成 86400 秒。
+6. 两处 fail-open 不对称：抢锁失败按抢到处理（宁可并发双建）；settle 失败只打点，键停在 pending，停机期同键重试真的会再造一条——源码注释自己承认这一点。
+7. 导入是平行的一套：键 `idem-import:{userId}:{key}`，在途值 `pending:{owner}:{文件SHA-256}`（TTL 120 秒），结算值是整份报告 JSON；同 key 同文件在途 409 `IDEMPOTENCY_IN_PROGRESS`、异文件 409 `IDEMPOTENCY_KEY_REUSED`；释放与结算同为 Lua CAS。崩溃恢复不在覆盖范围内（M5 范围声明，6.3）。
 
-与 6.2 的分工：6.2 课回答「创建请求进门后经过哪些闸门、幂等如何调度」，重心在业务流程；本课回答「这些机制在 Redis 上占了哪些键、失败时键处于什么状态、和限流键怎么共存」，重心在键空间与故障面。幂等的三次代码细节（replay 判定、轮询、settle 异常路径）不再重复，需要时回看 6.2。
+与 6.2/6.3 的分工：那两课回答「请求进门后经过哪些闸门、幂等如何调度」，重心在业务流程；本课回答「这些机制在 Redis 上占了哪些键、失败时键处于什么状态、和限流键怎么共存」，重心在键空间与故障面。
 
 ### 5.2 API Key 双闸：分钟滑窗加日固定窗
 
@@ -130,7 +131,8 @@ INCR 返回 1 说明这是窗口内第一个请求，给键武装 TTL 的责任�
 | `{prefix}sw:unlock:code:{code}` | ZSET | 300s | `ShortLinkService.java:774-776` |
 | `{prefix}apikey:sw:min:{keyId}` | ZSET | 60s | `ApiKeyAuthFilter.java:118-119` |
 | `{prefix}apikey:day:{keyId}:{yyyyMMdd}` | STRING | 86400s（首个 INCR 武装） | `ApiKeyAuthFilter.java:128` |
-| `{prefix}idem:{userId}:{key}` | STRING | pending 5s → 终值 86400s | `ShortLinkService.java:142/:155/:273-274` |
+| `{prefix}idem:{userId}:{key}` | STRING | pending 5s → 信封 `v3:{指纹}:{code}` 86400s | ShortLinkService.create/doCreate |
+| `{prefix}idem-import:{userId}:{key}` | STRING | 在途 `pending:{owner}:{fileSha}` 120s → 结算 JSON 86400s | ImportIdempotencyLease + ShortLinkService.importCsv |
 | `linkforge:apikey:touch:{keyId}` | STRING | 60s | `ApiKeyAuthFilter.java:153-155` |
 
 三条结构纪律。其一，所有 ZSET 键都带 `sw:` 段，与固定窗口时代的 STRING 键永不重名（9.1 的 WRONGTYPE 事故，`RateLimitKeys.java:4-6`）。日窗键没有 `sw:` 段也不与 ZSET 键冲突：它的 `day:` 段与 `sw:` 段互斥。其二，幂等键挂在 `rl:` 前缀下而不是单独的顶级命名（:142 直接拼 `rl.getKeyPrefix()`），它与限流共享同一套环境隔离前缀，换环境时一起搬走。其三，`touch:` 键（键名写死于 :45 的常量）不属于限流：它是「每键每分钟至多一次 last_used UPDATE」的节流阀（:150-161），放进这张表是因为排查 API Key 问题时会同时遇到这三族键。
@@ -151,23 +153,23 @@ INCR 返回 1 说明这是窗口内第一个请求，给键武装 TTL 的责任�
 
 - **滑动窗口 vs 固定窗口的适用分界（算法知识）**：滑动窗口答「任意 N 秒内最多几次」，适合防突发；固定窗口答「每个周期给多少份」，适合配额账本。本项目分钟闸用前者、日配额用后者，各取所需。全用滑动窗口行不行：日账本要「今天用了多少、午夜重置」，滑动窗口没有「周期」概念，报不出「还剩多少」。
 - **时区敏感的配额（工程知识）**：`LocalDate.now()` 不带参数会用 JVM 默认时区，部署在 UTC 容器里重置时刻就漂到早上 8 点。显式 `ZoneId.of("Asia/Shanghai")` 把语义钉死（:125-126）。测试侧另有 `WebhookRetryClockIT` 用 fork 指定时区的先例（pom failsafe 双执行），印证「时区是显式契约」在这个项目里的地位。
-- **幂等键与限流键的生命周期差异（本项目实现）**：限流键由 Lua 里的 `PEXPIRE` 保活，键生死跟随窗口；幂等键有两段生命（pending 5 秒租约、终值 24 小时），两段都是显式 `set` 带 TTL。生命周期跟着业务语义走：租约只要盖住一次创建的执行时长，终值要盖住客户端的合理重试期。
+- **幂等键与限流键的生命周期差异（本项目实现）**：限流键由 Lua 里的 `PEXPIRE` 保活，键生死跟随窗口；幂等键有两段生命（pending 租约、结算值 24 小时），创建的租约 5 秒、导入的 120 秒——租约时长跟着单次执行的 P99 走。生命周期跟着业务语义走：租约只要盖住一次执行的时长，结算要盖住客户端的合理重试期。
 - **fail-open 的分层默认（设计知识）**：本课出现了第三种失败处理——「尽力修复后继续」（删键重武装）。与 9.1 的 fail-open、6.2 的两处不对称 fail-open 并列，本项目对 Redis 故障的响应库是三种：放行（限流、缓存读）、按成功处理（幂等抢锁）、尽力自愈（日窗武装失败删键）。选择依据都是「该组件失效时的错误代价」。
 
 ## 7. 可视化
 
-1. [../../diagrams/archify/html/06-redis-data-flow.html](../../diagrams/archify/html/06-redis-data-flow.html)：限流与幂等两类键的读写流。本课对应：日窗键的 INCR/EXPIRE 分支、幂等键的 pending→终值两段。
+1. [../../diagrams/archify/html/06-redis-data-flow.html](../../diagrams/archify/html/06-redis-data-flow.html)：限流与幂等两类键的读写流。本课对应：日窗键的 INCR/EXPIRE 分支、幂等键的 pending→结算两段。
 2. [../../diagrams/archify/html/02-function-map.html](../../diagrams/archify/html/02-function-map.html)：开放能力域的 API Key 叶子，`withinQuota` 挂在它的认证链上。
 
 ## 8. 项目中的真实执行过程
 
 场景一：同一 Idempotency-Key 的并发双击。
 
-1. 两个相同请求几乎同时到 `create`，都过了 create 限流（30/60s），键 `idem:{userId}:k1` 都查不到终值（:143）。
-2. 请求 A 的 `setIfAbsent` 成功拿到 pending 租约（:154-155），进 `doCreate`。请求 B 的 setIfAbsent 返回 false。
+1. 两个相同请求几乎同时到 `create`，都过了 create 限流（30/60s），键 `idem:{userId}:k1` 都查不到结算。
+2. 请求 A 的 `setIfAbsent` 成功拿到 pending 租约，进 `doCreate`。请求 B 的 setIfAbsent 返回 false。
 3. B 进入轮询：最多 10 次 200ms。A 在第 400ms 提交事务并把短码写回键（:273-274，TTL 86400）。
 4. B 的下一轮 `replayIdempotentCreate` 读到短码，校验行归属（:196-198），重放响应。DB 里只有一条链。
-5. 变体剧情：若 A 的进程在 settle 前崩溃，键停在 pending。B 轮询 2 秒后按 503 退出（:173），客户端稍后重试，此时 pending 已过 5 秒租约，新请求重新抢锁再建。这就是 :276-277 注释承认的窗口。
+5. 变体剧情：若 A 的进程在 settle 前崩溃，键停在 pending。B 轮询 2 秒后按 503 退出，客户端稍后重试，此时 pending 已过 5 秒租约，新请求重新抢锁再建。这就是源码注释承认的窗口（导入侧的同形窗口更长：租约 120 秒，且 M5 明确不覆盖崩溃恢复）。
 
 场景二：API Key 撞日配额。
 
@@ -190,7 +192,7 @@ INCR 返回 1 说明这是窗口内第一个请求，给键武装 TTL 的责任�
 
 ## 10. 本节总结
 
-- 幂等两段式：查终值 → 抢 5 秒租约 → 轮询或执行 → 终值 TTL 24 小时；fail-open 不对称，settle 失败的窗口被注释明示。
+- 幂等两段式：查结算（验指纹、先于限流）→ 抢租约（create 5 秒 / import 120 秒）→ 轮询或执行 → 结算 TTL 24 小时；fail-open 不对称，settle 失败的窗口被注释明示。
 - API Key 双闸：分钟滑动窗口（任意 60 秒不超）加日固定窗（上海自然日重置），先分钟后日。
 - 日窗武装失败尽力删键，防「计数永不过期的永久 429」；日期编入键名把最坏持续压到一个自然日。
 - 键族 10 键：7 个 ZSET 带 `sw:` 段，3 个 STRING（day/idem/touch）各守其名；幂等键与限流键共享 `rl:` 前缀做环境隔离。
@@ -208,15 +210,15 @@ INCR 返回 1 说明这是窗口内第一个请求，给键武装 TTL 的责任�
 
 **练习 3（执行过程）**：客户端带 Idempotency-Key 发创建请求，service 拿到租约后、`doCreate` 执行中，同键第三个请求到达。写出它的完整结局（含耗时上限）。
 
-答案解析：它先查终值（:143/:182-201）读不到（键还是 pending），setIfAbsent 失败（租约被占），进入轮询 :164-170：最多 10 次、每次 sleep 200ms，合计约 2 秒。期间首个请求若 settle 成功则重放短码；轮询耗尽仍无终值则按 :171-173 抛 503「idempotent create still in progress, retry later」。注意 2 秒的轮询窗口小于 5 秒租约，本请求不会自己抢到租约重建；只有客户端收到 503 后在租约过期（或首个请求崩溃）之后重试，新请求才可能抢锁再建——:152-160 的 fail-open 只在 Redis 故障时生效。
+答案解析：它先查结算读不到（键还是 pending），setIfAbsent 失败（租约被占），进入轮询：最多 10 次、每次 sleep 200ms，合计约 2 秒，每轮走完整的重放判定（验指纹）。期间首个请求若 settle 成功则重放短码（异体则 409）；轮询耗尽仍无结算则抛 503「idempotent create still in progress, retry later」。注意 2 秒的轮询窗口小于 5 秒租约，本请求不会自己抢到租约重建；只有客户端收到 503 后在租约过期（或首个请求崩溃）之后重试，新请求才可能抢锁再建——fail-open 只在 Redis 故障时生效。
 
 **练习 4（调用链）**：API Key 请求被日窗拒绝后，HTTP 响应是谁写的？如果是 controller 里的 `RateLimitedException`，路径有何不同？
 
 答案解析：日窗拒绝发生在 `ApiKeyAuthFilter.withinQuota`（:128-135），filter 在 DispatcherServlet 之前，异常到不了 `GlobalExceptionHandler`，所以由同文件 `writeQuotaExceeded`（:139-142）直接 `response.setHeader("Retry-After", ...)` 加 :144-148 的手写 JSON，状态 429。controller 路径：service 抛 `RateLimitedException` → `GlobalExceptionHandler.handleRateLimited`（:20-25）→ 同样的 429 加头，body 是 `ApiResponse.fail(...)` 的统一壳。两者 body 形状按类注释 :36-37 刻意一致。
 
-**练习 5（设计分析）**：把幂等键的 pending 租约从 5 秒改成 60 秒，各改善什么、恶化什么？用 :152-160 与 :164-173 的行为推演。
+**练习 5（设计分析）**：把创建幂等键的 pending 租约从 5 秒改成 60 秒，各改善什么、恶化什么？为什么导入的租约却是 120 秒？
 
-答案解析：改善：慢创建（大批量变体、数据库抖动）期间，第二个请求更可能在租约内等到终值，轮询 2 秒内重放成功率上升，503 减少。恶化：租约是防并发的唯一凭证（fail-open 只在 Redis 故障时生效）；首个请求若在 5 秒后崩溃，60 秒租约让同键重试白白等 60 秒（或者轮询方直接 503，客户端要等到租约过期才能重建）。租约时长的本质是「单次创建的 P99 耗时」与「崩溃后的重建延迟」之间的取舍，5 秒对单行 insert 加十行 variants 的写入是宽裕的（推断）。
+答案解析：改善：慢创建（大批量变体、数据库抖动）期间，第二个请求更可能在租约内等到结算，轮询 2 秒内重放成功率上升，503 减少。恶化：租约是防并发的唯一凭证（fail-open 只在 Redis 故障时生效）；首个请求若在 5 秒后崩溃，60 秒租约让同键重试白白等 60 秒（或者轮询方直接 503，客户端要等到租约过期才能重建）。租约时长的本质是「单次执行的 P99 耗时」与「崩溃后的重建延迟」之间的取舍：创建是单行 insert 加至多十行 variants，5 秒宽裕；导入要逐行跑最多 100 次 doCreate，P99 高一个量级，所以 120 秒——同一个参数，两处按各自执行时长定。
 
 ## 12. 与后续课程的联系
 

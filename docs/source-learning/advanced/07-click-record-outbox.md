@@ -62,6 +62,8 @@ sync × async 两个开关（`application.yml:177-178`，生产默认都开）�
 
 下游还有两个运输侧开关（relay-enabled、listener auto-startup，`application.yml:179` 与 :79），它们不改变这张矩阵的写入行为，只决定已写的行何时被搬运，口径见 10.2 课第 9 节。
 
+> **3.0.0 补注（本时间线下游的两处变化）**：(1) 批次 1 给 OutboxMapper 的三个 mark 补上了 `AND status = 'PENDING'` 状态守卫（`OutboxMapper.java:19-29`，注释标 T-M3），与 WebhookDeliveryMapper 对齐——多实例 relay 或陈旧批次再也不能把别人已 SENT 的行翻回 FAILED 重放；本专题的双写时间线本身不受影响。(2) 消费端事务末尾的 webhook AGGREGATE 分支，其冲刷模型在修复波 M3 被整体替换（快照删行 → 事务化 drain），见 [专题 11](11-webhook-delivery-retry.md) 节点六（3.0.0 修订）与 [专题 17](17-correctness-waves.md) M3 条。
+
 ## 4. 可视化
 
 阅读顺序：

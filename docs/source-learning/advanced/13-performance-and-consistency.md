@@ -17,10 +17,18 @@
 | L1 缓存里的 URL 值（Caffeine） | 本实例 put | 写后 10 秒过期；跨实例靠 CacheBus 广播失效，广播失败时陈旧到各自 TTL | 同上：行校验兜底，L1 命中绝不跳过行读 | `UrlLocalCache.java:40-43`、`CacheBus.java:57-68` |
 | 空值缓存（absent 哨兵） | markAbsent 的 Redis SET | TTL 60+30 秒 | create 路径 clearAbsent 清哨兵；禁用/过期的行绝不进此缓存 | `ShortLinkService.java:926-964`、[8.3](../modules/08-redis-cache/03-negative-cache-bloom.md) |
 | 限流计数（滑窗 ZSET） | 单键 Lua 执行完成，多实例共享 Redis | 无（Redis 正常时） | Redis 故障 fail-open 放行，代价是故障期窗口失效，有指标可见 | `RedisRateLimiter.java:39-58`、[9.1](../modules/09-rate-limit/01-sliding-window-lua.md) |
-| 创建幂等键（Redis SETNX 两段式） | pending 键的 SETNX | pending 5 秒超时，终值 24 小时 | 胜者崩溃后 pending 过期自愈；Redis 宕时 fail-open，幂等合同临时失效 | 决策 #15、[专题 2](02-create-short-link.md) |
+| 创建幂等键（Redis SETNX 两段式） | pending 键的 SETNX | pending 5 秒超时，终值 24 小时 | 胜者崩溃后 pending 过期自愈；Redis 宕时 fail-open，幂等合同临时失效。3.0.0：终值信封升 `v3:`，指纹 create-v2 含密码 HMAC，同 key 异体 409（M4，[专题 16](16-link-power-features.md)） | 决策 #15、[专题 2](02-create-short-link.md) |
+| 导入幂等（settle 缓存 + 在途租约） | settle 的 Lua CAS 写入 | 租约 120 秒 TTL；终值同创建键 24 小时 | 同文件在途 409、异文件 409；Redis 宕 fail-open 回到 settle-only。**崩溃恢复不在合同内**（M5 闸门口径，[专题 17](17-correctness-waves.md) 第 7 节） | `ImportIdempotencyLease.java`、[专题 16](16-link-power-features.md) |
+| 会话族（lf_refresh_token） | 轮换/撤销事务提交（用户行锁串行化） | 无（提交即全局生效：access 靠 tv claim 在每请求回查时失效） | 锁序 租户→用户→refresh 全局统一；版本号只走原子自增（M1） | `SessionService.java`、[专题 15](15-auth-sessions-and-teams.md) |
+| 团队写操作（角色/状态/重置） | 租户行锁内的当前读判定 + 同事务写入 | 无 | 最后 ADMIN 护栏以锁内 locking current read 为准，RR 旧快照不再参与判定（M2） | `TeamService.java`、[专题 15](15-auth-sessions-and-teams.md) |
+| 邀请认领（lf_tenant_invitation） | 条件 UPDATE 认领的提交（与建账号同事务） | 无 | 并发双认领只有一个 UPDATE 影响 1 行，输家整单回滚不留孤儿账号 | `TeamService.java:188-194`、[专题 15](15-auth-sessions-and-teams.md) |
+| /stats 三读（totalUv/按日 clicks/按日 UV） | 只读 REPEATABLE_READ 快照事务的建立时刻 | 快照内零窗口（三读同一批点击）；breakdown 仍最终一致、不进快照 | 三读全走明细表同窗口（批次 1 口径统一），UV>clicks 在单响应内不可能 | `ClickStatsService.java:77-79、164-183`、[专题 9](09-stats-reconcile.md) |
+| A/B 报告 | 同 stats 的窗口桶读 | 与 breakdown 同级最终一致 | 适用性门先行：不可证稳定/条件路由时返回 NOT_APPLICABLE 而非拟合数（S1） | `AbReport.java`、[专题 16](16-link-power-features.md) |
+| 恶意主机判定快照 | snapshot.refresh() 成功返回的时刻 | feed 周期（默认 6 小时）+ 一次刷新 | 先应用后声称：refresh 失败不推进 last_success、判定用旧快照（S3）；开关关时快照钉空 | `MaliciousHostSyncService.java:120-157`、[专题 16](16-link-power-features.md) |
+| Webhook 聚合 drain | 单个 (endpoint, 窗口) drain 事务提交 | 封窗触发（阈值或 5 秒 sweep） | 锁行读 + 只删锁行 + flush_seq 命名空间：无未发先删（M3） | `WebhookAggregateFlusher.java:149-171`、[专题 11](11-webhook-delivery-retry.md) |
 | 点击明细 lf_click_log（sync 开） | 双写事务提交 | 无 | 提交即存在；DB 挂时 fail-open 不记录（放弃一致性保可用） | `ClickRecordService.java:40-74`、[专题 7](07-click-record-outbox.md) |
 | 点击明细（sync 关） | 消费端回填事务提交 | 约 relay 轮询节拍 + 消费延迟（默认初始 3 秒、每 2 秒一轮） | outbox 行持久化，eventId 持久在行里，恢复后必追平 | D-A7-4、`ClickOutboxRelay.java:37-43` |
-| 聚合计数 lf_click_daily（totalClicks/维度桶） | 消费端「去重+回填+upsert」短事务提交 | relay 节拍 + MQ 运输，正常路径秒级 | 确定性 eventId 幂等去重；断 MQ 自动追平；对账器全量兜底 | 决策 #22、`ClickStatsService.java:57-75`、[专题 9](09-stats-reconcile.md) |
+| 聚合计数 lf_click_daily / 维度桶 | 消费端「去重+回填+upsert」短事务提交 | relay 节拍 + MQ 运输，正常路径秒级 | 确定性 eventId 幂等去重；断 MQ 自动追平；对账器全量兜底。3.0.0 注：/stats 的 totalClicks 已改读明细求和（批次 1），本表仍是对账等式的聚合侧与 breakdown 的读源 | 决策 #22、`ClickStatsService.java:57-75`、[专题 9](09-stats-reconcile.md) |
 | 精确 UV | 同明细（COUNT(DISTINCT) 扫 lf_click_log） | 同明细 | 明细行是唯一来源，不另设近似结构 | [专题 9](09-stats-reconcile.md) |
 | Outbox 行状态（PENDING→SENT） | markSent/markRetry 的 SQL 提交 | 与 relay 轮询节拍同级 | confirm 语义：broker ack 才标 SENT；失败 2^n 秒退避、上限 60 秒 | [10.2](../modules/10-rabbitmq-outbox/02-outbox-relay.md)、[专题 8](08-mq-consume-idempotency.md) |
 | Webhook 投递 | consume 去重事务内插入 PENDING 投递行 | 投递轮询 + 重试退避；聚合模式再叠加 digest 封窗（默认 60 秒或 100 次） | at-least-once 投递按 eventId 去重；失败退避到终态 FAILED，不吞 | D-Bw2-9、`WebhookService.java:32`、[13.3](../modules/13-webhook/03-ssrf-and-aggregate.md) |
@@ -175,7 +183,7 @@ sequenceDiagram
 
 这一节是第 2、3、4 节的出口：账算完了，哪些能对外说、怎么说。原则只有一条，和本教材的引用纪律同源：说出口的每句话都要能指到文件（`docs/bench.md`、`docs/progress.md`、`README.md:632`），指不到的就不说。
 
-**能报的数字，每条都要带口径。** 测试构成 319（151 单测 + 166 集成 + 2 时区 fork，`README.md:623`）。Windows 历史窗数字要整组一起报（基线 888.8、13.3 对 276.1、P50 678ms 对 31.4ms、命中率段内 100%），报之前先说时期：2026-10-24、Windows + Docker Desktop/WSL2、固定窗口限流时期、早于当前 tip、B10 未跑。A7 的 20.1 QPS 同时期注。
+**能报的数字，每条都要带口径。** 测试构成 508（226 单测 + 280 集成 + 2 时区 fork，3.0.0 冻结口径；本专题初版的 319 是 v2.0.0 时点数）。Windows 历史窗数字要整组一起报（基线 888.8、13.3 对 276.1、P50 678ms 对 31.4ms、命中率段内 100%），报之前先说时期：2026-10-24、Windows + Docker Desktop/WSL2、固定窗口限流时期、早于当前 tip、B10 未跑。A7 的 20.1 QPS 同时期注。
 
 **不能报的。** 任何当前 tip 或 Linux 的吞吐数字；「万级」「高并发已压测通过」这类未实测定性；把命中率 100% 说成常态；把 c50 的 14.9 QPS 单独摘出来报（它是写排队恶化下的数字，脱离对照组没有意义）；BCrypt 的具体毫秒数当系统实测（那是算法属性，不是压测结论）。
 

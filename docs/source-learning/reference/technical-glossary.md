@@ -28,6 +28,10 @@
 同一操作执行多次与执行一次结果相同。本项目：消费端用 `lf_consumed_event` 主键插入判重（DuplicateKey 即已消费，ClickStatsService.java:70-78）；创建端用幂等键两段式（见「幂等键」词条）。
 详见 [10.3 消费幂等与死信](../modules/10-rabbitmq-outbox/03-consumer-idempotency-dlq.md)、[9.2 幂等键与配额](../modules/09-rate-limit/02-idempotency-and-quotas.md)。
 
+### 重用侦测（refresh token reuse detection）
+轮换式 refresh token 的盗用信号：一个已被轮换退休的 token 再次出现，说明它（或它的副本）落到了不该有的人手里。本项目（批次 2a）：只有 `revoke_cause=ROTATED` 且超过 10 秒宽限的再出示才升级为整族撤销 + token_version 自增；主动撤销（登出/改密/管理员）留下的行再出示只回 401 不升级，因为那多半是没学到撤销的诚实旧客户端（`SessionService.isReuseKill`，SessionService.java:218-222）。
+详见 [advanced/15 会话族与团队协作](../advanced/15-auth-sessions-and-teams.md)、[advanced/17 正确性修复波](../advanced/17-correctness-waves.md)。
+
 ### 乐观锁 / 悲观锁
 乐观锁假设冲突少，提交时校验版本；悲观锁先锁再改。本项目：实体没有 `@Version` 注解，并发收敛靠唯一索引兜底（先写、冲突即败），主键 INSERT 在 MySQL 里天然是并发屏障（推断：项目未用显式乐观/悲观锁）。
 详见 [4.2 Flyway 与 schema](../modules/04-mybatis-mysql/02-flyway-migrations.md)、[10.3 消费幂等与死信](../modules/10-rabbitmq-outbox/03-consumer-idempotency-dlq.md)。
@@ -138,6 +142,10 @@ Broker 对收到的消息回执 ack/nack，弥补「发了就算发了」的不�
 带认证标签的对称加密，密文被篡改会解密失败。本项目：`WebhookSecretCipher` AES-256-GCM 存 Webhook secret，格式 `v1:` + Base64(nonce(12)||ct||tag)；主密钥丢失则存量 secret 不可恢复（:21-23）。
 详见 [13.1 端点配置与密钥加密](../modules/13-webhook/01-endpoints-and-cipher.md)。
 
+### 公式注入中和（spreadsheet formula neutralization）
+CSV 单元格以 `=`、`+`、`-`、`@` 开头时，Excel 等表格软件会把内容当公式执行（CSV/公式注入）；中和办法是在原文前加单引号，强制按文本渲染。本项目（修复波 M8）：`CsvFormat.escapeSpreadsheet` 先跳过前导空白类字符看首字符再决定加引号，检测跑在 RFC4180 转义之前的原文上，全部 CSV 出口共用（CsvFormat.java:29-52）。
+详见 [advanced/16 链接能力扩展](../advanced/16-link-power-features.md)、[advanced/17 正确性修复波](../advanced/17-correctness-waves.md)。
+
 ### SSRF（server-side request forgery）
 诱使服务端请求内网地址的攻击。本项目：`WebhookTargetGuard` 保存时校验目标 URL，`allowPrivateTargets=false`，违规 400 且日志不回显内部原因（WebhookService.java:87、D-C4-8）。
 详见 [13.3 SSRF 防护](../modules/13-webhook/03-ssrf-and-aggregate.md)。
@@ -190,6 +198,10 @@ utm_source/medium/campaign 等归因查询参数。本项目：`UtmMerger` 写�
 服务等级目标，通常落在延迟/可用性分位上。本项目：histogram 的 SLO 桶在 yml management 段配置（5ms..1s），Grafana 面板消费；B10 Linux 基准未跑，性能数字一律只引 README 历史口径。
 详见 [14.2 业务指标与 Grafana](../modules/14-observability/02-metrics-gauges-grafana.md)、[reference/issues-and-discrepancies.md](issues-and-discrepancies.md)。
 
+### correlation id（请求关联 id）
+给每个请求铸一个唯一 id，贯穿日志、响应头与排障引用，把「客户端看到的失败」与「服务端的那行堆栈」对上。本项目（S/N 波 N1）：`CorrelationIdFilter` 在过滤器链首服务端铸造（不采信入站头，防日志注入），三路携带——MDC `cid`（日志 pattern `[%X{cid}]`）、请求属性、`X-Correlation-Id` 响应头；`GlobalExceptionHandler.handleBiz` 靠它把 5xx/带 cause 的异常恰记一次。
+详见 [advanced/17 正确性修复波](../advanced/17-correctness-waves.md)。
+
 ### 基数爆炸（cardinality explosion）
 标签取值无界导致时间线数量失控。本项目：`HttpUriTagAllowList` 给 `http.server.requests` 的 uri tag 上白名单（51 行 MeterFilter），动态路径不进白名单就归并。
 详见 [14.1 Actuator 与 Micrometer](../modules/14-observability/01-actuator-micrometer.md)。
@@ -231,6 +243,34 @@ Webhook AGGREGATE 模式按时间窗聚合成一条摘要消息。eventId 形如
 ### 诚实边界
 代码注释自认局限而非粉饰。三处代表：WebhookTargetGuard 自认未覆盖端口白名单与 egress 代理（:23-25）；幂等 settle 失败自认停机期可能再造一条（doCreate :276-279）；SingleFlight 自认残留窗口（:111-113）。
 详见 [13.3 SSRF 防护](../modules/13-webhook/03-ssrf-and-aggregate.md)、[8.4 singleflight](../modules/08-redis-cache/04-singleflight.md)。
+
+### refresh token 家族（token family）
+一次登录会话的全部 refresh token 构成一个 family：同 family_id 的一行行 token 靠轮换串成链（旧行 ROTATED 并以 replaced_by_id 指向后继），每次登录新开一个 family，所以「退出一台设备」与「退出全部设备」是两个不同范围的撤销。本项目：`lf_refresh_token`（V11），原始 token 只在签发响应出现一次，库存 SHA-256。
+详见 [advanced/15 会话族与团队协作](../advanced/15-auth-sessions-and-teams.md)。
+
+### token_version
+用户行上的 access token 撤销计数器（V11 列）。签发时把当前值写进 JWT 的 `tv` claim，`JwtAuthFilter` 每请求回查比对，不等即不认；只许走 SQL 原子自增，改密、logout-all、禁用、重置都会 bump 它，让全部存量 access 在下一个请求死亡。V11 前的老 token 无 claim 读作 0。
+详见 [advanced/15 会话族与团队协作](../advanced/15-auth-sessions-and-teams.md)、[advanced/17 正确性修复波](../advanced/17-correctness-waves.md)。
+
+### flush_seq（冲刷序号）
+Webhook 聚合 drain 的每-endpoint 持久序号（V15 `lf_webhook_flush_state`，修复波 M3）：在 drain 事务内分配并推进，进 digest eventId 的命名空间（`digest-{endpointId}-{windowStart}-{flushSeq}`），让同一窗口的多次 drain 各有 id；事务回滚不耗号，重试复现同一批 id。
+详见 [advanced/11 Webhook 投递与重试](../advanced/11-webhook-delivery-retry.md)、[advanced/17 正确性修复波](../advanced/17-correctness-waves.md)。
+
+### 事务化 drain（transactional drain）
+把「读出一批缓冲行 → 产出下游记录 → 删掉这批行」收进单个事务并对读行加锁的排空方式：任一步失败整单回滚，删的永远恰是读锁住的那批，并发增量要么进本批要么落成新行，没有「未产出先删除」的中间态。本项目：`WebhookAggregateFlusher.doFlush`（WebhookAggregateFlusher.java:149-171），是它替换掉的「快照删行」的反面教材对照。
+详见 [advanced/17 正确性修复波](../advanced/17-correctness-waves.md)。
+
+### 适用性门（applicability gate）
+在跑统计检验之前，先判「这批数据配不配被这个检验解释」的前置闸门，不配就返回机器可读的不适用理由而不是一个貌似精确的数值。本项目（S/N 波 S1）：`AbReport.checkApplicability`，理由码优先级 CONDITIONAL_ROUTING > CONFIG_CHANGED_IN_WINDOW > CONFIG_HISTORY_UNKNOWN，另有结构性的 TOO_FEW_VARIANTS；过门依据是 variant 整集同刻装配的可证稳定性。
+详见 [advanced/16 链接能力扩展](../advanced/16-link-power-features.md)。
+
+### 在途租约（in-flight owner lease）
+用带所有者标记的值占住一个键一段 TTL，声明「这件事正在被我执行」，settle/release 都要凭完整值走 CAS，防过期后的旧持有者覆盖或删除新持有者的状态。本项目（修复波 M5）：CSV 导入的 `pending:<owner>:<fileSha256>`（`ImportIdempotencyLease`，TTL 120 秒）；合同只覆盖并发互斥，明示不含崩溃恢复。
+详见 [advanced/16 链接能力扩展](../advanced/16-link-power-features.md)、[advanced/17 正确性修复波](../advanced/17-correctness-waves.md)。
+
+### 开窗日语义（opening-day window semantics）
+跨午夜时间窗的星期归属规则：尾段（午夜后部分）算开窗那一天的日程，而不是日历上的当天。本项目（S/N 波 S4-4）：`MatchRule.windowMatches` 对严格跨午夜窗（from > to）的 `[00:00, to)` 段按前一日读 weekdays；开窗段、非跨午夜窗与 from==to 退化窗仍按当日读。
+详见 [advanced/16 链接能力扩展](../advanced/16-link-power-features.md)。
 
 ## C. 缩写表
 

@@ -1,12 +1,12 @@
-# 15.1 测试金字塔：319 例的构成、Testcontainers 基类与红先纪律
+# 15.1 测试金字塔：508 例的构成、Testcontainers 基类与红先纪律
 
-> 模块 15 第一节。这一课回答三个问题：这套代码的 319 个测试例是怎么数出来的；42 个集成测试类靠一个什么样的基类把 Docker 里的 MySQL、Redis、RabbitMQ 接进 Spring 容器；以及这个项目的贡献纪律为什么要求「先提交测试（CI 红），再提交实现（CI 绿）」。读完你应能独立写出一个新的 `*IT` 类，并且知道基类里每一个「奇怪」决定（500 连接上限、不带 `@SpringBootTest`、换请求工厂）各自防过一次什么事故。
+> 模块 15 第一节。这一课回答三个问题：这套代码的 508 个测试例是怎么数出来的；77 个集成测试文件靠一个什么样的基类把 Docker 里的 MySQL、Redis、RabbitMQ 接进 Spring 容器；以及这个项目的贡献纪律为什么要求「先提交测试（CI 红），再提交实现（CI 绿）」。读完你应能独立写出一个新的 `*IT` 类，并且知道基类里每一个「奇怪」决定（500 连接上限、不带 `@SpringBootTest`、换请求工厂）各自防过一次什么事故。
 
 ## 1. 本节学习目标
 
-1. 用两个口径说出测试规模：源码里的 312 个 `@Test` 注解，README 与 CI 汇报的 319 个执行实例，并解释 7 个例子的差从哪来。
+1. 用两个口径说出测试规模：源码里的 486 个 `@Test` 注解，README 与 CI 汇报的 508 个执行实例，并解释 22 个例子的差从哪来。
 2. 逐段读懂 `AbstractIntegrationTest`：三个 static 容器、`static {}` 启动块、`@DynamicPropertySource` 注入、四个 HTTP 助手方法。
-3. 推导 `--max-connections=500` 这条配置的连接预算：27×10+15×4=330，为什么默认的 151 会炸。
+3. 推导 `--max-connections=500` 这条配置的连接预算：C5 时点的 27×10+15×4=330，为什么默认的 151 会炸，以及套件长大后这条推导的现状。
 4. 说出基类不带 `@SpringBootTest` 的原因（上下文缓存键），以及 `FlywayBaselineIT` 刻意不继承基类的原因（必须拿到一个没被迁移过的库）。
 5. 复述 `@DirtiesContext(AFTER_CLASS)` 背后的真实事故：relay 线程跨类存活，会用错配置结算别的类的行。
 
@@ -23,32 +23,34 @@
 
 | 文件 | 行数 | 职责 | 阅读顺序 |
 |----|----|----|----|
-| `src/test/java/com/linkforge/AbstractIntegrationTest.java` | 176 | 全部 42 个 IT 的共享基类，本课主角 | 1 |
+| `src/test/java/com/linkforge/AbstractIntegrationTest.java` | 176 | 76 个 IT 的共享基类，本课主角 | 1 |
 | `src/test/java/com/linkforge/FlywayBaselineIT.java` | 141 | 刻意不继承基类的遗留库升级测试 | 2 |
 | `src/test/java/com/linkforge/webhook/WebhookDeliveryIT.java` | 412 | `@DirtiesContext` 事故注释与两段式断言 | 3 |
 | `src/test/java/com/linkforge/webhook/WebhookRetryClockIT.java` | 199 | 时区 fork 的主角（15.2 深讲，此处读类头注释） | 4 |
 | `src/test/resources/application-test.yml` | 69 | IT 专用 profile：非连接类默认值 | 5 |
-| `src/test/java/com/linkforge/link/support/LinkValidationsTest.java` | 80 | 纯单测样例，含唯一的参数化测试 | 6 |
-| `pom.xml` | 281 | `:219-249` failsafe 双执行（15.2 展开） | 7 |
+| `src/test/java/com/linkforge/link/support/LinkValidationsTest.java` | 67 | 纯单测样例，含参数化测试之一 | 6 |
+| `pom.xml` | — | failsafe 双执行（15.2 展开） | 7 |
 
 阅读顺序的理由：先立基类，再看「为什么不走基类」的反例，然后用两个 webhook IT 理解上下文卫生与断言纪律，最后回到单测对照两种世界。
 
 ## 4. 类的定位（测试树的唯一基类）
 
-`src/test/java` 共 70 个文件，包结构与 `src/main/java` 一一镜像：`link/`、`webhook/`、`stats/` 各自的测试放在同名包里，唯二的例外是 `com.linkforge` 根包下的 `AbstractIntegrationTest`（基类）和五个全局性 IT（`FlywayBaselineIT`、`HealthEndpointIT`、`ObservabilityIT`、`OpenApiInfoIT`、`ProdProfileIT`）。
+`src/test/java` 共 115 个文件，包结构与 `src/main/java` 一一镜像：`link/`、`webhook/`、`stats/` 各自的测试放在同名包里，例外是 `com.linkforge` 根包下的 `AbstractIntegrationTest`（基类）和全局性 IT（`FlywayBaselineIT`、`HealthEndpointIT`、`ObservabilityIT`、`OpenApiInfoIT`、`ProdProfileIT` 等）。
 
-`AbstractIntegrationTest` 不注册为任何 Spring Bean，也不被生产代码引用。它是纯继承意义上的工具类：42 个 `*IT` 类继承它拿到容器、连接属性和 HTTP 助手；27 个 `*Test` 类完全不碰它。测试金字塔的两层由文件名切开：`*Test` 归 surefire 免 Docker 秒跑，`*IT` 归 failsafe 需要 Docker daemon。
+`AbstractIntegrationTest` 不注册为任何 Spring Bean，也不被生产代码引用。它是纯继承意义上的工具类：77 个 `*IT` 文件里 76 个继承它拿到容器、连接属性和 HTTP 助手（唯一例外是自建容器的 FlywayBaselineIT，5.7）；38 个 `*Test` 文件完全不碰它。测试金字塔的两层由文件名切开：`*Test` 归 surefire 免 Docker 秒跑，`*IT` 归 failsafe 需要 Docker daemon。
 
 ## 5. 核心源码详解
 
-### 5.1 两个口径：312 与 319
+### 5.1 两个口径：486 与 508
 
-先给结论（两者我都逐文件实测核对过）：
+先给结论（两者都逐文件实测核对过，3.0.0 时点）：
 
-- **312** = 源码里 `@Test` 注解总数 = 单测 144 + IT 168。这是静态口径，写代码的人数这一侧。
-- **319** = README 徽章与 CI 汇报的执行实例数 = surefire 151 + failsafe 默认组 166 + 时区 fork 2（`README.md:623`）。这是动态口径，参数化用例按展开次数计数。
+- **486** = 源码里 `@Test` 注解总数 = 单测 204 + IT 282。这是静态口径，写代码的人数这一侧。
+- **508** = README 与 CI 汇报的执行实例数 = surefire 226 + failsafe 默认组 280 + 时区 fork 2。这是动态口径，参数化用例按展开次数计数。
 
-166 比 168 少 2，因为 failsafe 默认执行排除了 `WebhookRetryClockIT`（`pom.xml:231`），它的 2 个 `@Test` 在独立 JVM fork 里另跑（15.2 详解）。surefire 侧：144 这个数只数 `@Test` 注解，不含全项目唯一的参数化方法——`LinkValidationsTest.java:62-63` 的 `@ParameterizedTest` 配 `@ValueSource` 的 7 个字符串是独立方法，展开后 **144+7=151**，与 README 的 surefire 口径精确对平。于是 151+166+2=319，两套账完全可平。这里曾出现另一版推导：编写者把参数化方法误当作已含在 144 内，做了一次双重扣减，推出一个静态解释不了的缺口并登记在 [reference/issues-and-discrepancies.md](../../reference/issues-and-discrepancies.md) §2.1——后来被审计抓出。教训：算式里每一项都要注明出处与含义，口径对账才不会凭空长出幽灵缺口。
+两笔差各有出处。IT 侧：282 比 280 多 2，因为 failsafe 默认执行排除了 `WebhookRetryClockIT`，它的 2 个 `@Test` 在独立 JVM fork 里另跑（15.2 详解）。单测侧：204 个 `@Test` 之外有**两个**参数化方法——`LinkValidationsTest` 的 `@ParameterizedTest` 配 `@ValueSource` 展开 7 例，`MatchRuleTest` 的跨午夜星期用例配 `@MethodSource` 展开 15 例（S4-4 的参数化矩阵），合计展开 22，于是 204+22=226，与 surefire 口径精确对平。226+280+2=508，两套账完全可平。
+
+增长史（README 的逐波记录）：初版教材时点 319（151+166+2）→ 批次 1 后 335 → 批次 2 两段 353、366 → 批次 3 两段 400、440 → 修复波 472 → S/N 波 **508**。每一波的增量都对应新机制的验收用例（会话与团队 +47、标签/路由/导出 +74、M1–M8 修复 +32、S/N +36）——测试数的增长曲线就是功能与正确性工作的化石层。初版编写时这里曾出现一版错误推导（把参数化方法双重扣减，推出幽灵缺口），教训保留：算式里每一项都要注明出处与含义，口径对账才不会凭空长出缺口。
 
 ### 5.2 AbstractIntegrationTest 逐段：三个容器与启动块
 
@@ -93,7 +95,9 @@ public abstract class AbstractIntegrationTest {
 
 上面的注释记录了一次真实事故：默认 MySQL 的 `max_connections` 是 151，每上下文一个 Hikari 池，套件多长一个上下文后撞上 `Too many connections`（`AbstractIntegrationTest.java:39-43`，A9 BloomRedirectIT 时期）。为什么改服务器上限而不是减池子？因为瓶颈在乘法：上下文数 × 池大小。
 
-推导（口径出处 `README.md:626`）：42 个 IT 类，其中 15 个显式把池压到 4（如 `WebhookDeliveryIT.java:58` 的 `"spring.datasource.hikari.maximum-pool-size=4"`），其余 27 个用 Hikari 默认 10。最坏情形是每个类都独占一个上下文且每个池都同时满载，纸面峰值 27×10+15×4=330。服务器上限 500 留出 170 余量，另外时区 fork 是独立 JVM、容器独立计数。三个 relay-enabled 的 webhook IT 用 `@DirtiesContext` 类结束即关上下文，所以实际峰值低于纸面。这是配置侧的天花板推导，不是实测值；全绿即零 `Too many connections` 是它的验收标准。
+推导（C5 时点口径）：42 个 IT 类，其中 15 个显式把池压到 4（如 `WebhookDeliveryIT` 的 `"spring.datasource.hikari.maximum-pool-size=4"`），其余 27 个用 Hikari 默认 10。最坏情形是每个类都独占一个上下文且每个池都同时满载，纸面峰值 27×10+15×4=330。服务器上限 500 留出 170 余量，另外时区 fork 是独立 JVM、容器独立计数。relay-enabled 的 webhook IT 用 `@DirtiesContext` 类结束即关上下文，所以实际峰值低于纸面。
+
+3.0.0 的现状要诚实标注：套件已长到 77 个 IT 文件（显式 pool=4 的有 24 个文件），纸面峰值按同法会明显高于 330——README 自己在同一段下加了注：330 是 C5 时点的推导、**纸面峰值待重算**。没有重算的原因是这个数字的用途已经变了：它当年是「为什么把上限从 151 抬到 500」的论证，现在 500 的上限与全套 CI 长期全绿（零 `Too many connections`）就是验收本身。若将来连接错误复现，第一件事是按现行类数重推这笔账，而不是怀疑玄学。
 
 ### 5.4 @DynamicPropertySource：把随机端口塞进 Spring
 
@@ -153,7 +157,7 @@ public abstract class AbstractIntegrationTest {
 
 这个类测的是「老库升级」：一个按 Flyway 之前方式建好的库（表全在、没有 `flyway_schema_history` 表），应用启动时应打 baseline@1、跳过 V1、继续可用。它自建 `LEGACY_MYSQL` 容器并挂 init 脚本（`FlywayBaselineIT.java:45` 的 `withInitScript("db/schema.sql")`），`static {}` 只启动 MySQL 和 Redis（`FlywayBaselineIT.java:51-54`），自己的 `@DynamicPropertySource` 只注入这两个连接（`:56-63`）。
 
-不继承基类的必然性：基类的 MYSQL 单例是全 JVM 共享的，任何一个 IT 跑过它就被迁移过了，history 表里早有记录，「恰好 1 条 BASELINE」的断言立刻失真。所以它必须拿一个全新卷、用 schema.sql 预灌成「遗留库」。这也顺手定义了互补覆盖：其余 41 个 IT 起空库、Flyway 正常应用 V1 到 V10，两条升级路径各测各的。断言本身值得精读：`FlywayBaselineIT.java:79-85` 验证恰好 1 条 BASELINE@1 且 V1 未重跑，`:88-97` 验证 V2 到 V6 叠加生效，`:99-102` 验证 `lf_short_link.code` 的 collation 是 `utf8mb4_0900_bin`（V4 的大小写敏感修复，见 4.2），`:104-105` 验证遗留卷上无种子数据。迁移机制本身见模块 4.2。
+不继承基类的必然性：基类的 MYSQL 单例是全 JVM 共享的，任何一个 IT 跑过它就被迁移过了，history 表里早有记录，「恰好 1 条 BASELINE」的断言立刻失真。所以它必须拿一个全新卷、用 schema.sql 预灌成「遗留库」。这也顺手定义了互补覆盖：其余 76 个 IT 起空库、Flyway 正常应用 **V1 到 V15**（空库路径的完整迁移链由每一支 IT 的启动过程顺带验收），两条升级路径各测各的。断言本身值得精读：`FlywayBaselineIT.java:79-85` 验证恰好 1 条 BASELINE@1 且 V1 未重跑，`:88-97` 验证 V2 到 V6 叠加生效，`:99-102` 验证 `lf_short_link.code` 的 collation 是 `utf8mb4_0900_bin`（V4 的大小写敏感修复，见 4.2），`:104-105` 验证遗留卷上无种子数据，最后一段还冒烟了注册→建链→302 的主链路。迁移机制本身见模块 4.2。
 
 ### 5.8 @DirtiesContext(AFTER_CLASS)：relay 线程跨类存活的教训
 
@@ -181,7 +185,7 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
 ## 6. 技术原理补充
 
 - **Testcontainers 单例容器模式（框架行为）**：把容器放进 `static final` 字段、在 `static {}` 里 start，整个 JVM 共享一份。好处是省启动时间（MySQL 容器冷启数十秒）；代价是所有类共享一个数据库实例，隔离只能靠数据不靠容器。不用它会怎样：要么连宿主机手装的服务（CI 不可复现），要么 H2 内存库（方言差异让 MySQL 专属行为失真，比如 V4 的 collation）。
-- **上下文缓存与缓存键（框架行为）**：`@SpringBootTest` 的 `classes`、`properties`、`webEnvironment`、`@ActiveProfiles` 都参与缓存键。同键复用，异键新建。本项目 42 个 IT 里大量类只差 rate-limit 前缀等小属性，各自成键，这正是 5.3 连接预算按「每类一个上下文」纸面推导的原因。
+- **上下文缓存与缓存键（框架行为）**：`@SpringBootTest` 的 `classes`、`properties`、`webEnvironment`、`@ActiveProfiles` 都参与缓存键。同键复用，异键新建。本项目 76 个继承基类的 IT 里大量类只差 rate-limit 前缀等小属性，各自成键，这正是 5.3 连接预算按「每类一个上下文」纸面推导的原因。
 - **@DirtiesContext（框架行为）**：声明该上下文「脏了」，按 `classMode` 决定何时关闭。`AFTER_CLASS` 在类结束时关。它不是清理数据的工具（数据靠 `unique()` 前缀与租户隔离），是清理「活线程」的工具，本课只用在 relay 场景。
 - **Awaitility（框架行为）**：轮询断言，默认 100ms 一次。本项目 IT 统一 `atMost(60s)` 或 `30s`，给 CI 慢机留余量。不用它就得 `Thread.sleep` 固定等待，既慢又抖。
 - **com.sun.net.httpserver.HttpServer（JDK 自带）**：`WebhookDeliveryIT.java:101-107` 用它起本地 stub 收 webhook，零第三方依赖；`:117-119` 按路径取脚本化状态码队列，每个测试租户一条专属路径互不串台（`:72-76` 注释）。
@@ -191,8 +195,8 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
 打开 [09-test-ci-pipeline.html](../../diagrams/archify/html/09-test-ci-pipeline.html)（测试与 CI 流程图，showcase 档）。阅读顺序与节点对应：
 
 1. 从「push/PR」节点进入 CI 五步（checkout、setup-java、缓存、`mvn -B verify`、结果），对应 15.2 的 `ci.yml` 逐行。
-2. `mvn verify` 节点分出 surefire（151）与 failsafe（166）两条支路，对应本课 5.1 的口径拆分。
-3. failsafe 分支里的时区 fork 小节点（2 例）对应 `WebhookRetryClockIT` 的独立 JVM，15.2 展开；图内卡片的例数出处口径（312 注解 vs 319 执行实例）与本课 5.1 一致。本课不引运行部署图，15.3 的 Compose 与宿主机 JVM 才是 [01-runtime-deployment.html](../../diagrams/archify/html/01-runtime-deployment.html) 的内容。
+2. `mvn verify` 节点分出 surefire（226）与 failsafe（280）两条支路，对应本课 5.1 的口径拆分。
+3. failsafe 分支里的时区 fork 小节点（2 例）对应 `WebhookRetryClockIT` 的独立 JVM，15.2 展开；图内卡片的例数出处口径（486 注解 vs 508 执行实例）与本课 5.1 一致。本课不引运行部署图，15.3 的 Compose 与宿主机 JVM 才是 [01-runtime-deployment.html](../../diagrams/archify/html/01-runtime-deployment.html) 的内容。
 
 ## 8. 项目中的真实执行过程
 
@@ -203,7 +207,7 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
 3. `@BeforeAll startStub`（`WebhookDeliveryIT.java:101-107`）起本地 HTTP stub；`@BeforeEach resetSpies`（`:96-99`）与 `usePatchCapableRequestFactory`（基类）就位。
 4. 测试方法跑 `registerForToken()`（基类 `:90-101`，注册新租户拿 JWT）→ `createLink()`（`:103-111`）→ `get("/r/"+code)` 打 302。点击进入落库、outbox、MQ、消费的完整链路。
 5. 第一段 `await` 等投递行出现并 SENT（`:186-190`），第二段 `awaitStubSaw` 等 stub 收到带签名的请求（`:195-201`），最后 `assertEquals(1, deliveryCount(eventId))` 钉住幂等（`:209`）。
-6. 类结束，`AFTER_CLASS` 关闭这个 relay-enabled 上下文；下一个 IT 类复用同一组容器与已缓存的其他上下文。42 个类跑完，failsafe 的 verify 阶段汇总结果。
+6. 类结束，`AFTER_CLASS` 关闭这个 relay-enabled 上下文；下一个 IT 类复用同一组容器与已缓存的其他上下文。全部 IT 类跑完，failsafe 的 verify 阶段汇总结果。
 
 ## 9. 为什么这样设计
 
@@ -215,7 +219,7 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
 
 ## 10. 本节总结
 
-- 312 是源码 `@Test` 注解口径，不含 1 个独立的 `@ParameterizedTest` 方法；319 = 312 + 参数化展开 7 例 = surefire 151（144+7）+ failsafe 166 + 时区 fork 2，两账完全可平。
+- 486 是源码 `@Test` 注解口径，不含 2 个 `@ParameterizedTest` 方法；508 = 486 + 参数化展开 22 例 = surefire 226（204+22）+ failsafe 280 + 时区 fork 2，两账完全可平。
 - `AbstractIntegrationTest` 四件套：三个 static 容器、`static {}` 单次启动、`@DynamicPropertySource` 懒注入、PATCH 可用的请求工厂；连接预算 27×10+15×4=330 对天花板 500。
 - 基类不带 `@SpringBootTest` 是为让每个子类的配置签名自包含；`FlywayBaselineIT` 不继承是为保住一个未迁移的遗留库。
 - `@DirtiesContext(AFTER_CLASS)` 恰好钉在三个 relay-enabled 的类上，防上下文缓存里的调度线程跨类结算数据。
@@ -223,13 +227,13 @@ class WebhookDeliveryIT extends AbstractIntegrationTest {
 
 ## 11. 课后练习
 
-**练习 1（概念理解）** 同事问：「README 说 319 个测试，我 grep `@Test` 只有 312 个，是不是漏了？」写出你的解释。
+**练习 1（概念理解）** 同事问：「README 说 508 个测试，我 grep `@Test` 只有 486 个，是不是漏了？」写出你的解释。
 
-答案：不是漏了，是两个口径的统计对象不同。312 是 `@Test` 注解的静态计数（单测 144 + IT 168），它**不含**全项目唯一的 `@ParameterizedTest` 方法（`LinkValidationsTest.java:62-63`，展开 7 例）。319 是 README/CI 的执行实例口径：surefire 151 = 144 个 `@Test` + 参数化展开 7 例；failsafe 默认组 166 = 168 − 2（`WebhookRetryClockIT` 被 `pom.xml:231` 排除），这 2 例在时区 fork 另跑。151+166+2=319，与注解口径 312+7=319 完全可平。引用时注明口径即可，不存在缺口。
+答案：不是漏了，是两个口径的统计对象不同。486 是 `@Test` 注解的静态计数（单测 204 + IT 282），它**不含**两个 `@ParameterizedTest` 方法（`LinkValidationsTest` 的 @ValueSource 展开 7 例、`MatchRuleTest` 的 @MethodSource 展开 15 例）。508 是 README/CI 的执行实例口径：surefire 226 = 204 个 `@Test` + 参数化展开 22 例；failsafe 默认组 280 = 282 − 2（`WebhookRetryClockIT` 被默认执行排除），这 2 例在时区 fork 另跑。226+280+2=508，与注解口径 486+22=508 完全可平。引用时注明口径即可，不存在缺口。
 
 **练习 2（源码定位）** 找出钉死 MySQL `max_connections` 的行，并说明为什么调这个参数而不是把每个上下文的 Hikari 池改小。
 
-答案：`AbstractIntegrationTest.java:42-43`，`--max-connections=500` 是容器启动命令参数；`:39-41` 注释记录了默认 151 在上下文增多后触发 `Too many connections`（A9 BloomRedirectIT 时期）。池子已经压过一档：15 个 IT 显式设 `maximum-pool-size=4`，但 42 个类对应几十个缓存上下文，池太小会拖慢并发查询，服务器侧抬高上限（500 对 27×10+15×4=330 的纸面峰值留 170 余量，`README.md:626`）是更便宜的杠杆。
+答案：`AbstractIntegrationTest.java:42-43`，`--max-connections=500` 是容器启动命令参数；`:39-41` 注释记录了默认 151 在上下文增多后触发 `Too many connections`（A9 BloomRedirectIT 时期）。池子已经压过一档：C5 时 15 个 IT 显式设 `maximum-pool-size=4`（现 24 个文件），但几十个类对应几十个缓存上下文，池太小会拖慢并发查询，服务器侧抬高上限是更便宜的杠杆——C5 推导 500 对 27×10+15×4=330 的纸面峰值留 170 余量；套件长大后纸面值待重算（README 自注），以全绿零连接错误为验收。
 
 **练习 3（执行过程）** 如果把 `FlywayBaselineIT` 改成继承 `AbstractIntegrationTest` 并删掉自己的 `LEGACY_MYSQL`，哪个断言最先失去意义？为什么？
 

@@ -2,6 +2,7 @@
 
 > 用法：从「我想看 / 改某类东西」出发，先查本索引定位类与课程，再进课程正文。
 > 源码路径一律相对仓库根（`D:\LinkForge`），如 `src/main/java/com/linkforge/...`；行号口径基线 `911640c` → `01f0b5a`（docs-only，源码未变），拿不准的标「推断」。
+> **3.0.0 更新（2026-11-08）**：基线升至 tag `3.0.0`。新增 auth 包（第 13 节），user/link/stats/webhook/common 五节补入批次 1–3 与修复波的新类与新端点；存量各节的行号仍为旧基线口径，机制描述以专题 15/16/17 的 3.0.0 修订为准。
 > 全部类的课程去向另见类覆盖矩阵（同目录，Phase E 产出）；课程全表见 [03-curriculum-roadmap.md](../03-curriculum-roadmap.md)。
 
 ## 一、按包（12 个一级包 + 根）
@@ -26,9 +27,10 @@
 
 ### 4. common：通用组件
 - 职责：`result/` 统一响应壳 `ApiResponse`、`PageResponse`。
-- `exception/` `BizException` 家族与 `GlobalExceptionHandler` 全映射（RateLimitedException→429+Retry-After，:20-25）。
+- `exception/` `BizException` 家族与 `GlobalExceptionHandler` 全映射（RateLimitedException→429+Retry-After，:20-25）。批次 1 起 BizException 的 httpStatus 与 code 分家（httpStatus 决定 wire 状态、code 只进 body）；S/N 波 N1 起 handleBiz 对 5xx/带 cause 恰记一次（`GlobalExceptionHandler.java:32-52`）。
 - `ratelimit/` `RedisRateLimiter`(105)、`RateLimitKeys`、`sliding_window.lua`（限流核心三件）。
-- `util/` `ClientIps`（XFF 默认不信任）、`CsvFormat`（RFC4180 转义）。
+- `util/` `ClientIps`（XFF 默认不信任）、`CsvFormat`（RFC4180 转义；M8 起导出走 escapeSpreadsheet 中和公式注入）。
+- `web/` `CorrelationIdFilter`（N1）：链首（HIGHEST_PRECEDENCE）铸 cid，MDC + 请求属性 + `X-Correlation-Id` 响应头三路携带，入站头不采信。
 - 课程 [2.1 统一响应与全局异常](../modules/02-common/01-unified-response-exceptions.md)、[2.2 日志、XFF 与 URI tag 白名单](../modules/02-common/02-logging-utils-clientip.md)、[9.1 滑动窗口限流](../modules/09-rate-limit/01-sliding-window-lua.md)。
 - 改动注意：改 `ApiResponse` 形状要同步改认证过滤器里 5 处硬编码 JSON（ApiKeyAuthFilter.java:36-37 注释自述双写漂移）。
 - 改动注意：`RateLimitKeys` javadoc 记录 WRONGTYPE 事故，键名空间勿乱改（javadoc 事故记录 :3-7，sw() 方法体在 :13-15）。
@@ -43,7 +45,8 @@
 - `support/` 18 个协作类，缓存与并发侧：`CacheBus`、`CodeBloomFilter`(210)、`SingleFlight`(120)、`UrlLocalCache`、`ShortLinkRowLoader`。
 - `support/` 门禁与安全侧：`ClickFilter`、`PhishingPolicy`、`TargetPolicy`、`LinkAccessTokens`、`GatePages`。
 - `support/` 校验与纯函数侧：`UtmMerger`、`VariantPicker`、`LinkValidations`、`ShortCodes`、`ShareTokenSigner`、`CsvImportParser`、`CsvFormat`、`QrParams`。
-- 关键方法地图（ShortLinkService）：create :129-176、doCreate :203-283、update :450-521、resolveForGet :565-585、resolveTarget :601-712、unlock :753-792、delete :546-558、getOwnedLink :890-903。
+- 关键方法地图（ShortLinkService，初版行号；3.0.0 该文件 1505 行）：create、doCreate、update、resolveForGet、resolveTarget、unlock、delete、getOwnedLink 的相对位置未变；3.0.0 新增方法按名找：createFingerprint（指纹 create-v2）、replayIdempotentCreate（信封 v3 读回）、importCsv / acquireImportLease（M5 租约）、list / exportOwnCsv（keyword/tag 筛选）。
+- 批次 3 新增 support：`MatchRule`（动态路由，写严读宽）、`LinkTags`（标签归一化）、`ImportIdempotencyLease`（导入租约）、`MaliciousHostSnapshot` + `MaliciousFeedParser`（feed 快照与解析）；服务侧 `MaliciousHostSyncService`（feed 定时导入）。课程 [advanced/16 链接能力扩展](../advanced/16-link-power-features.md)。
 - 课程 [6.x 短链核心业务](../modules/06-short-link/01-data-model.md)起、[7.x 跳转系统](../modules/07-redirection/01-decision-chain.md)起、[8.x Redis 与缓存](../modules/08-redis-cache/01-keys-and-ttl.md)起。
 - 配图 [04-core-class-relations](../diagrams/archify/html/04-core-class-relations.html)、[12-redirect-decision](../diagrams/archify/html/12-redirect-decision.html)。
 - 改动注意：改 ShortLinkService 的写路径记得 SingleFlight 的 peek/两参 forget 纪律（update :495/:512、setStatus :535/:537、delete :548/:554）。
@@ -75,14 +78,17 @@
 - Mapper 5 个（ClickLog/Outbox/ClickDaily/ClickDimDaily/ConsumedEvent）+ `ClickDimensions`(136) 纯函数分桶。
 - 课程 [10.1 拓扑与确认机制](../modules/10-rabbitmq-outbox/01-topology-confirm.md)、[10.2 Outbox 与 Relay](../modules/10-rabbitmq-outbox/02-outbox-relay.md)、[10.3 消费幂等与死信](../modules/10-rabbitmq-outbox/03-consumer-idempotency-dlq.md)、[11.x 点击统计系统](../modules/11-statistics/01-click-record-pipeline.md)起。
 - 配图 [14-click-pipeline-dataflow](../diagrams/archify/html/14-click-pipeline-dataflow.html)、[15-outbox-lifecycle](../diagrams/archify/html/15-outbox-lifecycle.html)。
+- 3.0.0 增补：`ClickStatsService` 的 stats 三读已合进只读 RR 快照事务（S4-1，snapshotTx :77-79）；新增 abReport（先过 `AbReport.checkApplicability` 适用性门）与 exportClicks（id 游标、10 万行上限）两条读链，纯函数在 `stats/support/AbReport`。课程 [advanced/16](../advanced/16-link-power-features.md)。
 - 改动注意：消费幂等三件套缺一不可（主键 INSERT 判重 + 确定性 eventId + 明细行 event_id 回填标记）。
 - 改动注意：fail-open catch 必须留在事务外（ShortLinkService.resolveForGet :571-580，事务已回滚后只兜 302）。
 - 改动注意：`webhookService.recordClickDelivery` 挂在消费事务末尾，失败整体回滚进 DLQ（ClickStatsService.java:106-109）。
 
 ### 11. user：用户与租户
-- 职责：`AuthController`(33)、`AuthService`(101) 注册/登录；`Tenant`/`UserAccount` 实体与 Mapper。
-- 课程 [5.2 JWT 签发与校验](../modules/05-security/02-jwt-auth.md)、[advanced/01 注册与登录全链路](../advanced/01-registration-login.md)。
-- 注意：注册是事务建租户+首用户，user 插入失败靠回滚防孤儿占名（AuthService.java:59-63）；登录无 IP 限流且 BCrypt 只在租户有效时执行，计时侧信道是课堂讨论点。
+- 职责：`AuthController`(99，七端点)、`AuthService`(140) 注册/登录；`Tenant`/`UserAccount` 实体与 Mapper（UserAccountMapper 含 selectForUpdate/incrementTokenVersion/selectActiveAdminIdsForUpdate）。
+- 批次 2b 新增：`TeamController`(75) /api/tenant 六端点、`TeamService`(450) 邀请与成员管理、`TenantInvitation` 实体与 `TenantInvitationMapper`（accept 条件 UPDATE）。
+- 课程 [5.2 JWT 签发与校验](../modules/05-security/02-jwt-auth.md)、[advanced/01 注册与登录全链路](../advanced/01-registration-login.md)、[advanced/15 会话族与团队协作](../advanced/15-auth-sessions-and-teams.md)。
+- 注意：注册是事务建租户+首用户，user 插入失败靠回滚防孤儿占名（AuthService.java:95-99）；初版注记的「登录无 IP 限流 + 计时侧信道」已于批次 1 修复（双桶 + 哑哈希，AuthService.java:41-91），现状以 advanced/01 第 8 节修订为准。
+- 改动注意：成员写路径第一条语句必须是租户行锁（M2），token_version 只许走 incrementTokenVersion 原子自增（M1）。
 
 ### 12. webhook：对外投递（15 文件）
 - 职责：`WebhookService`(327) 端点 CRUD + 入队分流（PER_CLICK :280-305 / AGGREGATE :313-326）。
@@ -92,13 +98,19 @@
 - 配图 [16-webhook-delivery-lifecycle](../diagrams/archify/html/16-webhook-delivery-lifecycle.html)。
 - 改动注意：master key 不可用整批跳过且不耗 attempts（WebhookDeliveryRelay.java:71-76）；`uk_webhook_tenant` 决定每租户仅一个 endpoint。
 - 改动注意：SSRF 防护是「保存 check + 发送 resolve 钉死 + 禁重定向」闭环，拆开任何一环都破防；调度列一律 DB 时钟。
+- 3.0.0 增补：AGGREGATE 的 drain 已事务化（M3）——`WebhookAggregateFlusher.doFlush` 锁行读桶、经 `WebhookFlushStateMapper`（V15 `lf_webhook_flush_state`）分配 flush_seq、只删锁行；eventId 为 `digest-{endpointId}-{windowStart}-{seq}`。改 flusher 时勿退回快照删行。见 [advanced/17](../advanced/17-correctness-waves.md) M3 条。
+
+### 13. auth：会话族（批次 2 新增包）
+- 职责：`SessionService`(388) refresh 会话族全生命周期（startSession/refresh/logout/logoutAll/changePassword）；`RefreshToken` 实体（只存 SHA-256）与 `RefreshTokenMapper`（rotate CAS、revokeFamily/revokeAllForUser、selectByHashForUpdate）。
+- 课程 [advanced/15 会话族与团队协作](../advanced/15-auth-sessions-and-teams.md)。
+- 改动注意：全部 mint/revoke 临界区先锁用户行（全局锁序 租户→用户→refresh，M1）；重用升级只认 ROTATED 超 10 秒宽限，主动撤销的再出示只回 401，勿「顺手」扩大升级面；kill 必须先提交后抛 401（SessionService.java:166-175）。
 
 ## 二、按任务（常见改动场景）
 
 1. **加一个跳转门禁步骤**：入口 `resolveTarget`（ShortLinkService.java:601-712），12 步顺序即契约，新步骤要想清失败语义（404/410/403/200 warn）与插入位置；渲染配合 `GatePages` 与 `RedirectOutcome` sealed 分支。同步更新 [7.1 跳转判定链](../modules/07-redirection/01-decision-chain.md)、图 [12-redirect-decision](../diagrams/archify/html/12-redirect-decision.html)，测试参照 PhishingGateIT。
 2. **加一个 Redis 键**：命名走 `RateLimitKeys` 式前缀（`{prefix}sw:{logical}`，RateLimitKeys.java:13-15）；TTL 必须配抖动（jitteredTtlSeconds :919-924）；缓存类键要接 CacheBus 广播失效并补进键清单 [8.1](../modules/08-redis-cache/01-keys-and-ttl.md)；数据流归档图 [06-redis-data-flow](../diagrams/archify/html/06-redis-data-flow.html)。
 3. **加一个定时任务**：`@Scheduled` + `SchedulingConfig`（共享池 size=6，yml 配容量）；间隔写法参照 `ClickOutboxRelay`（fixedDelay 2000/initial 3000，每 tick 重读开关）；时钟规则：调度列（next_attempt_at / window_start）一律 DB 时钟；采样类任务参照 `BacklogGauges`。登记进 [14.3 定时任务地图](../modules/14-observability/03-scheduled-tasks-map.md)。
-4. **加一张表（Flyway）**：新建 `src/main/resources/db/migration/V11__<名称>.sql`，只增不改历史版本；baseline-on-migrate=true、baselineVersion=1（FlywayBaselineIT 断言遗留库恰 1 条 BASELINE@1）；`schema.sql` 是 REFERENCE ONLY 不参与迁移。流程见 [4.2 Flyway 与 schema](../modules/04-mybatis-mysql/02-flyway-migrations.md)、图 [05-database-erd](../diagrams/archify/html/05-database-erd.html)。
+4. **加一张表（Flyway）**：3.0.0 已有 V1–V15，新建从 `V16__<名称>.sql` 起，只增不改历史版本；baseline-on-migrate=true、baselineVersion=1（FlywayBaselineIT 断言遗留库恰 1 条 BASELINE@1）；`schema.sql` 是 REFERENCE ONLY 不参与迁移。流程见 [4.2 Flyway 与 schema](../modules/04-mybatis-mysql/02-flyway-migrations.md)、图 [05-database-erd](../diagrams/archify/html/05-database-erd.html)（图冻结在 V10 口径，新表以迁移 SQL 为准）。
 5. **加一个 API 端点**：Controller 返回 `ApiResponse` 壳 → 异常走 `GlobalExceptionHandler` 码表（非 0 code 映射 400-599）→ 在 `SecurityConfig` 路径-角色矩阵(:61-69) 加规则并注意顺序 → 入参 `@Valid`。见 [3.1 Controller 与 REST 设计](../modules/03-spring-mvc/01-controllers-rest.md)、[5.1 安全过滤器链](../modules/05-security/01-security-filter-chain.md)。
 6. **加一个指标**：注入 `MeterRegistry`；形态选择见 [14.2](../modules/14-observability/02-metrics-gauges-grafana.md)；`http.server.requests` 的新 uri 必须进 `HttpUriTagAllowList` 白名单；tag 取值要有界，排障 tag（如 revoked）只进 metrics 不进对外文案（ApiKeyAuthFilter.java:81-88 范式）。
 7. **改限流参数**：配置在 `LinkForgeProperties` + application.yml dev 文档；算法与 Retry-After 计算（(retryMs+999)/1000，RedisRateLimiter.java:55-56）见 [9.1](../modules/09-rate-limit/01-sliding-window-lua.md)；改完跑 SlidingWindowRateLimiterIT；fail-open 打点 meter `linkforge.ratelimit.failopen{reason}` 勿删。

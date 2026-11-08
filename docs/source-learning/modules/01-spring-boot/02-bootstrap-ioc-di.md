@@ -39,7 +39,7 @@
 @SpringBootApplication
 // Explicit mapper packages: a broad "com.linkforge" scan also proxied plain
 // interfaces like ClickEventPublisher into mapper beans.
-@MapperScan({"com.linkforge.user.mapper", "com.linkforge.link.mapper", "com.linkforge.stats.mapper", "com.linkforge.apikey.mapper", "com.linkforge.webhook.mapper"})
+@MapperScan({"com.linkforge.auth.mapper", "com.linkforge.user.mapper", "com.linkforge.link.mapper", "com.linkforge.stats.mapper", "com.linkforge.apikey.mapper", "com.linkforge.webhook.mapper"})
 public class LinkForgeApplication {
 
     public static void main(String[] args) {
@@ -60,7 +60,7 @@ public interface ClickEventPublisher {
 }
 ```
 
-（框架行为）MyBatis 的 mapper 机制是「接口动态代理」：`@MapperScan` 把列出的包里所有接口注册成 `MapperFactoryBean`，运行期生成代理，你对接口的方法调用被翻译成 SQL。这个机制无法区分「想当 mapper 的接口」和「碰巧长得像 mapper 的接口」，扫描范围必须人工收窄。本项目枚举五个 `*.mapper` 包（LinkForgeApplication.java:10），一个不多。教训的推广写法：注册类机制（mapper 扫描、组件扫描、事件监听）的范围越窄越好，宽范围的错误通常在运行期才炸。
+（框架行为）MyBatis 的 mapper 机制是「接口动态代理」：`@MapperScan` 把列出的包里所有接口注册成 `MapperFactoryBean`，运行期生成代理，你对接口的方法调用被翻译成 SQL。这个机制无法区分「想当 mapper 的接口」和「碰巧长得像 mapper 的接口」，扫描范围必须人工收窄。本项目枚举六个 `*.mapper` 包（LinkForgeApplication.java:10；批次 2 的 RefreshTokenMapper 住在新包 `auth.mapper`，登记时只加了一个字符串——这就是收窄式枚举的好处：新包必须显式登记，永远不会被顺带扫进来），一个不多。教训的推广写法：注册类机制（mapper 扫描、组件扫描、事件监听）的范围越窄越好，宽范围的错误通常在运行期才炸。
 
 ### 5.3 @Bean 方法：手动声明的 Bean（RedisConfig.java:12-23）
 
@@ -153,14 +153,14 @@ public class ShortLinkService {
     private final org.springframework.security.crypto.password.PasswordEncoder passwordEncoder;
 ```
 
-（ShortLinkService.java:100-116，17 个 final 字段逐行）
+（ShortLinkService 的字段声明段，18 个 final 依赖逐行）
 
-17 个依赖按来源分六组，读者以后在别的服务里看到的依赖基本都落在这些组里。
+18 个依赖按来源分六组，读者以后在别的服务里看到的依赖基本都落在这些组里。
 
-1. MyBatis mapper 两个（:100-101）：数据库访问代理。
+1. MyBatis mapper 两个：数据库访问代理。
 2. Spring 基础设施三个：`StringRedisTemplate`（Redis 客户端，来自 5.3 的 @Bean）、`TransactionTemplate`（编程式事务）、`MeterRegistry`（Micrometer 指标注册表）。
-3. link 包 support 支持类八个（:107-114）：Bloom 过滤器、缓存广播、singleflight、行加载器、URL 本地缓存、点击过滤、钓鱼门禁、访问令牌。
-4. 跨包服务两个（:104-105，stats 的点击记录服务与 common 的限流器）；配置载体一个（:103，`LinkForgeProperties`，1.3 课展开）；安全一个（:116，密码编码器，注意它写的是全限定名）。
+3. link 包 support 支持类九个：Bloom 过滤器、缓存广播、singleflight、行加载器、URL 本地缓存、点击过滤、钓鱼门禁、访问令牌、导入租约（批次 3/修复波 M5 新增的 `ImportIdempotencyLease`，6.3 讲）。
+4. 跨包服务两个（stats 的点击记录服务与 common 的限流器）；配置载体一个（`LinkForgeProperties`，1.3 课展开）；安全一个（密码编码器，注意它写的是全限定名）。
 
 为什么坚持构造器注入而不写字段注入？（框架行为加工程判断）对比看：
 
@@ -173,7 +173,7 @@ public class BadExampleService {
 }
 ```
 
-字段注入的三个问题在这个项目里都是真实代价。第一，字段不能是 final，依赖随时可变。第二，单测必须靠反射或 Spring 容器才能塞依赖，而构造器注入直接 `new ShortLinkService(shortLinkMapper, ...)` 就能测。第三，17 个依赖写在构造器参数上很吓人，写在字段上容易无感膨胀；构造器把依赖规模变成显式清单，这 17 行就是这个类的「能力清单」。另外框架保证缺依赖时启动即失败（`UnsatisfiedDependencyException`），错误暴露在部署时刻而不是第一次请求。
+字段注入的三个问题在这个项目里都是真实代价。第一，字段不能是 final，依赖随时可变。第二，单测必须靠反射或 Spring 容器才能塞依赖，而构造器注入直接 `new ShortLinkService(shortLinkMapper, ...)` 就能测。第三，18 个依赖写在构造器参数上很吓人，写在字段上容易无感膨胀；构造器把依赖规模变成显式清单，这 18 行就是这个类的「能力清单」。另外框架保证缺依赖时启动即失败（`UnsatisfiedDependencyException`），错误暴露在部署时刻而不是第一次请求。
 
 ### 5.7 不是注入的成员：自管生命周期（ShortLinkService.java:118-127）
 
@@ -215,7 +215,7 @@ evictor 线程池没走注入，是字段初始化时自己创建的，配 `@Pre
 1. JVM 加载 `LinkForgeApplication`，执行 main，`SpringApplication.run` 开始。
 2. 自动配置根据 classpath 装配基础 Bean：`RedisConnectionFactory`、`DataSource`、`ObjectMapper`、`MeterRegistry` 等（框架行为）。
 3. 扫描注册：六个 config 类、`RedisRateLimiter` 等全部 `@Component/@Service` 进入候选。
-4. `@MapperScan` 注册五个 mapper 包的接口为代理 Bean。
+4. `@MapperScan` 注册六个 mapper 包的接口为代理 Bean。
 5. 拓扑序实例化。片段示例：`StringRedisTemplate`（RedisConfig.java:12）→ `RedisRateLimiter`（拿到模板和 MeterRegistry）→ `ShortLinkService`（拿到 17 个依赖，构造器由 Lombok 生成）。
 6. `@PreDestroy` 钩子登记，内嵌 Tomcat 起在 8080，调度线程池启动（SchedulingConfig 的开关）。
 7. 容器就绪，第一个请求进来时所有 Bean 已在内存。
@@ -225,7 +225,7 @@ evictor 线程池没走注入，是字段初始化时自己创建的，配 `@Pre
 ## 9. 为什么这样设计
 
 - 构造器注入加 final 全项目统一。不是个人口味，它同时买到不可变、可单测、依赖显式、启动期失败四样东西。
-- `@MapperScan` 手工枚举五个包。注释写明宽扫描误伤过 `ClickEventPublisher`（LinkForgeApplication.java:8-9）。教训编码在结构里，后人改包名会撞见这行。
+- `@MapperScan` 手工枚举六个包（批次 2 新增 auth.mapper）。注释写明宽扫描误伤过 `ClickEventPublisher`（LinkForgeApplication.java:8-9）。教训编码在结构里，后人改包名会撞见这行。
 - config 集中一个包。查找「这个库是怎么被配置的」只需要看一处；Bean 声明散落在业务包里是这个项目明确避免的。
 - `ObjectMapper` 复用 Spring 的（RabbitMqConfig.java:57-62）。一个事故注释解释了为什么不自己 new。
 

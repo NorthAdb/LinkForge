@@ -4,7 +4,7 @@
 
 ## 1. 业务背景：看板数字从哪来，缺了谁补
 
-管理员打开看板，`GET /api/links/{code}/stats` 返回 totalClicks、totalUv 和一条按日曲线。四个数来自两张表：totalClicks 读聚合表 `lf_click_daily`（经 MQ 的最终一致值），totalUv 与按日 UV 读明细表 `lf_click_log`（精确 COUNT(DISTINCT ip)）。两条来源的写入者不同，于是出现一个必须回答的问题：MQ 断了，聚合表停滞，明细表还在涨，谁把账追平。
+管理员打开看板，`GET /api/links/{code}/stats` 返回 totalClicks、totalUv 和一条按日曲线。本专题初版时四个数来自两张表：totalClicks 读聚合表 `lf_click_daily`（经 MQ 的最终一致值），totalUv 与按日 UV 读明细表 `lf_click_log`（精确 COUNT(DISTINCT ip)）——口径还不对齐（totalClicks 是全历史、UV 是窗口内，MQ 积压时会出现某天 UV > clicks）。**批次 1 已统一口径**：stats 的三读（totalUv、按日 clicks、按日 UV）全部改读明细表、同一窗口 [from, 明日 0 点)，totalClicks 就是按日 clicks 之和；**S/N 波（S4-1）再把三读包进一个只读 REPEATABLE_READ 快照事务**（`ClickStatsService.java:77-79、164-183`），同一次响应不可能再描述两批点击。`lf_click_daily` 仍由 consume 写（它是对账等式的聚合侧账本，见第 5 节），只是不再是 /stats 的读源。下文凡写「totalClicks 读聚合表」处均已按此修订；聚合与明细的写入关系、Reconciler 的补偿逻辑不受影响——MQ 断了，聚合表停滞，明细表还在涨，谁把账追平，仍是本专题的主问题。
 
 答案是双通道：主通道 Relay 抽 outbox 行经 MQ 进 consume（专题 8）；备通道 `ClickLogReconciler` 每 30 秒扫「明细有、消费记录没有」的行，直接调同一个 consume。两条通道汇合在去重表的主键上，谁先到谁计数。README 的对账口径（`README.md:414`）：Reconciler 默认 30 秒一轮、仅 sync 开启时运行；sync 关闭时追平完全由 outbox 通道承担。
 
@@ -24,13 +24,15 @@
 ## 3. 完整调用链：三条读链与一条补偿链
 
 ```
-读链（实时性各不相同）
+读链（3.0.0 口径）
 GET /stats        → detail 归属校验（StatsController.java:36）
-                    → sumClicks（lf_click_daily，全历史聚合，ClickDailyMapper.java:24-25）
-                    → countDistinctIps（lf_click_log，窗口 [from, 明日 0 点)，ClickLogMapper.java:20-24）
-                    → selectRange + selectDailyUv 两 Map → 逐日补零循环（ClickStatsService.java:137-140）
-GET /stats/breakdown → 白名单校验（StatsController.java:49-51）→ lf_click_dim_daily 按 dim_type 切片
-GET /clicks        → MyBatis-Plus 分页扫 lf_click_log，只投影 4 字段（ClickStatsService.java:144-153）
+                    → snapshotTx（只读 RR 快照）内三读，全走 lf_click_log 同一窗口：
+                      countDistinctIps + selectDailyClicks + selectDailyUv（ClickStatsService.java:164-210）
+                    → 逐日补零组装，totalClicks = 按日 clicks 之和
+GET /stats/breakdown → 白名单校验（StatsController.java:49-51）→ lf_click_dim_daily 按 dim_type 切片（最终一致读，不进快照事务）
+GET /clicks        → MyBatis-Plus 分页扫 lf_click_log，只投影 4 字段
+GET /ab-report     → 当前 variant 配置 × 窗口 variant 桶，先过适用性门再卡方拟合（批次 3 + S1，专题 16）
+GET /clicks/export → id 游标分批拼原始明细 CSV，上限 10 万行（批次 3，专题 16）
 
 补偿链（每 30 秒，ClickLogReconciler.java:30-53）
   ├─ 门禁：async && sync 都开才跑（:33-35）
@@ -85,7 +87,7 @@ flowchart LR
 
 聚合表与去重表没有别的写入者，这是「对账必须重放 consume 而不能直接 UPDATE 统计表」的全部理由：绕过 consume 就绕过了维度桶、webhook 入队与去重的一致性。
 
-**节点二：UV 的前提。** UV 是窗口内不同 IP 数：`SELECT COUNT(DISTINCT ip) FROM lf_click_log ...`（`ClickLogMapper.java:20-24`），精确值，没有近似结构。它依赖明细表有行。双开关全开时明细实时写入，UV 实时。sync 关闭时明细改由消费者回填（:79-93），UV 退化为最终一致但仍可用（`README.md:413` 口径）。sync-only（async 关）时反过来，UV 正常而 totalClicks 恒 0——聚合表的唯一写入者是 consume，没人消费就没人写。读侧的 Service javadoc（`ClickStatsService.java:122-125`）把这层依赖写在注释里。days 参数钳制在 1..90（`StatsController.java:37`），给明细表上的 COUNT DISTINCT 扫描范围封顶。breakdown 的维度口径单独一句：javadoc（`StatsController.java:44`）写明 "Dimension clicks are not UV"，桶之和可以大于 UV，一个 UV 可以换设备多点几次。
+**节点二：UV 的前提。** UV 是窗口内不同 IP 数：`SELECT COUNT(DISTINCT ip) FROM lf_click_log ...`（`ClickLogMapper.java:20-24`），精确值，没有近似结构。它依赖明细表有行。双开关全开时明细实时写入，UV 实时。sync 关闭时明细改由消费者回填（:79-93），UV 退化为最终一致但仍可用（`README.md:413` 口径）。sync-only（async 关）时 UV 与按日 clicks 都正常（都读明细），受影响的只剩 breakdown 的维度桶（其唯一写入者是 consume）。3.0.0 前 totalClicks 读聚合表时还有「async 关则 totalClicks 恒 0」一条，口径统一后已不存在。读侧的依赖关系写在 stats 的 javadoc 里（`ClickStatsService.java:150-163`，含统一前的病灶记录）。days 参数钳制在 1..90（`StatsController.java:37`），给明细表上的 COUNT DISTINCT 扫描范围封顶。breakdown 的维度口径单独一句：javadoc（`StatsController.java:44`）写明 "Dimension clicks are not UV"，桶之和可以大于 UV，一个 UV 可以换设备多点几次。
 
 **节点三：Reconciler 的门禁，为什么 sync 关时必须让位。** `if (!async || !sync) return;`（`ClickLogReconciler.java:33-35`）。两个方向各有硬理由。sync 关时，热路径不产明细行，唯一存在的明细是消费者回填的，它们在 ：91 打了 UUID 标记，扫描条件 `l.event_id IS NULL`（`ClickLogMapper.java:16`）本来就会把它们全部排除——循环一无所获，跑下去只是空转轮询，而这一模式下的追平职责已移交给 outbox 通道（`README.md:414` 的原文）。async 关时更根本：部署者明确不要 MQ 聚合，consume 产出的数字无人承诺可读（11.1 矩阵第三行），安全网不该替部署意图干活。类注释（:14-20）自述边界："this loop is skipped entirely while the sync write is off"。
 
@@ -110,9 +112,9 @@ flowchart LR
 
 | 端点 | 数字 | 来源表与 SQL | 实时性 |
 |------|------|--------------|--------|
-| /stats | totalClicks | `lf_click_daily`，sumClicks 点查（`ClickDailyMapper.java:24-25`） | 经 MQ 最终一致 |
+| /stats | totalClicks | `lf_click_log` 按日 clicks 求和（批次 1 口径统一；`ClickStatsService.java:164-183`） | sync 开实时；sync 关最终一致 |
 | /stats | totalUv | `lf_click_log`，countDistinctIps（`ClickLogMapper.java:20-24`） | sync 开实时；sync 关最终一致 |
-| /stats | daily 曲线 | selectRange + selectDailyUv 两 Map，缺日补零（`ClickStatsService.java:137-140`） | 同上两行 |
+| /stats | daily 曲线 | selectDailyClicks + selectDailyUv 两 Map，缺日补零；三读同在一个只读 RR 快照事务内（S4-1） | 同上两行 |
 | /stats/breakdown | 五维桶 | `lf_click_dim_daily` 按 dim_type SUM（11.2 写入、11.3 读出） | 经 MQ 最终一致 |
 | /clicks | 明细分页 | `lf_click_log`，只投影 clickedAt/ip/userAgent/referer（:144-153） | sync 开实时；sync 关最终一致 |
 
@@ -139,7 +141,8 @@ flowchart LR
 | Relay | 每 2 秒醒来发布失败，markRetry 退避 `min(60, 2^n)`，行堆 PENDING | `ClickOutboxRelay.java:61-65`、:75-78 |
 | 对账器 | 不让位（双开关仍开），每 30 秒扫出未消费明细直接 consume，聚合表在 MQ 恢复**之前**就开始增长 | `ClickLogReconciler.java:33-37` |
 | UV / 明细 | 实时，无缺失 | `ClickLogMapper.java:20-24` |
-| totalClicks | 经备通道最终一致地追 | 上一行 |
+| totalClicks（/stats 口径） | 实时（读明细求和，批次 1 后不再经聚合表） | `ClickStatsService.java:164-183` |
+| 聚合表 / breakdown 桶 | 经备通道最终一致地追 | 对账器行 |
 
 sync 关闭的变体（outbox-drill 剧本）：故障期明细为 0、outbox 积 PENDING、UV 为 0，全部数据押在 outbox 行上，恢复后由消费回填补齐。
 

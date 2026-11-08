@@ -1,6 +1,6 @@
-# 7.3 A/B 权重分流：VariantPicker 抽签与统计分桶
+# 7.3 A/B 权重分流与动态路由：MatchRule 收窄、VariantPicker 抽签与统计分桶
 
-> 本课回答三个问题：一条短链怎么按 70/30 权重把流量分到两个目标？抽签为什么发生在全部门禁之后？统计侧怎么知道这次点击属于哪个桶？
+> 本课回答四个问题：一条短链怎么先按访问条件（设备、系统、语言、时段）收窄候选，再按 70/30 权重把流量分到目标？抽签为什么发生在全部门禁之后？统计侧怎么知道这次点击属于哪个桶？
 
 ## 1. 本节学习目标
 
@@ -10,7 +10,8 @@
 2. 说出抽签时机为什么必须在全部门禁通过之后，并指出代码注释依据。
 3. 解释「非空 variants 压过缓存 URL」的实现与动机。
 4. 描述 variant 键从抽签到点击统计的完整数据流。
-5. 说清这套分流与「按地域定向」的边界：它不做什么。
+5. 读懂一条 match_rule JSON 的四个维度，说清键内 OR、键间 AND、无人命中回退全集三条语义。
+6. 区分写侧严格解析与读侧宽容解析，并解释跨午夜时窗的「开窗日」星期语义（S4-4）。
 
 ## 2. 前置知识
 
@@ -24,18 +25,19 @@
 
 | 文件 | 行数 | 职责 | 阅读顺序 |
 |----|----|----|----|
-| `src/main/java/com/linkforge/link/support/VariantPicker.java` | 35 | 主角：纯函数抽签 | 1 |
-| `src/main/java/com/linkforge/link/service/ShortLinkService.java` | 1025 | pickVariant :715-721、抽签点 :705-711 | 2 |
-| `src/main/java/com/linkforge/link/entity/LinkVariant.java` | 26 | 变体行：variantKey :21、targetUrl :22、weight :23 | 3 |
-| `src/main/java/com/linkforge/stats/mq/ClickEvent.java` | 29 | variant 字段 :27-28 | 4 |
-| `src/main/java/com/linkforge/link/service/ShortLinkService.java` | 同上 | recordClick 调用 :574 | 5 |
+| `src/main/java/com/linkforge/link/support/VariantPicker.java` | 35 | 纯函数抽签 | 2 |
+| `src/main/java/com/linkforge/link/support/MatchRule.java` | 331 | 本课另一位主角：动态路由规则（批次 3a） | 1 |
+| `src/main/java/com/linkforge/link/service/ShortLinkService.java` | 1503 | pickVariant（收窄 + 抽签）、resolveTarget 抽签点 | 3 |
+| `src/main/java/com/linkforge/link/entity/LinkVariant.java` | 27 | 变体行：variantKey、targetUrl、weight、matchRule | 4 |
+| `src/main/java/com/linkforge/stats/mq/ClickEvent.java` | 29 | variant 字段 | 5 |
 
 ## 4. 类的定位
 
 - `VariantPicker` 是 `link.support` 里最小的类之一：35 行、无字段、私有构造器、一个静态方法。它是纯函数：同样的输入（变体列表与随机源）必得同样的输出，不碰数据库、不碰 Spring。
-- 它的调用方只有 `ShortLinkService.pickVariant`（:715-721）一处。跳转链在第 12 步用它。
-- `LinkVariant` 是 `lf_link_variant` 的实体。类注释 :7-8 写明它与 `ShortLink` 的生命周期差异：硬删加插入，没有逻辑删列。
-- `ClickEvent` 是点击事件进 MQ 的契约，`variant` 字段（:27-28）带注释：抽中的 A/B 桶键，单目标链为 null。
+- `MatchRule`（331 行）是批次 3a 的新主角：把变体行上的 match_rule JSON 解析成可求值的规则对象，`filterCandidates` 在抽签前收窄候选集。它同样是纯函数家族（解析 + 求值，无 IO），与 VariantPicker 前后衔接。
+- 两者的调用方只有 `ShortLinkService.pickVariant` 一处。跳转链在最后一步用它们：先 MatchRule 收窄、再 VariantPicker 抽签。
+- `LinkVariant` 是 `lf_link_variant` 的实体。类注释写明它与 `ShortLink` 的生命周期差异：硬删加插入，没有逻辑删列。
+- `ClickEvent` 是点击事件进 MQ 的契约，`variant` 字段带注释：抽中的 A/B 桶键，单目标链为 null。
 
 ## 5. 核心源码详解
 
@@ -81,17 +83,23 @@ public static LinkVariant pick(List<LinkVariant> variants, DoubleSupplier random
 类注释 :9-11 说：抽签用固定 double 单测，跳转路径传入 `ThreadLocalRandom.current()::nextDouble`。调用点：
 
 ```java
-private LinkVariant pickVariant(Long linkId) {
-    List<LinkVariant> variants = variantMapper.selectByLinkId(linkId);
-    if (variants.isEmpty()) {
-        return null;
+    private LinkVariant pickVariant(Long linkId, HttpServletRequest request) {
+        List<LinkVariant> variants = variantMapper.selectByLinkId(linkId);
+        if (variants.isEmpty()) {
+            return null;
+        }
+        String userAgent = request.getHeader("User-Agent");
+        List<LinkVariant> candidates = MatchRule.filterCandidates(variants,
+                ClickDimensions.device(userAgent),
+                ClickDimensions.os(userAgent),
+                MatchRule.primaryTag(request.getHeader("Accept-Language")),
+                Instant.now());
+        return VariantPicker.pick(candidates, ThreadLocalRandom.current()::nextDouble);
     }
-    return VariantPicker.pick(variants, ThreadLocalRandom.current()::nextDouble);
-}
 ```
-`ShortLinkService.java:715-721`
+（`ShortLinkService.java` 的 pickVariant）
 
-`pickVariant` 返回 null 表示单目标链（方法注释 :714）。变体列表来自 `LinkVariantMapper.selectByLinkId`（按 id 排序，保证同一条链每次抽签的区段切法一致）。随机源作为参数传入而不是在 `pick` 内部 new，让「抽签逻辑」与「随机性」解耦：测试可以传 `() -> 0.5` 复现任意边界。
+`pickVariant` 返回 null 表示单目标链。变体列表来自 `LinkVariantMapper.selectByLinkId`（按 id 排序，保证同一条链每次抽签的区段切法一致）。批次 3a 后抽签分两步：先用请求上下文（UA 派生的 device/os、Accept-Language 的首选标签、当前时刻）经 `MatchRule.filterCandidates` 收窄候选（5.6 详讲），再对候选抽签。随机源作为参数传入而不是在 `pick` 内部 new，让「抽签逻辑」与「随机性」解耦：测试可以传 `() -> 0.5` 复现任意边界。
 
 ### 5.3 抽签点：全部门禁之后
 
@@ -106,26 +114,44 @@ return new RedirectOutcome.Redirect(link,
         picked != null ? picked.getTargetUrl() : originalUrl,
         picked != null ? picked.getVariantKey() : null);
 ```
-`ShortLinkService.java:705-711`
+（`ShortLinkService.java` 的 resolveTarget 收尾）
 
-注释讲了两件事。其一，抽签只在每道门（限流、Bloom、缓存、行状态、URL 校验、B9 BLOCK、密码门、B9 WARN）全部通过后发生。被拦的请求根本走不到抽签：403/401/警示页没有 Location，自然没有「抽中哪个目标」的问题。其二，只要链配了非空 variants，Location 就取抽中的 `targetUrl`，绝不取缓存里的 `originalUrl`。
+注释讲了两件事。其一，抽签只在每道门（限流、Bloom、缓存、行状态、URL 校验、B9 BLOCK（含恶意 feed）、密码门、B9 WARN）全部通过后发生。被拦的请求根本走不到抽签：403/401/警示页没有 Location，自然没有「抽中哪个目标」的问题。其二，只要链配了非空 variants，Location 就取抽中的 `targetUrl`，绝不取缓存里的 `originalUrl`。
 
-第二件事值得展开。回想 7.1 的缓存回填：`cacheUrl` 写的是行的 `originalUrl`（`ShortLinkService.java:966-977`），L1/L2 里存的永远是「主目标」。对一个 70/30 分流链，这个缓存值只配当提示。`picked != null ? picked.getTargetUrl() : originalUrl`（:710）这个三目就是优先级的全部代码：有变体用变体，没变体才用（可能来自缓存的）主 URL。
+第二件事值得展开。回想 7.1 的缓存回填：`cacheUrl` 写的是行的 `originalUrl`，L1/L2 里存的永远是「主目标」。对一个 70/30 分流链，这个缓存值只配当提示。`picked != null ? picked.getTargetUrl() : originalUrl` 这个三目就是优先级的全部代码：有变体用变体，没变体才用（可能来自缓存的）主 URL。
 
 ### 5.4 unlock 后照常分流
 
-`unlock`（:753-792）整段没有 `pickVariant` 调用：解锁只发 cookie，不做跳转决策。controller 解锁成功后 303 跳回 `/r/{code}`（`RedirectController.java:66-69`），浏览器带 cookie 重新 GET，重走 7.1 的完整判定链，在 705-711 照常抽签。设计效果：分流逻辑只存在于一个位置（resolveTarget 收尾），解锁、WARN 继续、HEAD 之外的任何正常 GET 入口自动继承同一套抽签行为，不存在「解锁路径忘了分流」这类双实现漂移。
+`unlock` 整段没有 `pickVariant` 调用：解锁只发 cookie，不做跳转决策。controller 解锁成功后 303 跳回 `/r/{code}`（RedirectController），浏览器带 cookie 重新 GET，重走 7.1 的完整判定链，在收尾照常收窄与抽签。设计效果：分流逻辑只存在于一个位置（resolveTarget 收尾），解锁、WARN 继续、HEAD 之外的任何正常 GET 入口自动继承同一套行为，不存在「解锁路径忘了分流」这类双实现漂移。
 
 ### 5.5 统计分桶：variant 进事件
 
-抽中的桶随 `Redirect` outcome 出了 service（`variantKey` 字段，`RedirectOutcome.java:13`），在 `resolveForGet` 里随点击落库：
+抽中的桶随 `Redirect` outcome 出了 service（`variantKey` 字段），在 `resolveForGet` 里随点击落库：
 
 ```java
 clickRecordService.recordClick(redirect.link(), request, redirect.variantKey());
 ```
-`ShortLinkService.java:574`
 
-`recordClick` 把它装进 `ClickEvent` 的 `variant` 字段（`ClickEvent.java:27-28`，注释点名 D-C3-11），随事件进入 `lf_click_log` 与后续统计表。于是报表可以按 `variant` 维度拆分点击量，验证 70/30 是否成立。B2 命中的预取请求在 :569-572 提前返回，不记录，也就不会往桶里灌水。
+`recordClick` 把它装进 `ClickEvent` 的 `variant` 字段（注释点名 D-C3-11），随事件进入 `lf_click_log` 与后续统计表。于是报表可以按 `variant` 维度拆分点击量，验证 70/30 是否成立。B2 命中的预取请求提前返回，不记录，也就不会往桶里灌水。注意条件路由下「桶份额」不再等于权重比——这正是 11.3 的 A/B 报告需要适用性门的原因之一（带条件路由的链，份额偏离的解释不唯一）。
+
+### 5.6 条件收窄：MatchRule 的规则语义（MatchRule.java，331 行）
+
+一条规则是一个 JSON 对象，四个可选维度（类注释给了完整示例，含 `{"devices":["mobile"],"timeWindows":[{"from":"22:00","to":"02:00","tz":"Asia/Shanghai","weekdays":[5,6]}]}`）：
+
+| 维度 | 取值 | 匹配方式 |
+|---|---|---|
+| devices | mobile / tablet / desktop / bot / unknown | 与 ClickDimensions 的 UA 分类同源同名 |
+| os | windows / macos / ios / android / linux / other / unknown | 同上 |
+| languages | 如 `en`、`zh` | 与 Accept-Language 的**首选**标签比**前缀**：请求首选 `zh-CN` 命中规则 `zh`；请求没有首选标签时语言维度永假 |
+| timeWindows | {from, to, tz, weekdays?} | 时刻先换算到规则时区，再比 [from, to)；weekdays 是 1=周一…7=周日，可省略 = 每天 |
+
+组合语义三条：**一个维度内**列了多个值是 OR（任一命中即可）；**维度之间**是 AND（每个已声明的维度都必须命中）；**未声明的维度**不参与判定（通配）。整个对象为空 `{}` 时 `isConstraining()` 为 false——它与「没有规则」等价，不算条件路由（这个判定是 11.3 适用性门的依据，字段 null 性说了算，不看 JSON 文本长度）。
+
+**回退语义**是 `filterCandidates` 最重要的一行：逐个变体过一遍——规则为空（无条件变体）或规则命中就进候选集；**若候选集为空（没有任何变体命中），回退为全部变体照常抽签**。动态路由是「有条件时优先」，不是「条件不合就 404」——配置写错时链保持可用，代价是条件静默失效（靠统计侧的份额异常去发现，这也是它与 S1 门联动的原因）。
+
+**双解析纪律**：写侧 `parse` 严格——未知键、未知设备/系统值、坏时区、坏时间格式一律 400，其中 **`from == to` 直接拒绝**（整日窗请省略 timeWindows，而不是写一个退化窗）；读侧 `parseLenient` 宽容——存量行里的坏规则在求值时降级为通配（当作无条件变体），点击路径永不因一条坏配置 500。matcher 内部对 from==to 仍保留「整日」防御读法，但写侧已拒绝，它只对历史数据生效。同一份数据、两个严格度：新数据不许错，老数据不许炸。
+
+**跨午夜窗与开窗日（S4-4）**：`from > to` 的窗横跨午夜，如 22:00→02:00。难点在凌晨段的星期归属：周五 23:00 开的窗，周六 00:30 还在窗内——这一刻算周五还是周六？现行语义取**开窗日**：严格跨午夜窗的午夜后尾段，星期按**前一日**（窗口打开的那天）判。所以 `weekdays:[5]` 的 22:00–02:00 窗覆盖周五 22:00 到周六 02:00，不覆盖周六晚 22:00（那是周六开的窗，要 [6]）。修复波时审计方与开发方曾在这个语义上各执一词：代码注释一度写着开窗日、实现却按当前日判——S/N 波把实现改到与注释一致。这里的教训是：**时间窗的星期语义必须在写规则时就是确定的**，含糊的「周末夜里」在两种读法下是两个不同的活动。
 
 ## 6. 技术原理补充
 
@@ -146,8 +172,8 @@ clickRecordService.recordClick(redirect.link(), request, redirect.variantKey());
 
 1. 创建时传了两个变体：`a`（权重 70，指向 `/target-a`）与 `b`（权重 30，指向 `/target-b`）。`validateVariants`（6.2 课讲过 :823-843）保证 key 唯一、URL 合法、逐个过 B9。
 2. 第一次 GET：判定链前 11 步全过。`pickVariant` 查出两个变体，随机源给出 `r=0.42`，threshold=42，落进 A 区段 `[0, 70)`，返回变体 `a`。
-3. 返回 `Redirect(link, "/target-a", "a")`（:709-711）。注意缓存的 `originalUrl` 完全没参与。
-4. `resolveForGet` :574 调 `recordClick`，`variant="a"` 进点击事件，最终可按桶聚合。
+3. 返回 `Redirect(link, "/target-a", "a")`。注意缓存的 `originalUrl` 完全没参与。
+4. `resolveForGet` 调 `recordClick`，`variant="a"` 进点击事件，最终可按桶聚合。
 5. 第二次 GET：`r=0.85`，threshold=85，落进 B 区段 `[70, 100)`，Location 是 `/target-b`，统计记 `variant="b"`。
 
 伴随细节：这两次请求各自照常读 DB 行（7.1 的强一致取舍）、照常过密码门。若这条链同时设了密码，访客解锁后的那次 GET 一样参与抽签，`unlock` 不会预先替他决定桶。
@@ -158,7 +184,7 @@ clickRecordService.recordClick(redirect.link(), request, redirect.variantKey());
 
 **缓存只是单 URL 提示。** 变体信息不存在 Redis，缓存里只有主 URL。若允许缓存值压过抽签，分流链会退化成单目标链直到缓存过期。:706-707 注释把这条写成规则：「对分流链，缓存永远不是 Location 真相」。代价是所有跳转（含单目标链）每请求都发一次 `selectByLinkId`（:716），单目标链查空即 null，换来分流语义百分之百由 DB 决定。
 
-**与 Geo 定向的诚实边界。** 这套机制只按权重随机分流，不看请求的任何上下文：不解析 IP 归属、不看 Accept-Language、没有条件表达式。`LinkVariant` 实体只有 `variantKey`、`targetUrl`、`weight` 三个业务字段（:21-23），没有任何匹配条件列。`LinkForgeProperties.Phishing` 的注释 :72-74 有一句同源的坦白：本项目仍是 open redirect，没有信誉服务与内容扫描。要按地域定向，需要加归属地查询与条件路由，那是另一套复杂度（IP 库维护、缓存、隐私合规），本项目刻意没做（推断：这是教学项目主动收缩范围的选择，实体字段即证据）。
+**与 Geo 定向的诚实边界。** 批次 3a 后这套机制看四类上下文（设备、系统、语言、时段），但仍**不做地理定向**：不解析 IP 归属地，没有 GeoIP 库，没有国家/城市维度。语言维度用的是 Accept-Language 首选标签的前缀匹配，它是「用户声明的语言偏好」，不是「用户所在的地区」——两者经常不一致（在东京用英文系统的人）。要按地域定向，需要加归属地查询与隐私合规处理，那是另一套复杂度，本项目刻意没做（且在冻结时列入云端搁置组）。同理也没有信誉服务与内容扫描：恶意防护靠的是域名名单（7.2），不是内容理解。
 
 ## 10. 本节总结
 
@@ -166,8 +192,9 @@ clickRecordService.recordClick(redirect.link(), request, redirect.variantKey());
 - 抽签点：全部门禁通过后的 `resolveTarget` 收尾（:705-711），D-C3-8/10 注释为决策记录。
 - 优先级：非空 variants 永远压过缓存的主 URL；无变体链才用 `originalUrl`。
 - 解锁后照常分流：unlock 不抽签，303 重走 GET 自动继承。
-- 统计：`variantKey` 随 `recordClick`（:574）进 `ClickEvent.variant`（:27-28），按桶可聚合。
-- 边界：纯权重随机，无地域、无语言、无任何条件定向。
+- 统计：`variantKey` 随 `recordClick` 进 `ClickEvent.variant`，按桶可聚合。
+- 动态路由：MatchRule 四维度先收窄候选（键内 OR、键间 AND、无人命中回退全集），再权重抽签；写侧严格、读侧宽容；跨午夜尾段按开窗日判星期。
+- 边界：无 Geo/IP 归属定向；语言只是首选标签前缀，不是地区。
 
 ## 11. 课后练习
 
@@ -177,11 +204,11 @@ clickRecordService.recordClick(redirect.link(), request, redirect.variantKey());
 
 **练习 2（源码定位）**：找到「缓存 URL 不参与分流链跳转」的两处代码：一处在抽签收尾，一处在 B9 判定。各用一句话说明它们防止了什么。
 
-答案解析：其一，:709-711 的三目 `picked != null ? picked.getTargetUrl() : originalUrl`，防止分流链被缓存退化成单目标链。其二，:684 的 `phishingPolicy.evaluate(link.getOriginalUrl(), false)` 判的是行的 URL 而非缓存值，防止名单更新后陈旧缓存让该拦的链继续放行（配合 :682-683 注释）。两处同属 7.1 说的「行权威」纪律。
+答案解析：其一，resolveTarget 收尾的三目 `picked != null ? picked.getTargetUrl() : originalUrl`，防止分流链被缓存退化成单目标链。其二，B9 判定处 `phishingPolicy.evaluate(link.getOriginalUrl(), false)` 判的是行的 URL 而非缓存值，防止名单更新后陈旧缓存让该拦的链继续放行。两处同属 7.1 说的「行权威」纪律。
 
 **练习 3（执行过程）**：一条 70/30 密码链，访客首次 GET、提交正确密码、跟随 303 后再次 GET。这三次请求里 `pickVariant` 被调用几次？分别在哪次?
 
-答案解析：两次。首次 GET 在密码门（:691-695）被拦，走不到 :708 的抽签，`pickVariant` 未执行。unlock（:753-792）不抽签。303 后的 GET 全链通过，第一次抽签。若访客在 WARN 页点继续，那次 GET 同样是一次抽签。规律：`pickVariant` 的调用次数等于「产出 302 的判定链执行次数」。
+答案解析：一次（在 303 后的那次 GET）。首次 GET 在密码门被拦，走不到收尾的抽签，`pickVariant` 未执行。unlock 不抽签。303 后的 GET 全链通过，执行收窄与抽签。若访客在 WARN 页点继续，那次 GET 同样是一次抽签。规律：`pickVariant` 的调用次数等于「产出 302 的判定链执行次数」。
 
 **练习 4（设计分析）**：为什么变体列表必须按稳定顺序扫描（`selectByLinkId` 按 id 排序）？顺序不稳定会怎样？
 
@@ -189,11 +216,12 @@ clickRecordService.recordClick(redirect.link(), request, redirect.variantKey());
 
 **练习 5（调用链）**：从 `resolveTarget` 收尾到统计表，写出 variant 值的完整路径（类.字段:行号）。
 
-答案解析：`pickVariant` :715-721 抽中 `LinkVariant`，取 `getVariantKey()`（实体 :21）→ `RedirectOutcome.Redirect` 第三分量 `variantKey`（`RedirectOutcome.java:13`）→ `resolveForGet` :574 传入 `recordClick(link, request, redirect.variantKey())` → `ClickEvent.variant`（`ClickEvent.java:27-28`）→ 事件进入 `lf_click_log` 与下游统计（模块 10/11 讲管道）。全程只有一个字符串，源头是 `lf_link_variant.variant_key`。
+答案解析：`pickVariant` 抽中 `LinkVariant`，取 `getVariantKey()` → `RedirectOutcome.Redirect` 第三分量 `variantKey` → `resolveForGet` 传入 `recordClick(link, request, redirect.variantKey())` → `ClickEvent.variant` → 事件进入 `lf_click_log` 与下游统计（模块 10/11 讲管道）。全程只有一个字符串，源头是 `lf_link_variant.variant_key`。
 
 ## 12. 与后续课程的联系
 
 - 模块 10 讲 `recordClick` 之后的事件如何经 outbox 进 MQ；模块 11 讲 `variant` 维度在 `lf_click_dim_daily` 的聚合与查询。本课的抽签是那条数据链的第一环。
-- 6.2 课的 `validateVariants`（:823-843）是本课的前半场：权重合法性、key 唯一、逐个过 B9 都在写入时把关。
+- 6.2 课的 `validateVariants` 是本课的前半场：权重合法性、key 唯一、matchRule 严格解析、逐个过 B9 都在写入时把关。
 - 8.2 课讲 `cacheUrl` 写穿双删：本课解释了为什么那份缓存对分流链「只是提示」。
+- 条件路由改变了统计解释：份额偏离不再必然是抽签故障，11.3 的 A/B 适用性门（S1）把「带条件路由」列为第一个不适用理由。
 - 若要做地域定向（本项目未做），需要新增 IP 归属维度，并与 9.1 的 `redirect:ip` 限流键共享 `ClientIps` 的解析纪律。

@@ -2,6 +2,7 @@
 
 > 交互版见 [../archify/html/11-shortlink-create.html](../archify/html/11-shortlink-create.html)。
 > 口径来源：README「短链管理」「A/B 权重分流与批量导入（C3）」「目标域名名单门禁（B9）」；实现类 `link/controller/ShortLinkController.java`、`link/service/ShortLinkService.java`（create→doCreate）。
+> 3.0.0 修订：幂等段已按批次 3b + 修复波 M4 更新（指纹 create-v2 含密码 HMAC、终值信封 v3、同 key 异体 409）；CSV 导入另有在途租约（M5），不在本图，见专题 16。
 
 ```mermaid
 flowchart TD
@@ -19,8 +20,9 @@ flowchart TD
     V4 -- "通过" --> V5{"variants 校验(如带)<br/>key 唯一/weight 1..10000/≤10 组<br/>URL 走同款校验"}
     V5 -- "400" --> B400
     V5 -- "通过" --> IDEM{"带 Idempotency-Key?"}
-    IDEM -- "是" --> SETNX["Redis SETNX idem:{key}→pending<br/>(5s 超时 / 24h 终值)"]
-    SETNX -- "已有终值 code" --> REPLAY["直接重放返回原短链"]
+    IDEM -- "是" --> SETNX["Redis SETNX idem:{key}→pending<br/>(5s 超时 / 终值信封 v3:&lt;指纹&gt;:&lt;code&gt; 24h)"]
+    SETNX -- "已有终值且指纹一致" --> REPLAY["重放返回原短链"]
+    SETNX -- "已有终值但指纹不符" --> B409["409 IDEMPOTENCY_KEY_REUSED<br/>(同 key 异体, 含密码不同)"]
     SETNX -- "pending 在途" --> WAITP["等待/超时分支"]
     IDEM -- "否" --> GEN["随机 7 位短码<br/>(大小写敏感字符集)"]
     GEN --> INS["INSERT lf_short_link<br/>uk_code 唯一索引兜底"]
@@ -39,5 +41,7 @@ flowchart TD
 | 校验顺序 | 结构性校验全部在任何写之前（C3 导入也复用同一路径防漂移） |
 | 撞码 | 不做「先查后插」，唯一索引是并发正确性来源，DuplicateKey 重试 |
 | 幂等两段式 | pending 5 秒自愈、终值保留 24h；胜者崩溃后下一位可重新领头 |
+| 指纹认体（3b/M4） | 终值信封 `v3:<create-v2 指纹>:<code>`；指纹含 UTM 五字段与密码的 HMAC（pepper），同 key 异体 409；旧 v2/无前缀值对带密码重试 fail-closed |
+| 导入租约（M5） | CSV 导入另走 `ImportIdempotencyLease`（SET NX + Lua CAS）：同文件在途 409 IDEMPOTENCY_IN_PROGRESS、异文件 409 REUSED；细节见专题 16 |
 | 门禁 BLOCK | 建链阶段拒绝存量写入；跳转阶段对行上 URL 复查（名单变更对存量立即生效） |
 | 后置动作 | Bloom put、absent 清除、缓存写穿、广播全部在事务提交路径上，失败 fail-open 不阻断创建 |

@@ -37,7 +37,7 @@
 
 ### 5.1 Maven 生命周期与 surefire/failsafe 分工
 
-先看 pom 里有什么、没有什么。pom 没有任何 surefire 配置，单测路由完全靠 Boot parent 的默认值：`src/test/java` 下 27 个 `*Test` 类在 `test` 阶段由 surefire 执行。failsafe 则显式声明（`pom.xml:219-249`），两个执行块都绑定 `integration-test` 与 `verify` 两个 goal。为什么 failsafe 要绑两个 goal：`integration-test` 阶段跑测试但不判生死，`verify` 阶段才检查结果并把红变成构建失败。这样设计的好处是：某个 IT 红了，后续执行块与时区 fork 仍会跑完，一次构建能看到全部红点，而不是撞见第一个红就断流。
+先看 pom 里有什么、没有什么。pom 没有任何 surefire 配置，单测路由完全靠 Boot parent 的默认值：`src/test/java` 下 38 个 `*Test` 文件在 `test` 阶段由 surefire 执行。failsafe 则显式声明（`pom.xml:219-249`），两个执行块都绑定 `integration-test` 与 `verify` 两个 goal。为什么 failsafe 要绑两个 goal：`integration-test` 阶段跑测试但不判生死，`verify` 阶段才检查结果并把红变成构建失败。这样设计的好处是：某个 IT 红了，后续执行块与时区 fork 仍会跑完，一次构建能看到全部红点，而不是撞见第一个红就断流。
 
 类名的分工是刻意约定：`*Test` 免 Docker（27 类，Redis 交互用 Mockito 或直接 new），`*IT` 必须有 Docker daemon（42 类）。本地快速回归跑 `mvn -B verify -DskipITs` 只付 surefire 的时间；全量证据只在 CI 上产生（5.5）。
 
@@ -114,7 +114,7 @@
 
 （摘自 `OpenApiConfig.java:18-24`，有省略，完整方法到 `:40`。）
 
-数据流一条线：`pom.xml:16` 的 `<version>2.0.0</version>` → build-info.properties → `OpenApiConfig` 的 `info.version` → `/v3/api-docs` 响应。没有第二条路，改版本只改 pom 一处。`ObjectProvider` 处理「IDE 里直接跑、没经过 Maven 构建」的情况，拿不到就回退 `"dev"`（`OpenApiConfig.java:12-14` 注释）。`OpenApiInfoIT.java:28` 把这条链钉死：`assertEquals("2.0.0", body(resp).path("info").path("version").asText())`。pom 版本若改而测试没跟着改，CI 直接红。
+数据流一条线：`pom.xml:16` 的 `<version>3.0.0</version>` → build-info.properties → `OpenApiConfig` 的 `info.version` → `/v3/api-docs` 响应。没有第二条路，改版本只改 pom 一处。`ObjectProvider` 处理「IDE 里直接跑、没经过 Maven 构建」的情况，拿不到就回退 `"dev"`（`OpenApiConfig.java:12-14` 注释）。`OpenApiInfoIT.java:28` 把这条链钉死：`assertEquals("3.0.0", body(resp).path("info").path("version").asText())`。pom 版本若改而测试没跟着改，CI 直接红。
 
 ### 5.4 一段真实的依赖仲裁案例
 
@@ -168,7 +168,7 @@ jobs:
 
 `mvn -B verify`（`:24`）的 `-B` 是批处理模式，关掉下载进度条这类交互输出。这 24 行与 15.1 的口径闭环：main 恒绿（`README.md:625`），时区 fork 也在云端跑。
 
-**Windows 开发机口径**：这个项目的开发机是 Windows（`scripts/fault-drill.sh:60` 里给 Windows 进程清理写的 `taskkill` 是旁证）。`docs/progress.md:315` 记录了口径：Windows 开发机上 Docker Desktop 29 与 Testcontainers 不兼容，本地回归用 `mvn -B verify -DskipITs`；`docs/progress.md:354` 写明「全量以 CI 为权威」。所以 15.1 的 42 个 IT 的真值看 CI 的绿 run，本地红/绿不构成集成层的证据。这条口径延续到最后一轮（`docs/progress.md:1655`），本地每提交仍是 `-DskipITs`。
+**Windows 开发机口径**：这个项目的开发机是 Windows（`scripts/fault-drill.sh:60` 里给 Windows 进程清理写的 `taskkill` 是旁证）。`docs/progress.md:315` 记录了口径：Windows 开发机上 Docker Desktop 29 与 Testcontainers 不兼容，本地回归用 `mvn -B verify -DskipITs`；`docs/progress.md:354` 写明「全量以 CI 为权威」。所以 15.1 的 IT 真值看 CI 的绿 run，本地红/绿不构成集成层的证据。这条口径延续到最后一轮（`docs/progress.md:1655`），本地每提交仍是 `-DskipITs`。
 
 ### 5.6 application-test.yml 的测试专用姿态
 
@@ -193,7 +193,7 @@ jobs:
 仍看 [09-test-ci-pipeline.html](../../diagrams/archify/html/09-test-ci-pipeline.html)（测试与 CI 流程图）。本课与图的对应关系：
 
 1. CI 五步节点逐一对上 `ci.yml:12-24` 的五个 step，缓存节点标注的键结构与 5.5 一致。
-2. surefire/failsafe 分支节点对应 `pom.xml:215-249` 的双执行，图上的例数 151/166 出自 15.1 的 5.1 口径。
+2. surefire/failsafe 分支节点对应 `pom.xml:215-249` 的双执行，图上的例数 226/280 出自 15.1 的 5.1 口径。
 3. 时区 fork 分支节点对应 `webhook-tz-it` 执行块，图内卡片注明例数口径出处。
 4. 图是流程骨架，本课补充的是每条边上的「为什么」（排除谁、钉哪个时区、键怎么变）。
 
@@ -203,7 +203,7 @@ jobs:
 
 1. 推送 `feat/**` 分支触发工作流。checkout 代码，装 Temurin 17（`ci.yml:12-16`）。
 2. 缓存步骤按 `ubuntu-latest-m2-<pom哈希>` 找键。pom 未变则全量命中 ~/.m2，几秒；pom 变了则走 restore-keys 前缀拿旧缓存，增量补下载（`ci.yml:17-22`）。
-3. `mvn -B verify`：`test` 阶段 surefire 跑 27 个 UT 类，151 例执行实例；`integration-test` 阶段 failsafe `default` 执行块起 Testcontainers 跑 41 个 IT 类（166 例），`webhook-tz-it` 执行块另 fork 一个 Asia/Shanghai JVM 跑 `WebhookRetryClockIT`（2 例）；`verify` 阶段统一判死。
+3. `mvn -B verify`：`test` 阶段 surefire 跑 38 个 UT 文件，226 例执行实例；`integration-test` 阶段 failsafe `default` 执行块起 Testcontainers 跑 IT（280 例），`webhook-tz-it` 执行块另 fork 一个 Asia/Shanghai JVM 跑 `WebhookRetryClockIT`（2 例）；`verify` 阶段统一判死。
 4. 任何一例红，构建失败但三个执行块都已跑完，PR 页一次看到全部红点。
 5. 本地同期：开发机只跑 `mvn -B verify -DskipITs`（surefire 部分），IT 真值等 CI。
 
@@ -217,9 +217,9 @@ jobs:
 
 ## 10. 本节总结
 
-- `mvn verify` 的时间线：surefire 在 `test` 跑 `*Test`（151 例），failsafe 在 `integration-test`/`verify` 跑 `*IT`（166 例 + fork 2 例），failsafe 的红在 `verify` 才判死。
+- `mvn verify` 的时间线：surefire 在 `test` 跑 `*Test`（226 例），failsafe 在 `integration-test`/`verify` 跑 `*IT`（280 例 + fork 2 例），failsafe 的红在 `verify` 才判死。
 - `webhook-tz-it` 执行块用 `argLine=-Duser.timezone=Asia/Shanghai` 的独立 fork 复现 JVM(+8)/DB(UTC) 偏差，守卫 DB 时钟退避的双口径。
-- `build-info` 让 pom version 流经 build-info.properties 进 OpenAPI，`OpenApiInfoIT` 钉住 "2.0.0"，单一事实源加测试闭环。
+- `build-info` 让 pom version 流经 build-info.properties 进 OpenAPI，`OpenApiInfoIT` 钉住 "3.0.0"，单一事实源加测试闭环。
 - 依赖仲裁两案：commons-lang3 属性覆盖解决「多方版本诉求」，Testcontainers BOM import 解决「Boot 管理版本过期」，注释即裁决书。
 - CI 五步里缓存键是 `runner.os-m2-<pom哈希>` 加前缀兜底；Windows 开发机 `-DskipITs`，IT 真值以 CI 为权威。
 
@@ -237,9 +237,9 @@ jobs:
 
 答案：约 28800 秒（8 小时），即 JVM(+8) 与 DB(UTC) 的偏差被加进重试等待（`WebhookRetryClockIT.java:33-35` 注释与 `:151` 的失败消息都写了 28800）。fork 的设计目标是复现事故现场：应用代码运行在 +8 的 JVM 里，而 MySQL 容器保持 UTC，这两个时钟源同时存在时，退避是否正确落在 DB 时钟上才有区分度。若把容器时区也改成 +8，偏差消失，断言恒真，回归失效。
 
-**练习 4（调用链）** 从 `pom.xml:16` 的 `<version>2.0.0</version>` 出发，写出版本号到 `/v3/api-docs` 响应的完整链路，并指出哪一环没有 pom 参与时会退化。
+**练习 4（调用链）** 从 `pom.xml:16` 的 `<version>3.0.0</version>` 出发，写出版本号到 `/v3/api-docs` 响应的完整链路，并指出哪一环没有 pom 参与时会退化。
 
-答案：pom version → `spring-boot-maven-plugin` 的 build-info goal 生成 `META-INF/build-info.properties`（`pom.xml:199-204`）→ Spring Boot 暴露为 `BuildProperties` Bean → `OpenApiConfig.linkForgeOpenApi` 读它写进 `Info.version`（`OpenApiConfig.java:19-24`）→ springdoc 渲染到 `/v3/api-docs` → `OpenApiInfoIT.java:28` 断言 `"2.0.0"`。退化点在第二环：IDE 里不经 Maven 构建就没有 build-info.properties，`ObjectProvider` 拿不到 Bean，`OpenApiConfig.java:24` 回退显示 `"dev"`。
+答案：pom version → `spring-boot-maven-plugin` 的 build-info goal 生成 `META-INF/build-info.properties`（`pom.xml:199-204`）→ Spring Boot 暴露为 `BuildProperties` Bean → `OpenApiConfig.linkForgeOpenApi` 读它写进 `Info.version`（`OpenApiConfig.java:19-24`）→ springdoc 渲染到 `/v3/api-docs` → `OpenApiInfoIT.java:28` 断言 `"3.0.0"`。退化点在第二环：IDE 里不经 Maven 构建就没有 build-info.properties，`ObjectProvider` 拿不到 Bean，`OpenApiConfig.java:24` 回退显示 `"dev"`。
 
 **练习 5（设计分析）** CI 缓存键为什么用 `hashFiles('pom.xml')` 而不是固定字符串 `m2-cache`？两个方案各自什么时候吃亏？
 

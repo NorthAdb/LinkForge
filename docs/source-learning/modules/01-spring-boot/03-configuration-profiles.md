@@ -18,7 +18,7 @@
 | 文件 | 职责 | 阅读顺序 | 为什么读它 |
 |------|------|----------|------------|
 | `src/main/resources/application.yml`（266 行） | 全部配置，默认加 dev 加 prod 三文档 | 第 1，对照 5.1 的地图读 | 配置总集 |
-| `src/main/java/com/linkforge/config/LinkForgeProperties.java`（239 行） | `linkforge` 前缀的绑定树 | 第 2 | 18 个字段、16 个内部类 |
+| `src/main/java/com/linkforge/config/LinkForgeProperties.java`（约 390 行） | `linkforge` 前缀的绑定树 | 第 2 | 21 个字段、19 个内部类（新增 auth / maliciousFeed / idempotency） |
 | `src/test/resources/application-test.yml`（69 行） | test profile 覆盖项 | 第 3 | 看测试如何改写默认行为 |
 
 ## 4. 类的定位
@@ -87,7 +87,9 @@ spring:
 
 MQ 段（:70-81）有两个值得记住的开关：`publisher-confirm-type: correlated` 与 `template.mandatory: true`，注释说明 outbox relay 只在 broker 回执后才标 SENT（A7 审计的结论）；listener 的 `auto-startup` 与 `default-requeue-rejected` 做成了环境变量可覆盖。jackson 段（:82-85）把时区钉在 Asia/Shanghai、日期不写时间戳，与模块 11 的统计口径有关。
 
-`mybatis-plus:` 段在 :87-96。`server.port` 在 :98-99。`linkforge:` 全树在 :102-239。`logging:` 在 :241-244。**这四段都住在 dev 文档里**，这是 5.5 第一个陷阱的伏笔。
+`mybatis-plus:` 段在 :87-96。`server.port` 在 :98-99。`linkforge:` 全树在 :102-277（批次 2/3 新增 `auth`、`malicious-feed`、`idempotency` 三段，见下）。`logging:` 在 :279-285。**这四段都住在 dev 文档里**，这是 5.5 第一个陷阱的伏笔。
+
+新增三段各有一个可讲的点。`auth`（:110-115）：access 过期 1 小时、refresh 30 天、邀请 7 天三个时长并排——会话体系的全部时间参数都在一处（5.2/5.4）。`malicious-feed`（:249-255）：`enabled: false` 默认关，开关与 URL、间隔同段（7.2）。`idempotency` 的 `pepper`（yml 里走环境变量 `LINKFORGE_IDEMPOTENCY_PEPPER`，属性类里带 dev 默认值与一整段安全注释）：它是 M4 指纹 HMAC 的部署密钥，注释写明轮换 pepper 会让轮换前的幂等记录全部 fail-closed——密钥类配置的默认值只是本地便利，生产必须覆盖（6.2）。
 
 ### 5.3 绑定树：从 yml 到 Bean（LinkForgeProperties.java）
 
@@ -104,7 +106,7 @@ public class LinkForgeProperties {
 
 （LinkForgeProperties.java:9-16）
 
-（框架行为）`@ConfigurationProperties(prefix = "linkforge")` 把 yml 里 `linkforge.` 之后的键按名字对到字段：`linkforge.jwt.secret` 填进 `jwt.secret`。字段类型是内部类就继续往下钻，所以 16 个 `@Data` 内部类就是 16 棵子树。绑定规则叫宽松绑定（框架行为）：yml 的 `cache-ttl-seconds`、Java 的 `cacheTtlSeconds`、环境变量 `LINKFORGE_CACHE_TTL_SECONDS` 三种写法指同一个键。
+（框架行为）`@ConfigurationProperties(prefix = "linkforge")` 把 yml 里 `linkforge.` 之后的键按名字对到字段：`linkforge.jwt.secret` 填进 `jwt.secret`。字段类型是内部类就继续往下钻，所以 19 个 `@Data` 内部类就是 19 棵子树。绑定规则叫宽松绑定（框架行为）：yml 的 `cache-ttl-seconds`、Java 的 `cacheTtlSeconds`、环境变量 `LINKFORGE_CACHE_TTL_SECONDS` 三种写法指同一个键。
 
 看一棵具体子树（LinkForgeProperties.java:114-127，逐字引用。围栏标记 ignore-check，因为 Mq 是嵌套类而校验器按顶层文件名查类型）：
 
@@ -227,7 +229,7 @@ management:
 ## 10. 本节总结
 
 - 三文档地图：默认 :1-49 全局生效，dev :51-244 承载主体，prod :247-266 只做收紧。
-- `LinkForgeProperties` 用 16 个内部类把 `linkforge.*` 绑成树，宽松绑定串起 yml、环境变量、Java 三种写法。
+- `LinkForgeProperties` 用 19 个内部类把 `linkforge.*` 绑成树（批次 2/3 新增 auth、maliciousFeed、idempotency），宽松绑定串起 yml、环境变量、Java 三种写法。
 - 四必填变量无默认，漏配启动即失败。
 - 陷阱一：mybatis-plus、server、linkforge 树住在 dev 文档，切 prod 全部失效；`docs-enabled` 是无字段的静默遗留。
 - 陷阱二：async-click 的 Java 默认 false（:117）与 dev yml 默认 true（:177）不一致，激活 profile 后以 yml 为准。

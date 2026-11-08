@@ -26,7 +26,7 @@
 |----|----|----|----|
 | `src/main/java/com/linkforge/link/support/SingleFlight.java` | 120 | 主角：javadoc :16-42、run :57-100、peek :103-105、forget :107-119 | 1 |
 | `src/main/java/com/linkforge/link/support/ShortLinkRowLoader.java` | 23 | 行读加载器 :20-22 | 2 |
-| `src/main/java/com/linkforge/link/service/ShortLinkService.java` | 1025 | 热路径调用 :649 与 :757、三个写路径 :495/:512、:535/:537、:548/:554 | 3 |
+| `src/main/java/com/linkforge/link/service/ShortLinkService.java` | 1503 | 热路径调用（resolveTarget/unlock 的 singleFlight.run）、三个写路径的 peek/forget | 3 |
 | `src/main/java/com/linkforge/config/LinkForgeProperties.java` | 239 | SingleFlight 段 :152-158 | 4 |
 | `src/test/java/com/linkforge/link/support/SingleFlightTest.java` | 242 | 7 个单测全览 | 5 |
 | `src/test/java/com/linkforge/link/SingleFlightRedirectIT.java` | 163 | 3 个集成测试 | 6 |

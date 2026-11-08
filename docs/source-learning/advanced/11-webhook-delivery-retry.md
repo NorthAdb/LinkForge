@@ -75,7 +75,7 @@ stateDiagram-v2
 
 **节点一：consume 钩子的原子性。** recordClickDelivery 的 javadoc（`WebhookService.java:235-246`）把契约写全：入队只看 endpoint 存在且 enabled，secret 是发送时才需要的，所以主密钥缺失照样落 PENDING（S1-b）；非重复的插入失败让整个 consume 事务回滚（S1-d），统计与投递意图同生共死。重复（撞 `uk_webhook_endpoint_event`）是唯一被吞的异常：并发路径已经入过队，这次点击的投递意图已存在。重放事件在专题 8 的占坑处早退，走不到这里，一个 eventId 不可能入队两次。
 
-**节点二：eventId 与最小 payload。** eventId 规则是 `"evt_" + 原事件 eventId`（:282）。原 eventId 要么是 `log-{id}` 要么是 UUID（专题 8 第 5 节），前缀做命名空间隔离，digest 事件的 `digest-{endpointId}-{windowStart}` 不与它撞车。payload 只有 8 个字段（id/type/createdAt/linkId/code/clickedAt/device/refererHost），没有 IP、没有完整 User-Agent（README :523 口径）：这是把数据推到租户自己的服务器，推得越多泄露面越大。
+**节点二：eventId 与最小 payload。** eventId 规则是 `"evt_" + 原事件 eventId`（:282）。原 eventId 要么是 `log-{id}` 要么是 UUID（专题 8 第 5 节），前缀做命名空间隔离，digest 事件的 `digest-{endpointId}-{windowStart}-{flushSeq}`（3.0.0 的 M3 形态，初版无 flushSeq 段）不与它撞车。payload 只有 8 个字段（id/type/createdAt/linkId/code/clickedAt/device/refererHost），没有 IP、没有完整 User-Agent（README :523 口径）：这是把数据推到租户自己的服务器，推得越多泄露面越大。
 
 **节点三：deliver 的五个分支。** 分支顺序就是开销顺序：endpoint 点查（:91-96）、SSRF 解析校验（:99-108）、解密（:110-116）、签名发送（:118-129）、按状态码分流（:130-146）。解密失败按可重试处理值得停一步：密钥错了重试也不会成功，但运维可能在几个 tick 内修好，立即 FAILED 会把可恢复故障变成需要手工重放的终态；scheduleRetry 的上限保证行不会无限循环（13.2 第 5.4 节口径）。
 
@@ -100,9 +100,11 @@ private void scheduleRetry(WebhookDelivery delivery, Integer statusCode, String 
 
 公式 `min(backoffMaxSeconds, base × 2^attempts)`（:163），默认 10 秒起步、8 次上限：20、40、80、160、320、640、1280 秒。第 8 次尝试失败时 attempts 到 8 进 FAILED。全程约 42 分钟窗口内 8 次 HTTP 尝试。3600 秒的上限在默认参数下碰不到（10×2^8=2560），它是给运维调大 max-attempts 的场景兜底。markRetry 的 `next_attempt_at = DATE_ADD(NOW(), INTERVAL n SECOND)`（`WebhookDeliveryMapper.java:31-33`）用 DB 时钟写入，selectPendingBatch 用 `<= NOW()` 用 DB 时钟比较，一列一时钟。
 
-**节点五：mark 三语句的 PENDING 守卫。** 三个 mark 的 WHERE 全部带 `AND status = 'PENDING'`（`WebhookDeliveryMapper.java:28、:33、:38`），int 返回值是影响行数。对照 outbox 的同名三语句只有 `WHERE id = #{id}`（`OutboxMapper.java:19-27`）。差异的根源是在途时长与 tick 周期的比值：webhook 的 HTTP 投递最长 7 秒（连接 2s + 请求 5s），跨过 2 秒 tick，同一行可能同时有两份在途尝试，加上手工重放这个第二写者，守卫让状态转移线性化，输家影响行数为 0。outbox 行只有 relay 一个写者且「拉取→发布→mark」在同一轮内同步完成（推断：差异原因从配置数值与调用形态推出，代码注释未明说；对照见 10.2 第 5.4 节）。
+**节点五：mark 三语句的 PENDING 守卫。** 三个 mark 的 WHERE 全部带 `AND status = 'PENDING'`（`WebhookDeliveryMapper.java:28、:33、:38`），int 返回值是影响行数。守卫的根源是在途时长与 tick 周期的比值：webhook 的 HTTP 投递最长 7 秒（连接 2s + 请求 5s），跨过 2 秒 tick，同一行可能同时有两份在途尝试，加上手工重放这个第二写者，守卫让状态转移线性化，输家影响行数为 0。**3.0.0 修订**：本专题初版曾对照「outbox 的同名三语句只有 `WHERE id = #{id}`、无守卫」——批次 1 已给 OutboxMapper 的三个 mark 补上同一守卫（`OutboxMapper.java:19-29`，注释标 T-M3 并写明理由：第二个 relay 实例或陈旧批次不得把他人已 SENT 的行翻回 FAILED 重放）。两套状态机自此同标准，初版「单写者才省得掉守卫」的推断作废（对照见 10.2 第 5.4 节，口径以本段为准）。
 
-**节点六：AGGREGATE 的 digest 时间线。** 模式为 AGGREGATE 时点击不落投递行，落 `lf_webhook_agg_buffer` 的（endpoint，窗口，链接）桶。窗口起点由调用方用 JVM 时钟算 epoch 秒后写入（`WebhookService.java:314` 的 `System.currentTimeMillis()/1000` 加 `AggregateWindows.windowStartOf` 的 `ZoneId.systemDefault()` 网格），封窗扫描的过期判定却用 DB 的 `UNIX_TIMESTAMP()`（`WebhookAggregateBufferMapper.java:65`）。这是全项目唯一的混合点：window_start 的值是 JVM 时钟算的，判过期却拿它与 DB 时钟比。mapper 注释（:15-18）把归因写明：业务数据（clickedAt）天然活在 JVM 时钟上，网格只能跟着它走。偏离的代价是窗口边界可能偏移几个时区差，但桶是幂等 upsert、digest 带 windowStart 可对账，误差被登记而不是放大（推断：后果分析为本专题推断，注释只写了规则本身）。封窗双触发：阈值 inline flush 跑在 consume 已持有的事务里（`WebhookService.java:321-325`），5 秒 sweep 扫 DB 侧过期窗口。digest 按 500 桶分片、每片一个 `digest-...-partN` eventId、超 10 片截断并在最后一片带 `truncated: true`（13.2 第 5.9 节口径）。
+**节点六：AGGREGATE 的 digest 时间线。** 模式为 AGGREGATE 时点击不落投递行，落 `lf_webhook_agg_buffer` 的（endpoint，窗口，链接）桶。窗口起点由调用方用 JVM 时钟算 epoch 秒后写入（`WebhookService.java:314` 的 `System.currentTimeMillis()/1000` 加 `AggregateWindows.windowStartOf` 的 `ZoneId.systemDefault()` 网格），封窗扫描的过期判定却用 DB 的 `UNIX_TIMESTAMP()`（`WebhookAggregateBufferMapper.java:65`）。这是全项目唯一的混合点：window_start 的值是 JVM 时钟算的，判过期却拿它与 DB 时钟比。mapper 注释（:15-18）把归因写明：业务数据（clickedAt）天然活在 JVM 时钟上，网格只能跟着它走。偏离的代价是窗口边界可能偏移几个时区差，但桶是幂等 upsert、digest 带 windowStart 可对账，误差被登记而不是放大（推断：后果分析为本专题推断，注释只写了规则本身）。封窗双触发：阈值 inline flush 跑在 consume 已持有的事务里（`WebhookService.java:321-325`），5 秒 sweep 扫 DB 侧过期窗口。digest 按 500 桶分片、超 10 片截断并在最后一片带 `truncated: true`（13.2 第 5.9 节口径）。
+
+**节点六（3.0.0 修订）：封窗的 drain 模型已被 M3 整体替换。** 初版的 flusher 是「无锁读快照 → 生成 digest → 按快照 id 删行，DuplicateKey 吞掉」，审计 M3 证明它有两条丢数路径（快照后落在已快照桶上的增量随删行丢失；已冲刷窗口里迟到的新桶复用裸窗口 eventId 撞唯一键被吞后照样删行）。现行 `WebhookAggregateFlusher.doFlush`（`WebhookAggregateFlusher.java:149-171`）把一次 (endpoint, 窗口) drain 做成单事务四步：`selectByEndpointWindowForUpdate` 锁行读桶 → 在 V15 的 `lf_webhook_flush_state` 为该 endpoint 分配持久序号 flush_seq（同事务推进，回滚不耗号）→ 插投递行 → 只删锁住的行。eventId 相应改为 `digest-{endpointId}-{windowStart}-{flushSeq}`（分片在后加 `-part{n}`），同窗多次 drain 各有命名空间。被锁桶的并发增量阻塞到 drain 提交后落成新行进下一 drain——「未发送先删除」从结构上消失。案情与测试证据见 [专题 17](17-correctness-waves.md) M3 条。
 
 ## 6. 正常流程：接收方抖动 30 秒
 
@@ -148,6 +150,6 @@ FAILED 行的救济是手工 SQL：`UPDATE lf_webhook_delivery SET status='PENDI
 
 **三、FAILED 不自动重放。** 8 次后停止，防止坏目标永久消耗 relay 预算，也防止告警被重复 warn 淹没。行不删除，last_error 与 last_status_code 保留全部现场，重放是一条 UPDATE。对照 MQ 消费端的毒消息一次进 DLQ：webhook 失败多是远端抖动值得退避，消费失败多是代码或数据问题值得快速隔离（推断：差异从两类失败的分布推出，与专题 8 第 7 节口径一致）。
 
-**四、条件更新作状态守卫。** 「查一下再改」在并发下有窗口，把状态条件放进 UPDATE 的 WHERE，数据库行锁让检查与写入原子完成。写者超过一个就要加守卫，outbox 的单写者才省得掉（10.2 第 5.4 节对照）。
+**四、条件更新作状态守卫。** 「查一下再改」在并发下有窗口，把状态条件放进 UPDATE 的 WHERE，数据库行锁让检查与写入原子完成。批次 1 后 outbox 与 webhook 两套 mark 同守卫（节点五 3.0.0 修订）——多实例部署下没有谁是真单写者，守卫从「webhook 的特殊需要」升为全项目状态机的默认标准（10.2 第 5.4 节对照）。
 
 **五、payload 最小化。** 8 个字段，无 IP 无完整 UA。webhook 是把点击数据推到租户自己的服务器，推送内容每多一项，数据库备份、日志、接收方泄露面的每一环都多一项。需要明细的租户走统计 API（推断：动机从 README :523 与字段表的对照归纳）。

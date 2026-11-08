@@ -10,7 +10,7 @@
 2. 逐行解释 `sliding_window.lua`：Redis TIME 时钟、nonce 防碰撞、只有放行请求占名额、Retry-After 的推导。
 3. 说出 `RedisRateLimiter.acquire` 的 fail-open 语义与对应的观测指标。
 4. 解释 `RateLimitKeys` 的 `sw:` 命名空间防的是什么历史事故。
-5. 背出五类入口的限额默认值与键名。
+5. 背出各入口的限额默认值与键名（含登录双桶与三个会话入口）。
 
 ## 2. 前置知识
 
@@ -127,9 +127,11 @@ public RateLimitDecision acquire(String key, int max, int windowSeconds) {
     return new RateLimitDecision(allowed, retryAfter, result.get(1));
 }
 ```
-`RedisRateLimiter.java:39-58`
+`RedisRateLimiter.java` 的 acquire 方法
 
-从上往下五段。第一段（:40-42）：`max <= 0` 是配置性关闭，直接拒绝，报价给整个窗口——配置说「不许请求」就一个都不放。第二段（:44-47）发起 EVAL：KEYS 一个，ARGV 三个，nonce 在这里生成。第三段（:48-50）：Redis 抛任何异常都走 fail-open，reason 记为 `error`。第四段（:51-53）：结果形状不对（脚本版本错位、集群迁移中的空响应）也 fail-open，reason 记为 `null`。第五段（:54-57）：翻译 Lua 的三元组，重试毫秒向上取整成秒，封顶为窗口秒数。
+从上往下五段。第一段：`max <= 0` 是配置性关闭，直接拒绝，报价给整个窗口——配置说「不许请求」就一个都不放。第二段发起 EVAL：KEYS 一个，ARGV 三个，nonce 在这里生成。第三段：Redis 抛任何异常都走 fail-open，reason 记为 `error`。第四段：结果形状不对（脚本版本错位、集群迁移中的空响应）也 fail-open，reason 记为 `null`。第五段：翻译 Lua 的三元组，重试毫秒向上取整成秒，封顶为窗口秒数。
+
+脚本本身的加载方式藏着一次真实事故（类静态块的长注释）：脚本对象在**类初始化时**经类自己的 classloader 一次性读入文本并 `setScriptText`。旧写法 `setLocation()` 把资源读取推迟到第一次 acquire 的请求线程上——在集成测试套件里，线程的 context classloader 可能属于一个已被停掉的 web 应用实例，读取抛错、每次 acquire 都异常、限流**静默 fail-open 全关**，而且表面上一切正常。改成静态嵌入后：运行时不再读资源，脚本缺失会让类初始化直接失败（响亮地挂在启动期，而不是安静地瞎掉）。这是「fail-open 组件的加载路径也要 fail-fast」的典型案例。
 
 fail-open 的实现与观测：
 
@@ -166,17 +168,19 @@ public static String sw(String keyPrefix, String logicalKey) {
 
 javadoc 记录了一次真实事故（D-Bw345-10）：历史上固定窗口用 STRING 键存计数；换成 ZSET 后若新旧键名相同，ZADD 打在一个 STRING 键上会抛 WRONGTYPE，而 `acquire` 的 fail-open 会把它放行——限流静默失效。`sw:` 中间段让两代键永不重名。`keyPrefix` 默认 `linkforge:rl:`（`LinkForgeProperties.java:237`），可用环境变量整段换掉（多套环境共用一个 Redis 时用）。
 
-### 5.6 五类入口限额表
+### 5.6 入口限额表（批次 1/2 后）
 
-| 入口 | 键（`linkforge:rl:sw:` 前缀下） | max / 窗口 | 调用点 | 配置项 |
-|----|----|----|----|----|
-| 注册 | `register:{ip}` | 5 / 600s | `AuthService.java:67-70` | registerMax :222-223 |
-| 创建短链 | `create:user:{userId}` | 30 / 60s | `ShortLinkService.java:132-134` | createMax :225-226 |
-| CSV 导入 | `import:user:{userId}` | 5 / 60s | `ShortLinkService.java:342-344` | importMax :228-229 |
-| 跳转 | `redirect:ip:{ip}` | 300 / 60s | `ShortLinkService.java:604-606` | redirectMax :231-232 |
-| 解锁（两级） | `unlock:code:{code}:ip:{ip}` 5/300s 与 `unlock:code:{code}` 50/300s | 见左 | `ShortLinkService.java:767-776` | LinkAccess :65-67 |
+| 入口 | 键（`linkforge:rl:sw:` 前缀下） | max / 窗口 | 调用点 |
+|----|----|----|----|
+| 注册 | `register:{ip}` | 5 / 600s | AuthService.register |
+| **登录（双桶）** | `login:{ip}` 与 `login-acct:{tenant}:{user}`（均小写归一化） | 各 5 / 600s | AuthService.login（批次 1） |
+| **刷新 / 登出 / 接受邀请** | `refresh:{ip}`、`logout:{ip}`、`accept-invitation:{ip}` | 各 5 / 600s | SessionService / TeamService（批次 2） |
+| 创建短链 | `create:user:{userId}` | 30 / 60s | ShortLinkService.create（已结算的幂等重放不进桶，6.2） |
+| CSV 导入 | `import:user:{userId}` | 5 / 60s | ShortLinkService.importCsv（结算重放同样不进桶） |
+| 跳转 | `redirect:ip:{ip}` | 300 / 60s | ShortLinkService.resolveTarget |
+| 解锁（两级） | `unlock:code:{code}:ip:{ip}` 5/300s 与 `unlock:code:{code}` 50/300s | 见左 | ShortLinkService.unlock |
 
-四点口径。跳转与注册按 IP 计，创建与导入按用户计；IP 取自 `ClientIps.resolve`（`ClientIps.java:11-14`），`trustXff=false` 时用 socket 地址——XFF 头可被客户端伪造，只有可信反向代理后面才敢开。导入是 D-C3-22 的专用桶：整个请求一个名额，100 行的导入不会吃掉 100 个 create 名额（:196-197 注释）。解锁的两级在 7.2 课讲过动机。第六个滑窗用户是 API Key 的分钟配额（`ApiKeyAuthFilter.java:118-119`），9.2 课讲。
+口径几点。跳转与注册、会话入口按 IP 计，创建与导入按用户计；IP 取自 `ClientIps.resolve`，`trustXff=false` 时用 socket 地址——XFF 头可被客户端伪造，只有可信反向代理后面才敢开。登录双桶是批次 1 的核心增量：只按 IP 限，换 IP 就能继续撞库；只按账号限，攻击者能用海量账号把某个 IP 的正常用户连坐——双桶各 5 次，任一触发即拒（拒绝计数 `entry=login_account` 与 `entry=login` 分开，见 5.3/14.1）。三个会话入口入桶的理由各异：refresh 防令牌猜测、logout 防批量踢人、accept-invitation 防邀请令牌爆破——它们共同的形态是「凭据在请求体里、无登录态可依」，只能按 IP 限。导入是 D-C3-22 的专用桶：整个请求一个名额，100 行的导入不会吃掉 100 个 create 名额。解锁的两级在 7.2 课讲过动机。另一个滑窗用户是 API Key 的分钟配额，9.2 课讲。
 
 ## 6. 技术原理补充
 
@@ -194,12 +198,12 @@ javadoc 记录了一次真实事故（D-Bw345-10）：历史上固定窗口用 S
 
 一次被拒的跳转请求的全过程。设 `redirectMax=300`，窗口 60 秒，某 IP 的窗口里已有 300 条记录。
 
-1. `GET /r/Ab3xK9m` 进 `resolveTarget`，:604-606 组键 `linkforge:rl:sw:redirect:ip:203.0.113.7`，调 `acquire(key, 300, 60)`。
+1. `GET /r/Ab3xK9m` 进 `resolveTarget`，组键 `linkforge:rl:sw:redirect:ip:203.0.113.7`，调 `acquire(key, 300, 60)`。
 2. EVAL 执行 `sliding_window.lua`：ZREMRANGEBYSCORE 清掉 60 秒前的成员（假设无），ZCARD 返回 300，`300 < 300` 不成立，走拒绝分支。
 3. ZRANGE 取最老成员，假设分数是 41 秒前的时刻，`retry_ms = ceil((oldest + 60000 - now) / 1000)` ≈ 19000，返回 `{0, 300, 19000}`。
-4. Java 侧 :54-57：allowed=false，retryAfter = min(60, ceil(19000/1000)) = 19。
-5. :607-610 打点 `ratelimit.rejected{entry=redirect}`，抛 `RateLimitedException(19)`。
-6. `GlobalExceptionHandler.java:20-25` 输出 429，头 `Retry-After: 19`，body 是统一壳 `{"code":429,...}`。
+4. Java 侧翻译：allowed=false，retryAfter = min(60, ceil(19000/1000)) = 19。
+5. 打点 `ratelimit.rejected{entry=redirect}`，抛 `RateLimitedException(19)`。
+6. `GlobalExceptionHandler.handleRateLimited` 输出 429，头 `Retry-After: 19`，body 是统一壳 `{"code":429,...}`。
 7. 19 秒后该 IP 重试：清窗删掉 oldest，`ZCARD` 变 299，`299 < 300` 成立，ZADD 放行。
 
 对照一次 Redis 故障中的同名请求：:48-50 捕获连接异常，打点 `failopen{reason=error}`，返回 allowed=true，跳转链继续走 Bloom 与 DB。用户无感，监控上 failopen 曲线抬升。
@@ -219,7 +223,7 @@ javadoc 记录了一次真实事故（D-Bw345-10）：历史上固定窗口用 S
 - 只有放行请求写 ZSET；拒绝报价 `oldest + win - now`，到点必然放行。
 - Java 侧封装 `RateLimitDecision`，Redis 异常与坏结果一律 fail-open 并打点。
 - `sw:` 命名空间隔离两代键型，防 WRONGTYPE 静默失效（D-Bw345-10）。
-- 五类入口：注册 5/600s、创建 30/60s、导入 5/60s、跳转 300/60s、解锁 5+50/300s。
+- 入口清单：注册 5/600s、登录双桶各 5/600s、refresh/logout/接受邀请各 5/600s（按 IP）、创建 30/60s、导入 5/60s、跳转 300/60s、解锁 5+50/300s；已结算的幂等重放不进任何桶。
 
 ## 11. 课后练习
 

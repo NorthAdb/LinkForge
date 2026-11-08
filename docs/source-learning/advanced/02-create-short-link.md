@@ -2,13 +2,15 @@
 
 > 模块课 6.2 把 create 与 doCreate 逐段讲完了。本专题把一次 POST /api/links 从 HTTP 入口拉到响应出口，重点补三件模块课没串起来的事：安全层怎么把请求送到 create 门口、创建写的那些缓存与 Bloom 如何被跳转链路（专题 4）消费、以及每个失败分支的副作用边界在哪里。
 
+> **3.0.0 口径注**：本专题正文写于 v2.0.0 口径，行号为当时基线位置（现行 `create` 在 `ShortLinkService.java:140` 起）。批次 3b 与审计 M4 把幂等契约深化了三处，正文相应段落已逐处修订：(1) 已结算的重放判定**先于限流**（重放不再烧 create 配额）；(2) 结算值是 `v3:<create-v2 指纹>:<code>` 信封，指纹含访问密码的 HMAC，同键异体（含密码不同）→ 409 `IDEMPOTENCY_KEY_REUSED`，旧信封对带密码重试 fail-closed；(3) CSV 导入自 3b 起**认** Idempotency-Key 且有在途租约（M5）。完整机制见 [专题 16](16-link-power-features.md) 节点六至八与 [6.2 课](../modules/06-short-link/02-create-flow.md)。
+
 ## 1. 业务背景：全项目唯一的一条写入口
 
 用户故事。运营同学在控制台粘贴一个长 URL，勾选 UTM 参数，可选地设置自定义码、过期时间、访问密码、A/B 分流，点创建。几百毫秒后拿到 `/r/aB3xK9m`。她不关心背后有幂等锁、滑动窗口和门禁名单，只关心两件事：这个码立刻能用，同一个表单别提交出两条链。
 
 这条链路值得单独讲，因为它是全项目收敛度最高的写路径。`ShortLinkService.create` 是唯一往 `lf_short_link` 插行的公开入口，CSV 导入最终也汇入 `doCreate`（回看 [6.2](../modules/06-short-link/02-create-flow.md) 第 12 节）。限流、幂等、门禁、校验、事务、缓存预热六个横切关切全部挂在一条调用链上，任何一条没看懂，都会在排障时变成「为什么创建失败了/为什么创建了两次/为什么新链 404 了」三类真实事故。
 
-她故事里的「同一个表单别提交出两条链」就是幂等键存在的理由。浏览器双击、网关重发、用户手动刷新，都会让同一个 POST 到达两次。POST 在 HTTP 语义里天然不幂等，所以契约要求客户端带一个 Idempotency-Key 头，服务端保证同键只建一条。这个契约的完整实现是本专题的中轴线。
+她故事里的「同一个表单别提交出两条链」就是幂等键存在的理由。浏览器双击、网关重发、用户手动刷新，都会让同一个 POST 到达两次。POST 在 HTTP 语义里天然不幂等，所以契约要求客户端带一个 Idempotency-Key 头，服务端保证同键的**顺序重放**只建一条（3.0.0 的精确口径：同键异体是 409 而不是静默重放；并发首创没有 owner 租约、只有 5 秒 pending 标记，是尽力而为——与导入路径不同，见文首口径注）。这个契约的完整实现是本专题的中轴线。
 
 ## 2. 相关类清单
 
@@ -37,17 +39,20 @@ POST /api/links（头：Authorization: Bearer、Idempotency-Key 可选）
   → 角色矩阵：/api/links/** 允许 USER 或 API_KEY（SecurityConfig.java:63）
   → ShortLinkController.create（ShortLinkController.java:43-48）
       @Valid 校验请求体，Idempotency-Key 头透传（:45-46）
-  → ShortLinkService.create（ShortLinkService.java:129-176）
-      ├─ requireUser（:130 → :910-916，空身份 401，纵深防御）
-      ├─ 滑动窗口限流（:131-138，键 create:user:{userId}，默认 30 次/60 秒）
+  → ShortLinkService.create（ShortLinkService.java:140 起）
+      ├─ requireUser（空身份 401，纵深防御）
+      ├─ 有幂等键：先 replay 查结算值（3.0.0 顺序，重放判定先于限流）：
+      │    ├─ 命中且指纹相符 → 回库验归属后直接返回（不烧限流配额）
+      │    ├─ 命中但请求体不同（含密码不同）→ 409 IDEMPOTENCY_KEY_REUSED
+      │    └─ 未命中 → 继续下面的限流与抢锁
+      ├─ 滑动窗口限流（键 create:user:{userId}，默认 30 次/60 秒）
       ├─ 超限 → RateLimitedException → 429 + Retry-After
-      ├─ rejectSmuggledAttribution（:140 → :871-878，utm 前缀与广告归因 id → 400）
-      ├─ 有幂等键（:141-173）：
-      │    ├─ replay 查终值（:143，replayIdempotentCreate :182-201，回库验归属）
-      │    ├─ SETNX pending 5 秒抢锁（:152-155）；Redis 异常 fail-open 视为抢到（:156-160）
-      │    ├─ 赢家 → doCreate（:162）
-      │    └─ 输家 → 轮询 10 次 × 200ms（:164-170）→ 拿到终值返回，否则 503（:173）
-      └─ 无幂等键 → doCreate（:175，幂等键传 null）
+      ├─ rejectSmuggledAttribution（utm 前缀与广告归因 id → 400）
+      ├─ 有幂等键（续）：
+      │    ├─ SETNX pending 5 秒抢标记；Redis 异常 fail-open 视为抢到
+      │    ├─ 赢家 → doCreate
+      │    └─ 输家 → 轮询 10 次 × 200ms → 拿到终值返回，否则 503
+      └─ 无幂等键 → doCreate（幂等键传 null）
   → ShortLinkService.doCreate（ShortLinkService.java:203-283）
       ├─ 校验七步（:204-218）：UTM 合并 → URL 结构 → B9 门禁 → 过期时间
       │    → variants → 自定义码 → 密码编码（全部在任何写之前，注释 :211 D-C3-7）
@@ -69,8 +74,8 @@ POST /api/links（头：Authorization: Bearer、Idempotency-Key 可选）
 
 ```
 请求 B（同键，晚于赢家 A 到达）
-  → 限流放行（各自计数）→ 夹带检查通过
-  → replayIdempotentCreate（ShortLinkService.java:182-201）
+  → replayIdempotentCreate 先行（3.0.0：重放判定在限流之前，未结算才轮到限流与夹带检查）
+  → replayIdempotentCreate（现行 :213-264）
       ├─ Redis GET 幂等键（:184-189）；键不存在/空串/pending → 返回 null
       ├─ Redis 异常 → fail-open 视为未重放（:186-190）
       └─ 键里已有短码 → 回库 selectOne 验证这条链属于当前用户（:195-198）
@@ -98,13 +103,15 @@ POST /api/links（头：Authorization: Bearer、Idempotency-Key 可选）
 
 pending 锁的 5 秒 TTL 是自愈设计：赢家进程崩溃后锁自动消失，下一个同键请求重新抢锁执行，不存在永久卡死的锁。反过来它也是一把软尺：pending 状态超过 5 秒仍在，几乎可以断定赢家没跑完就死了，或者 settle 失败。这两种情况的善后方式完全不同（前者 503 后重试可自愈，后者会在 TTL 过期后重建成第二条链，即第 7 节的 settle fail-open 行）。
 
+3.0.0 的增量在「终值长什么样」上：settle 写入的不再是裸短码，而是 `v3:<指纹>:<code>` 信封，指纹（create-v2）是规范形（含 UTM 五字段与 variants）的 SHA-256 再加上访问密码的 HMAC-SHA256（pepper 走配置）——3b 的旧指纹只记「设没设密码」，同键同 URL 换密码会被误判重放，正是审计 M4 的原案。重放读回时先验指纹：不符 → 409 `IDEMPOTENCY_KEY_REUSED`；`v2:` 与无前缀的老值对带密码重试一律 fail-closed 409（旧指纹证明不了密码相等），对无密码重试仍按旧指纹验过可重放，老值随 24 小时 TTL 自然老化（现行 `replayIdempotentCreate` :213-264、`createFingerprint` :294 起；深讲见 [专题 16](16-link-power-features.md) 节点六、七）。
+
 **节点二：门禁在写前，且两侧共用同一套判定。** `rejectBlockedTarget`（:207 → :797-807）在创建时对 BLOCK 抛 400，message 固定为 "target domain is not allowed by policy"，不回显命中的域名。跳转侧（专题 4）对同一个 `TargetPolicy` 用 `forCreate=false` 调用，BLOCK 出 403 拦截页。一个判定函数、两种失败出口，口径由 `forCreate` 参数切换（回看 [7.2](../modules/07-redirection/02-password-and-domain-gates.md) 第 5.5 节）。UTM 合并排在门禁之前，因为门禁检查的必须是入库的那个最终 URL。还有一处不对称值得记住：创建时 WARN 命中只打点放行（:802-806），拦截只发生在跳转侧。写入者不该被名单挡住合法的管理操作，风险拦截延后到真正有人点击的时刻。
 
 **节点三：提交后五连是写给跳转链路的。** `codeBloom.put` 让跳转第 2 步的 Bloom 门放行；`clearAbsent` 防止这个码曾被误判进负缓存导致 404；`cacheUrl` 把主 URL 写进 L1/L2，跳转第 4、5 步直接命中，TTL 为基值加抖动（`ShortLinkService.java:918` 附近的 D-Bw1-5 注释）。这五步与 `resolveTarget` 的读路径严格对应，读完本专题应立刻能读懂专题 4 的前六步。多实例部署下 `publishBloomPut` 负责让其他进程的 Bloom 也播种（回看 [6.2](../modules/06-short-link/02-create-flow.md) 第 5.6 节、[7.1](../modules/07-redirection/01-decision-chain.md) 第 5.4 节）。
 
 **节点四：事务里只留一种意外。** 七步校验全在事务外，进事务后唯一可能的意外是插入撞唯一索引。自定义码撞了是 409 业务冲突，随机码撞了换码重试。variants 与主行同事务，杜绝「有主行没分流」的中间态（回看 [6.2](../modules/06-short-link/02-create-flow.md) 第 5.5 节）。
 
-**节点五：CSV 导入汇入同一个 doCreate。** 导入入口（`ShortLinkController.java:63-65` 起）逐行走 `doCreate`（`ShortLinkService.java:380` 附近，见 6.3 课）。七步校验在导入场景原样生效，这是「防漂移」设计：两条写入口永远不会有两种行为。差异只有两处：导入不认 Idempotency-Key（注释 D-C3-23，逐行响应本身就是回执），导入的限流键与 create 分开（application.yml:197 附近注释「import cannot trip the create window」）。
+**节点五：CSV 导入汇入同一个 doCreate。** 导入入口（`ShortLinkController.java:63-65` 起）逐行走 `doCreate`（`ShortLinkService.java:380` 附近，见 6.3 课）。七步校验在导入场景原样生效，这是「防漂移」设计：两条写入口永远不会有两种行为。差异只有两处：导入的限流键与 create 分开（整次请求计一次，不占创建配额），且导入的幂等形状与 create 不同。注意口径变迁：C3 时期「导入不认 Idempotency-Key」（旧注释 D-C3-23）已在批次 3b 推翻——现在导入认键：同键同文件顺序重放回存量结果、异文件 409、并发同文件由 owner 租约挡下回 `IDEMPOTENCY_IN_PROGRESS`（M5），但不含崩溃恢复（见 [专题 16](16-link-power-features.md) 节点八）。
 
 **节点六：requireUser 的纵深防御。** 过滤器链已经保证受保护路径必有身份，`create` 第一步仍然调 `requireUser`（:130，实现在 :910-916，空身份抛 401）。这是纵深防御：链层配置改动、新入口接入时，服务层的判空让错误表现为干净的 401 而不是 NullPointerException 换 500（回看 [5.3](../modules/05-security/03-usercontext-authz.md) 第 5.4 节）。
 
@@ -118,13 +125,13 @@ pending 锁的 5 秒 TTL 是自愈设计：赢家进程崩溃后锁自动消失�
 | t1 | W1 | Controller 透传请求体与 Idempotency-Key: "abc-key" | `ShortLinkController.java:43-48` |
 | t2 | W1 | requireUser 命中；限流键 create:user:42 计数未超 30/60s | `ShortLinkService.java:130-138` |
 | t3 | W1 | 夹带检查通过（unknown map 里没有 utm/归因参数） | `ShortLinkService.java:140` |
-| t4 | W1 | replay 读 `linkforge:rl:idem:42:abc-key`，键不存在返回 null | `ShortLinkService.java:143` |
+| t4 | W1 | replay 读 `linkforge:rl:idem:42:abc-key`，键不存在返回 null（此步在限流之前） | `ShortLinkService.java:148-158` |
 | t5 | W1 | SETNX 写 "pending" 成功，TTL 5 秒；本请求成为赢家 | `ShortLinkService.java:152-155` |
 | t6 | W1 | 七步校验全过：URL 合法、门禁 ALLOW、variants 可用 | `ShortLinkService.java:204-218` |
 | t7 | W1 | 开事务，随机码 aB3xK9m 首次插入成功 | `ShortLinkService.java:237-252` |
 | t8 | W1 | variants 插入（如有），事务提交 | `ShortLinkService.java:261-264` |
 | t9 | W1 | Bloom 播种、广播、清 absent、写 L1/L2 缓存 | `ShortLinkService.java:266-269` |
-| t10 | W1 | 幂等键被终值 aB3xK9m 覆盖，TTL 重置为 24 小时 | `ShortLinkService.java:271-274` |
+| t10 | W1 | 幂等键被结算信封 `v3:<指纹>:aB3xK9m` 覆盖，TTL 重置为 24 小时 | `ShortLinkService.java:467-474` |
 | t11 | W1 | 响应 200 + 四字段 CreateShortLinkResponse | `ShortLinkService.java:282` |
 
 双请求并发场景的补全：另一个请求 B 携同键在 t5 前后到达，SETNX 失败成为输家，在自己的线程上每 200ms 重放一次；t10 之后 B 的下一次轮询读到终值，回库确认归属后返回与 A 完全相同的响应。数据库里只有一条链、一次插入。
@@ -158,6 +165,7 @@ pending 锁的 5 秒 TTL 是自愈设计：赢家进程崩溃后锁自动消失�
 | 自定义码已被占用（含逻辑删行占位） | 409 "code already exists" | 无 | `ShortLinkService.java:244-246` |
 | 随机码 16 次全撞（概率极低） | 400 "failed to allocate short code" | 无（事务内抛出，事务回滚） | `ShortLinkService.java:258-260` |
 | 同幂等键输家等待 2 秒仍无终值 | 503 "idempotent create still in progress" | pending 键继续倒计时 | `ShortLinkService.java:171-173` |
+| 同幂等键但请求体不同（含密码不同，3.0.0 新增行） | 409 IDEMPOTENCY_KEY_REUSED | 无（重放判定先于限流，配额不烧） | `ShortLinkService.java:229-257` |
 | 重放读到终值但那条链属于别的用户 | 视为未重放，走正常创建 | 无 | 归属校验，`ShortLinkService.java:195-198` |
 | 校验失败发生在抢锁之后（400 各行） | 400 | pending 键无终值，等 5 秒 TTL 自灭；窗口内同键重试得 503 | `ShortLinkService.java:152-155`（[6.2](../modules/06-short-link/02-create-flow.md) 第 8 节） |
 | Redis 整体宕机，SETNX 抛异常 | 200（两个并发请求各自建成一条） | 同键双链 | acquire fail-open，`:156-160` |

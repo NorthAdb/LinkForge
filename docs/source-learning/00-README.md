@@ -1,14 +1,15 @@
 # LinkForge 源码学习教材 · 总索引
 
 > 这是一套以 **LinkForge 仓库源码**为主线的体系化课程：从 Java/Spring Boot 初学者出发，最终目标是能独立读懂、解释、修改和扩展这个项目。
-> 基线：`main` @ `911640c`（2026-11-02），v2.0.0 + C1–C5 已冻结，测试 319 例。
+> 基线：tag `3.0.0` @ `f27b9cbfec4f`（main tip `3f545ccf`，2026-11-08 冻结），Flyway V1–V15，测试 508 例。
+> 历史注：本教材最初按 v2.0.0（`main` @ `911640c`，319 例）编写，2026-11-08 已全量更新到 3.0.0 口径；正文里出现的旧数字都已标注为历史对照。
 > 编写/学习进度看 [reference/progress.md](reference/progress.md)。
 
 ## 从哪里开始
 
 1. 第一次接触本项目：按顺序读 [01-project-overview.md](01-project-overview.md)（产品全景）→ [02-architecture-map.md](02-architecture-map.md)（代码地图）→ [03-curriculum-roadmap.md](03-curriculum-roadmap.md)（选课）。
 2. 已有 Spring 基础：跳过模块 01–03 的基础段，从[模块 05](modules/05-security/) 开始，按路线图跳读。
-3. 只想搞懂某条链路：直接进 [advanced/](advanced/) 的 14 个业务专题。
+3. 只想搞懂某条链路：直接进 [advanced/](advanced/) 的 17 个业务专题（原 14 个 + 3.0.0 新增的会话与团队、链接能力增强、正确性波次三个附录专题）。
 
 ## 目录结构
 
@@ -17,13 +18,13 @@ docs/source-learning/
 ├── 00-README.md            本文件（总索引）
 ├── 01-project-overview.md  项目定位、功能地图、用户故事
 ├── 02-architecture-map.md  运行架构、包结构、类关系、数据与中间件地图
-├── 03-curriculum-roadmap.md 全部 42 节课的路线图
+├── 03-curriculum-roadmap.md 全部 43 节课的路线图
 ├── modules/                模块 01–15，每课一个 md（12 节统一模板）
 │   ├── 01-spring-boot/     Maven/pom、IoC/DI、配置体系
 │   ├── 02-common/          统一响应、异常、工具
 │   ├── 03-spring-mvc/      Controller、请求生命周期
 │   ├── 04-mybatis-mysql/   实体/Mapper、Flyway、事务
-│   ├── 05-security/        过滤器链、JWT、UserContext
+│   ├── 05-security/        过滤器链、JWT、UserContext、刷新会话与团队协作
 │   ├── 06-short-link/      数据模型、创建流程、生命周期、QR/UTM
 │   ├── 07-redirection/     跳转判定链、密码/域名门禁、A/B 分流
 │   ├── 08-redis-cache/     键空间、L1/L2、空值缓存/Bloom、singleflight
@@ -34,7 +35,7 @@ docs/source-learning/
 │   ├── 13-webhook/         密钥加密、投递重试、SSRF 与聚合
 │   ├── 14-observability/   Actuator/Micrometer、指标、定时任务地图
 │   └── 15-testing-deployment/ 测试金字塔、Maven/CI、Compose 与演练
-├── advanced/               14 个综合业务专题（含面试指南）
+├── advanced/               17 个综合业务专题（含面试指南与 3.0.0 附录三篇）
 ├── diagrams/
 │   ├── archify/source/     Archify 图源 JSON（保留）
 │   ├── archify/html/       独立 HTML 交互图（浏览器打开）+ finalize 回执
@@ -78,8 +79,9 @@ python -I docs/source-learning/tools/check_docs.py
 
 每次新增或修改课程后运行一次；`reference/progress.md` 记录每次批次的完成状态。任务被打断后，从 progress.md 的迭代日志最后一行恢复。
 
-## 时点说明（2026-11）
+## 时点说明（2026-11，3.0.0 更新）
 
-- 教材基线：仓库 `main` @ `911640c`（调查口径）；其后 `01f0b5a` 仅新增 docs。控制台（`static/index.html`）正在经历独立的 FE 波次改造，涉及控制台 UI 的描述均为编写时点口径，API 面不受影响。
+- 教材基线：tag `3.0.0` @ `f27b9cbfec4f`（main tip `3f545ccf`）。项目已在外部复审通过 M1–M8 修复波后**功能冻结**：批次 1–3、审计修复波与 S/N 波的全部机制都以 3.0.0 源码为准。本教材最初编写于 v2.0.0（`main` @ `911640c`，2026-11-02），本次更新逐课核对源码后改写。
+- 控制台（`static/index.html`，3.0.0 共 1,423 行）已随 S/N 波 S2 收尾定型：强制改密页、邀请接受视图、modal 口令框（`prompt()` 已全量移除）、启动会话恢复、logout-all 按钮、列表 keyword/tag 筛选都在其中；本教材只讲它调用的 API 面，不钉 DOM 细节。
 - 性能数字口径见 [01-project-overview.md](01-project-overview.md) 第 9 节：现有数字是 Windows 历史实测，不代表当前版本。
-- 测试例数：README 口径 319 = 151 单测（144 `@Test` + 1 个参数化方法展开 7 例）+ 166 IT + 2 时区 fork；源码 `@Test` 注解计数 312 不含参数化方法，两口径完全可平。详见 [reference/issues-and-discrepancies.md](reference/issues-and-discrepancies.md)。
+- 测试例数：README 口径 508 = 226 单测（204 `@Test` + 2 个参数化方法展开 22 例）+ 280 IT + 2 时区 fork；源码 `@Test` 注解计数 486（单测 204 + IT 282，其中 2 例在时区 fork 里跑）不含参数化方法，两口径完全可平。详见 [reference/issues-and-discrepancies.md](reference/issues-and-discrepancies.md)。

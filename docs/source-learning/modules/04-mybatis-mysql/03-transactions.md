@@ -19,12 +19,13 @@
 
 | 文件 | 职责 | 阅读顺序 | 为什么读它 |
 |------|------|----------|------------|
-| `user/service/AuthService.java`（看 :59-100） | @Transactional 注册 | 第 1 | 注解事务的最小完整样本 |
+| `user/service/AuthService.java`（看 :95-140） | @Transactional 注册 | 第 1 | 注解事务的最小完整样本 |
 | `stats/service/ClickRecordService.java`（91 行） | 同事务双写 | 第 2 | 本课主角 |
-| `link/service/ShortLinkService.java`（看 :237-264, :505-511, :546-558） | 模板事务三例 | 第 3 | 语句级回滚的重试用法 |
-| `stats/service/ClickStatsService.java`（看 :42-113） | 幂等消费事务 | 第 4 | 手工 TransactionTemplate 构造 |
-| `webhook/service/WebhookAggregateFlusher.java`（看 :32-36, :100-109） | 传播行为的活教材 | 第 5 | 一个方法两种事务边界 |
-| `link/service/ShortLinkService.java`（看 :573-581） | 事务外的 fail-open catch | 第 6 | 边界纪律 |
+| `link/service/ShortLinkService.java`（看 :426 起 doCreate、:947-973 update、:1009-1015 delete） | 模板事务三例 | 第 3 | 语句级回滚的重试用法 |
+| `stats/service/ClickStatsService.java`（看 :54-141） | 幂等消费事务 + 只读快照事务 | 第 4 | 手工 TransactionTemplate 构造（两个） |
+| `webhook/service/WebhookAggregateFlusher.java`（看 :27-42, :133-142） | 传播行为的活教材 | 第 5 | 一个方法两种事务边界 |
+| `auth/SessionService.java`、`user/service/TeamService.java` | 锁序事务 | 第 6 | 行锁先行的关键区（5.4 深讲） |
+| `link/service/ShortLinkService.java`（看 :1030-1050） | 事务外的 fail-open catch | 第 7 | 边界纪律 |
 
 ## 4. 类的定位
 
@@ -32,9 +33,9 @@
 
 ## 5. 核心源码详解
 
-### 5.1 @Transactional 基础：注册建租户（AuthService.java:59-100）
+### 5.1 @Transactional 基础：注册建租户（AuthService.java:95-140）
 
-javadoc 先给业务动机（AuthService.java:59-63）：
+javadoc 先给业务动机（AuthService.java:95-98）：
 
 ```java
     /**
@@ -131,21 +132,29 @@ javadoc 先给业务动机（AuthService.java:59-63）：
 
 校验前置：`validateVariants`（:212-213，4.1 课读过）在进入事务前完成，注释 :211「validate before ANY write so a bad variant cannot leave a minted link」——事务保证原子，但最好的回滚是不需要回滚。
 
-**例 2：更新中的变体整表替换**（ShortLinkService.java:505-511）：
+**例 2：更新的单事务化**（ShortLinkService.java:947-973）：
 
 ```java
-        if (replacement != null) {
-            transactionTemplate.executeWithoutResult(status -> {
+        transactionTemplate.executeWithoutResult(status -> {
+            if (clearPassword) {
+                shortLinkMapper.update(null, new LambdaUpdateWrapper<ShortLink>()
+                        .eq(ShortLink::getId, link.getId())
+                        .set(ShortLink::getAccessPasswordHash, null));
+                link.setAccessPasswordHash(null);
+            }
+            if (clearTags) { /* 同款显式 SET NULL 清 tags */ }
+            shortLinkMapper.updateById(link);
+            if (replacement != null) {
                 variantMapper.delete(new LambdaQueryWrapper<LinkVariant>()
                         .eq(LinkVariant::getLinkId, link.getId()));
                 insertVariants(link, replacement);
-            });
-        }
+            }
+        });
 ```
 
-「删除全部旧行再插入新行」必须原子：删了没插上，A/B 分流凭空消失。注意主行 update（:504 的 updateById）在这个事务之外——它单语句本身原子，不需要陪着变体进事务。（本项目实现）刻意收窄事务边界：包得越少，持锁越短。
+旧版 update 是三段分离写：清密码、主行 updateById、变体整表替换各走各的，中途失败会留下「URL 改了但变体还是旧的」这类半截状态。批次 1（L-M1）把四步收进**一个**事务：密码清除（含 4.1 讲的显式 SET NULL）、tags 清除、主行更新、变体删旧插新同生共死——与 create、delete 的形状对齐。注意取舍的变化：旧注释讲「收窄事务边界、持锁越短」，新实现讲「用户眼里的一次 PATCH 必须是一个原子单位」；缓存副作用（写穿、双删、广播）仍全部留在事务外，这一点没变。事务边界的宽窄不是教条，是按「失败时用户会看到什么」定的。
 
-**例 3：删除**（ShortLinkService.java:543-558）：
+**例 3：删除**（ShortLinkService.java:1004-1018）：
 
 ```java
     /** Logical delete: the code stays reserved (uk_code) and cannot be reused.
@@ -168,7 +177,7 @@ javadoc 先给业务动机（AuthService.java:59-63）：
 
 javadoc 点名两种删除的语义差：link 逻辑删（deleted=1，码占位），variants 物理删（表没有 deleted 列，硬删）。两行必须同生共死——variants 残留会成为「孤儿变体」，抽签可能抽到一个已删链接的目标。事务之外是缓存清理四连：forget、evict、延迟双删、广播。注释明确「cache evictions stay outside」：Redis 操作不回滚，混进事务只会白占连接。
 
-### 5.4 幂等消费事务：dedupTx（ClickStatsService.java:42-113）
+### 5.4 幂等消费事务：dedupTx（ClickStatsService.java:54-141）
 
 ```java
     public ClickStatsService(ConsumedEventMapper consumedEventMapper,
@@ -179,9 +188,9 @@ javadoc 点名两种删除的语义差：link 逻辑删（deleted=1，码占位�
     }
 ```
 
-（ClickStatsService.java:42-54，节选）
+（ClickStatsService.java:54-80，节选）
 
-（框架行为）直接 new TransactionTemplate(平台事务管理器) 与注入 Spring 预置的 TransactionTemplate Bean 等价，只是显式命名 dedupTx 让调用处可读。消费 MQ 事件的整个 handle 在一个事务里完成五件事（consume，:66-113）：
+（框架行为）直接 new TransactionTemplate(平台事务管理器) 与注入 Spring 预置的 TransactionTemplate Bean 等价，只是显式命名让调用处可读。这个构造器现在造**两个**模板：写侧的 `dedupTx`（默认隔离级别）与读侧的 `snapshotTx`（`setReadOnly(true)` + `ISOLATION_REPEATABLE_READ`，S/N 波 S4-1）——后者只服务 stats() 的三读快照（11.3），注释明示「绝不与写侧共用一个模板」。消费 MQ 事件的整个 handle 在 dedupTx 里完成五件事（consume，:92-141）：
 
 ```java
         return Boolean.TRUE.equals(dedupTx.execute(status -> {
@@ -210,32 +219,42 @@ javadoc 点名两种删除的语义差：link 逻辑删（deleted=1，码占位�
      * back only the failed statement.
 ```
 
-又是语句级回滚。整个消费的幂等链条是：dedup 插入抢锁（撞键即已处理）→ 明细回填（UUID 事件才有，:79-93）→ 日计数 upsert → 维度 upsert（:97-105）→ webhook 入队（:110）。任何一步抛非重复异常，整个事务回滚，MQ 那边消息 nack 进 DLQ 等重放（模块 10）。注释（:106-109）把 webhook 入队也算进同一事务：「one eventId can never enqueue twice」。
+又是语句级回滚。整个消费的幂等链条是：dedup 插入抢锁（撞键即已处理）→ 明细回填（UUID 事件才有）→ 日计数 upsert → 维度 upsert（含 variant 桶）→ webhook 入队。任何一步抛非重复异常，整个事务回滚，MQ 那边消息 nack 进 DLQ 等重放（模块 10）。类注释把 webhook 入队也算进同一事务的理由写明：「one eventId can never enqueue twice」。
 
-WebhookService.recordClickDelivery 自己再分一次流（WebhookService.java:270-276）：DuplicateKeyException（并发路径已入队）打点吞掉；其他异常重新抛出，把整个 consume 事务带回滚。catch 的取舍粒度精确到异常类型。
+WebhookService.recordClickDelivery 自己再分一次流：DuplicateKeyException（并发路径已入队）打点吞掉；其他异常重新抛出，把整个 consume 事务带回滚。catch 的取舍粒度精确到异常类型。
 
-### 5.5 一个方法两种事务边界：WebhookAggregateFlusher（WebhookAggregateFlusher.java:32-36, 100-109）
+### 5.5 一个方法两种事务边界：WebhookAggregateFlusher（WebhookAggregateFlusher.java:27-42, 133-142）
 
 类 javadoc 是传播行为的活教材：
 
 ```java
  * PROPAGATION_REQUIRED on {@link TransactionTemplate}: the threshold call joins the
  * consume transaction (digest rows commit or roll back with the statistics), the
- * sweep opens its own. Re-flush is idempotent — a DuplicateKeyException on a part
- * insert means that part already shipped and is swallowed, so a concurrent
- * sweep/threshold race converges to one digest per part (D-C1-23).
+ * sweep opens its own.
+ *
+ * <p>Audit fix M3 — the drain contract: one (endpoint, window) drain is ONE
+ * transaction that (1) reads the window's buckets with row locks, (2) allocates
+ * the endpoint's next persistent flush sequence (V15, lf_webhook_flush_state),
+ * (3) inserts the digest deliveries under event ids
+ * {@code digest-{endpointId}-{windowStart}-{seq}}, and (4) deletes exactly the
+ * locked rows. Any failure — including a DuplicateKeyException — rolls the
+ * WHOLE drain back ...
 ```
 
-（WebhookAggregateFlusher.java:32-36）
+（WebhookAggregateFlusher.java:27-42，节选）
 
-flushWindow 有两个触发者：计数达到阈值（从 consume 事务内部调用）和定时扫窗（sweep，无事务环境）。同一个 `tx.executeWithoutResult`（:103-104）在两种环境下的行为不同：
+flushWindow 有两个触发者：计数达到阈值（从 consume 事务内部调用）和定时扫窗（sweep，无事务环境）。同一个 `tx.executeWithoutResult`（:135-136）在两种环境下的行为不同：
 
 - REQUIRED 传播：已有事务就加入。阈值触发时，digest 行与统计行同生共死——统计提交但 digest 丢了（或反之）都会造成「消费了却没通知」。
-- 无事务环境（sweep）就新开一个。每个窗口独立事务，注释（:112-114）说明中途崩溃只损失当前窗口，其余窗口下轮补上。
+- 无事务环境（sweep）就新开一个。每个窗口独立事务，中途失败只回滚当前窗口，其余窗口下轮补上。
 
-并发收口靠唯一索引：sweep 与阈值触发同时 flush 同一窗口，两边的 digest 插入只有一方成功，另一方撞 `uk_webhook_endpoint_event` 吞 DuplicateKey 收敛。三个幂等设计（本节 5.3/5.4/5.5）用的是同一件武器。
+并发收口在 M3 后换了武器：旧版靠「撞唯一索引后吞 DuplicateKey 并删快照」，被审计证明会丢两类点击（快照后落到已快照桶的增量、已冲窗的迟到新桶）。新版 drain 在一个事务里**锁行读桶 → 分配 flush 序号 → 按序号生成 eventId 插投递行 → 只删锁定的行**：锁定的桶在 drain 期间的新增点击会阻塞到提交后落成新行，迟到桶用新序号生成新 eventId 不再撞车。任何失败（含 DuplicateKey）整 drain 回滚、序号不消耗、重试复现同一批 eventId（13.2 深讲）。对照 5.3/5.4：幂等武器从「唯一索引 + 吞异常」升级为「行锁 + 事务内序号」，适用面是「同一批数据会被两个触发源同时处理」。
 
-### 5.6 fail-open catch 为什么必须在事务外（ShortLinkService.java:573-581）
+### 5.6 锁序事务：先锁行再干活（SessionService / TeamService）
+
+批次 2 与修复波带来第三种事务形态：**关键区的第一条语句是锁行**。`SessionService` 的每个 mint/revoke 关键区都以 `userAccountMapper.selectForUpdate` 开场，`TeamService` 的成员写路径以 `tenantMapper.selectForUpdate` 开场，全局锁序统一为 租户行 → 用户行 → refresh 行。锁内的一切复核都用锁定当前读（`selectForUpdate`、`selectByHashForUpdate`、`selectActiveAdminIdsForUpdate`），不读 RR 快照——M2 的教训就是护栏在锁外快照里数 ADMIN 被并发击穿。计数器类字段（token_version）只经列内自增 SQL 移动。这类事务的完整语义在 5.4 展开；本课只需记住它的判据：**当正确性依赖「判定与写入之间世界不能变」时，事务的形状是锁先行，而不是先读后写再祈祷**。
+
+### 5.7 fail-open catch 为什么必须在事务外（ShortLinkService.java:1030-1050）
 
 ```java
             try {
@@ -276,7 +295,7 @@ flushWindow 有两个触发者：计数达到阈值（从 consume 事务内部�
 走一遍一次完整跳转的点击落账（全链路成功）。
 
 1. `GET /r/AbC1234` 走完 Filter 链与门禁，拿到 Redirect（3.2 课第 8 步之后）。
-2. resolveForGet 调 `clickRecordService.recordClick(...)`（ShortLinkService.java:574）。
+2. resolveForGet 调 `clickRecordService.recordClick(...)`（ShortLinkService.java:1033 一带）。
 3. 代理开启事务。插 lf_click_log 行（sync 开，ClickRecordService.java:56-58），拿到自增 id=880。
 4. 组装 eventId="log-880" 的 ClickEvent，序列化成 JSON，插 lf_outbox 行 PENDING（:60-74）。
 5. 方法正常返回，代理提交。两行同生死。

@@ -46,95 +46,71 @@
 
 ## 5. 核心源码详解
 
-### 5.1 create：限流、夹带、幂等调度
+### 5.1 create：重放先行、限流在后
 
 ```java
-public CreateShortLinkResponse create(CreateShortLinkRequest request, String idempotencyKey) {
-    AuthUser user = requireUser();
-    LinkForgeProperties.RateLimit rl = properties.getRateLimit();
-    RateLimitDecision decision = rateLimiter.acquire(
-            RateLimitKeys.sw(rl.getKeyPrefix(), "create:user:" + user.getUserId()),
-            rl.getCreateMax(), rl.getCreateWindowSeconds());
-    if (!decision.allowed()) {
-        meterRegistry.counter("linkforge.ratelimit.rejected", "entry", "create").increment();
-        throw new RateLimitedException(decision.retryAfterSeconds());
-    }
-
-    rejectSmuggledAttribution(request.getUnknown());
-```
-（`src/main/java/com/linkforge/link/service/ShortLinkService.java:129-140`）
-
-四步各司其职。
-
-1. `requireUser()`（:130）从 ThreadLocal 取登录态，没有就 401。实现见模块 5.3。
-2. 限流键是 `create:user:{userId}`（:133），滑动窗口默认 30 次 / 60 秒（`application.yml:194-195`）。注意按用户限，不是按 IP，因为创建是登录后的操作。
-3. 被限流抛 `RateLimitedException`，全局异常处理器翻译成 429 加 Retry-After 头。
-4. `rejectSmuggledAttribution` 检查 6.1 课讲的 `unknown` Map，`utm` 前缀和 9 个广告归因 id 直接 400（:871-878）。
-
-接下来是本课的核心：幂等调度。
-
-### 5.2 幂等两段式的第一段：抢锁
-
-```java
-if (idempotencyKey != null && !idempotencyKey.isBlank()) {
-    String idemKey = rl.getKeyPrefix() + "idem:" + user.getUserId() + ":" + idempotencyKey;
-    CreateShortLinkResponse replayed = replayIdempotentCreate(idemKey, user);
-    if (replayed != null) {
-        return replayed;
-    }
-    /**
-     * D-C4-16 fail-open: with Redis down the pending lease cannot be taken, so
-     * the acquire is treated as won — two concurrent same-key creates can both
-     * run during an outage, which beats hard-failing every link write.
-     */
-    boolean acquired;
-    try {
-        acquired = Boolean.TRUE.equals(stringRedisTemplate.opsForValue()
-                .setIfAbsent(idemKey, "pending", Duration.ofSeconds(5)));
-    } catch (Exception ex) {
-        log.warn("idempotency acquire failed for {}: {}", idemKey, ex.getMessage());
-        meterRegistry.counter("linkforge.cache.failopen", "op", "idem_acquire").increment();
-        acquired = true;
-    }
-    if (acquired) {
-        return doCreate(request, user, idemKey);
-    }
-```
-（`src/main/java/com/linkforge/link/service/ShortLinkService.java:141-163`）
-
-幂等键的完整形状是 `{rateLimit前缀}idem:{userId}:{客户端key}`（:142）。userId 进入键名是故意的：不同用户撞同一个 key 互不影响。
-
-执行顺序值得精读。
-
-1. 先查值（:143，replay）。如果键里已经存了终值（一个短码），直接把那条链查出来返回，这就是「同 key 第二次请求拿到第一次的结果」。
-2. 查不到（键不存在、是空串、或还在 pending 状态，`ShortLinkService.java:192-194`），尝试 SETNX 写入 `"pending"`，TTL 5 秒（:154-155）。写成功表示「我是这次创建的执行者」。
-3. SETNX 抛异常时把 `acquired` 置 true（:156-160）。这是第一处 fail-open：Redis 挂了宁可让两个并发请求都去创建，也不让所有创建一起失败。注释原文就是上面的 D-C4-16 段。
-
-`replayIdempotentCreate` 有一个安全细节（:195-198）：从 Redis 拿到短码后还要回库确认这条链属于当前用户，不是别人的行。租户隔离在幂等重放路径上也不豁免。
-
-### 5.3 第二段：输家的等待与 503
-
-```java
-    for (int i = 0; i < 10; i++) {
-        sleepQuietly(200);
-        CreateShortLinkResponse resolved = replayIdempotentCreate(idemKey, user);
-        if (resolved != null) {
-            return resolved;
+    public CreateShortLinkResponse create(CreateShortLinkRequest request, String idempotencyKey) {
+        AuthUser user = requireUser();
+        LinkForgeProperties.RateLimit rl = properties.getRateLimit();
+        boolean keyed = idempotencyKey != null && !idempotencyKey.isBlank();
+        String idemKey = keyed ? rl.getKeyPrefix() + "idem:" + user.getUserId() + ":" + idempotencyKey : null;
+        String fingerprint = keyed ? createFingerprint(request) : null;
+        if (keyed) {
+            // Batch 3b: a settled key is answered BEFORE the create bucket is
+            // touched — a replay no longer burns create quota (audit low item),
+            // and a body mismatch is a 409 here instead of a silent replay of
+            // the first link. A miss falls through to the normal path below.
+            CreateShortLinkResponse replayed = replayIdempotentCreate(idemKey, user, request, fingerprint);
+            if (replayed != null) {
+                rejectSmuggledAttribution(request.getUnknown());
+                return replayed;
+            }
         }
+        RateLimitDecision decision = rateLimiter.acquire(
+                RateLimitKeys.sw(rl.getKeyPrefix(), "create:user:" + user.getUserId()),
+                rl.getCreateMax(), rl.getCreateWindowSeconds());
+        if (!decision.allowed()) {
+            meterRegistry.counter("linkforge.ratelimit.rejected", "entry", "create").increment();
+            throw new RateLimitedException(decision.retryAfterSeconds());
+        }
+        rejectSmuggledAttribution(request.getUnknown());
+        // …（keyed 时抢 pending 租约，见 5.3）
+        return doCreate(request, user, null, null);
     }
-    // The winner has not settled its code; forcing a second create could mint
-    // two links under one Idempotency-Key, so the caller retries instead.
-    throw new BizException(503, "idempotent create still in progress, retry later");
-}
-return doCreate(request, user, null);
 ```
-（`src/main/java/com/linkforge/link/service/ShortLinkService.java:164-175`）
+（`src/main/java/com/linkforge/link/service/ShortLinkService.java` 的 create 方法，节选）
 
-没抢到锁的请求是「输家」。它不自己创建，而是轮询等赢家的结果：最多 10 次、每次睡 200 毫秒、合计约 2 秒。等到终值就原样返回赢家那条链。等到超时还不落，抛 503 让客户端稍后重试。注释把 503 的理由说透了：抢着再造一条，一个 Idempotency-Key 就会产出两条链，幂等契约彻底破产。
+批次 3b 把顺序改了，顺序本身就是本课的第一个知识点：
 
-pending 锁只有 5 秒 TTL，这是自愈设计：赢家崩溃后锁自动消失，下一个同 key 请求能重新抢锁执行。5 秒对一次本地创建绰绰有余。
+1. `requireUser()` 从 ThreadLocal 取登录态，没有就 401。实现见模块 5.3。
+2. **带 key 先查结算**：键已结算且请求体指纹一致 → 直接返回第一次的结果，**不碰限流桶**。重试是幂等的回声，不该消耗新建配额——客户端在限流边缘重试时被 429 打断、永远拿不回第一次成功的结果，是真实存在过的体验 bug。指纹不一致 → 当场 409（5.2）。
+3. 未命中才轮到限流：键 `create:user:{userId}`，滑动窗口默认 30 次 / 60 秒。注意按用户限，不是按 IP，因为创建是登录后的操作。被限流抛 `RateLimitedException`，全局异常处理器翻译成 429 加 Retry-After 头。
+4. `rejectSmuggledAttribution` 检查 6.1 课讲的 `unknown` Map，`utm` 前缀和 9 个广告归因 id 直接 400。注意它在重放返回前也跑一遍：重放不是校验的后门。
 
-无幂等头的请求（:175）直接进 `doCreate`，幂等键传 null。
+### 5.2 幂等指纹：同 key 异体是 409，不是静默重放（批次 3b + 修复波 M4）
+
+幂等键只回答「是不是同一个键」，指纹回答「是不是同一个请求」。键的完整形状是 `{keyPrefix}idem:{userId}:{客户端key}`——userId 进入键名是故意的：不同用户撞同一个 key 互不影响。指纹由 `createFingerprint`（方法上方有整段 M4 注释，必读）现算，格式代号 `create-v2`：
+
+- **规范形**：固定字段顺序、每字段长度前缀的拼接串——originalUrl、customCode、expireAt、title、UTM 五字段（经 UtmMerger 规范化）、tags（规范化后的存储形），变体按 key 排序后逐个纳入（key、url、weight、matchRule）。长度前缀防的是字段边界歧义（"ab"+"c" 与 "a"+"bc" 不能同指纹）。
+- **口令分量（M4）**：旧指纹（create-v1）只记「设没设口令」一个布尔——同 key 把口令从 A 改成 B 重试，指纹不变，系统会把配着口令 A 的链当作 B 的创建结果返回，这是审计抓到的真 bug。新版纳入 `HMAC-SHA256(pepper, trim后的口令字节)` 的 hex：口令不同指纹必不同；明文与裸哈希都不进指纹与 Redis（低熵口令的裸 SHA-256 等于把口令挂出去供人离线爆破，HMAC 的密钥 pepper 在部署侧，`LINKFORGE_IDEMPOTENCY_PEPPER`）。HMAC 的输入是 **trim 后**的字节，与存储侧 `encodeAccessPassword` 的归一化对齐——「会存成同一口令的请求必须同指纹」。未设口令记 null 标记，设与未设永远不同指纹。指纹串里还带 `pv1` 段标记 pepper 版本。
+- **结算信封**：doCreate 成功后经 Lua CAS 把键从 `pending` 结算为 `v3:{fingerprint}:{code}`（TTL 24 小时）。信封带版本号，是给格式演进留的口子。
+
+`replayIdempotentCreate` 读到已结算值后的判定链（按顺序）：
+
+1. 值是 `pending`/空/不存在 → 未结算，返回 null 走正常路径；Redis 读失败 → fail-open 返回 null（D-C4-16），创建照常。
+2. `v3:` 信封 → 取出存储指纹与本次指纹比对：不一致抛 **409**，异常 message 以 `IDEMPOTENCY_KEY_REUSED:` 开头（稳定的机器可读前缀，客户端与测试都认它）。
+3. `v2:` 旧信封（3b 首版、无口令分量）→ 无口令请求按旧版 create-v1 指纹验过仍可重放；**带口令请求直接 409 fail-closed**——旧指纹证明不了口令相等，宁可让用户换个新 key，也不冒「返回别人口令的链」的险。修复波材料里「旧指纹一律 fail-closed」的说法不准确：fail-closed 只针对带口令的重试，无口令旧记录仍可验旧指纹重放。pre-3b 的裸 code（无信封）同理。
+4. 指纹过关后还要回库验属主：按 code 查行，`createdBy` 不是当前用户 → 返回 null（当作未结算）。租户隔离在重放路径上也不豁免。
+
+### 5.3 第二段：抢在途租约，输家等待与 503
+
+未命中结算的 keyed 请求先抢在途租约：`SET idemKey "pending" NX`，TTL 5 秒。抢到 → 进 `doCreate(request, user, idemKey, fingerprint)`，成功后由它结算信封。Redis 抛异常时 `acquired` 置 true 放行（fail-open，注释 D-C4-16：Redis 挂时宁可两个并发同 key 都跑，也不让所有创建陪葬）。
+
+没抢到的请求是「输家」。它不自己创建，而是轮询等赢家的结算：最多 10 次、每次睡 200 毫秒、合计约 2 秒，每轮走一遍 5.2 的完整重放判定（包括指纹比对——输家若与赢家异体，等到的不是重放而是 409）。等到超时还不落，抛 503 `idempotent create still in progress, retry later` 让客户端稍后重试。注释把 503 的理由说透了：抢着再造一条，一个 Idempotency-Key 就会产出两条链，幂等契约彻底破产。
+
+pending 租约只有 5 秒 TTL，这是自愈设计：赢家崩溃后租约自动消失，下一个同 key 请求能重新抢锁执行。5 秒对一次本地创建绰绰有余。
+
+无幂等头的请求直接进 `doCreate(request, user, null, null)`，整套机制零参与。
 
 ### 5.4 doCreate：全部校验在任何写之前
 
@@ -255,13 +231,13 @@ private CreateShortLinkResponse doCreate(CreateShortLinkRequest request, AuthUse
 3. `clearAbsent`（:268）：万一这个码曾被误判进过负缓存，先删掉，否则跳转会被 absent 键 404 拦住。
 4. `cacheUrl`（:269）：把 URL 写进 L1（Caffeine）和 L2（Redis）两级缓存，第一个跳转请求不用打库。TTL 带抖动。
 5. meter 计数（:270）：`linkforge.links.created` 供监控面板使用。
-6. 幂等终值（:271-281）：把短码写回幂等键，TTL 86400 秒即 24 小时（`application.yml:202`）。这是第二段式的终点。
+6. 幂等结算：经 Lua 脚本 CAS 把键从 `pending` 改写为信封 `v3:{指纹}:{短码}`（值仍是 pending 才写，防止覆盖别人的结算），TTL 86400 秒即 24 小时。这是两段式的终点，信封格式见 5.2。
 
 六个动作的失败语义与第 9 节呼应，此处先记结论：前五个动作都不在事务里，任何一个失败都不会撤销已提交的链。
 
 ## 6. 技术原理补充
 
-**幂等键两段式（本项目实现）**。是什么：Redis 键的值从 `"pending"` 过渡到短码终值的两阶段状态机。为什么需要：POST 不幂等，网络层重试、客户端双击、网关重发都会造成重复创建。不用会怎样：同一次点击产出两条链，报表与物料双双混乱。优点：实现只有一个键、读写各一次。缺点：依赖 Redis 可用性，且终值只保留 24 小时，一天后同 key 重发仍是新链。
+**幂等键两段式（本项目实现）**。是什么：Redis 键的值从 `"pending"` 过渡到结算信封 `v3:{指纹}:{短码}` 的两阶段状态机。为什么需要：POST 不幂等，网络层重试、客户端双击、网关重发都会造成重复创建。不用会怎样：同一次点击产出两条链，报表与物料双双混乱。批次 3b/M4 在两段式之上加了指纹维度：同 key 同体才是重放，同 key 异体是 409。优点：实现只有一个键、读写各一次。缺点：依赖 Redis 可用性，且结算只保留 24 小时，一天后同 key 重发仍是新链。
 
 **不对称 fail-open（本项目实现，D-C4-16）**。两处 Redis 异常的两处选择并不相同。第一处 acquire fail-open 放行并发双建，理由是「Redis 挂了不能让所有创建都挂」。第二处 settle fail-open 放弃写终值，键停在 pending 直到 5 秒 TTL 过期。后果不对称：
 

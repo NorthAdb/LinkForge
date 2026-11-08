@@ -17,16 +17,17 @@
 
 | 文件 | 职责 | 阅读顺序 | 为什么读它 |
 |------|------|----------|------------|
-| `src/main/java/com/linkforge/common/ratelimit/RedisRateLimiter.java`（看 :98-104） | 限流器 fail-open | 第 1 | warn 与指标并用的范本 |
+| `src/main/java/com/linkforge/common/ratelimit/RedisRateLimiter.java`（看 :117-127） | 限流器 fail-open | 第 1 | warn 与指标并用的范本 |
 | `src/main/java/com/linkforge/stats/service/ClickOutboxRelay.java`（看 :61-71） | outbox 投递循环 | 第 2 | info 与 warn 的分工范本 |
 | `src/main/java/com/linkforge/common/util/ClientIps.java`（24 行） | 客户端 IP 解析 | 第 3 | 本节主角 |
-| `src/main/java/com/linkforge/observability/HttpUriTagAllowList.java`（51 行） | 指标 uri 标签白名单 | 第 4 | 本节主角 |
-| `src/main/java/com/linkforge/link/support/CsvFormat.java`（18 行） | CSV 转义 | 第 5 | 静态工具类范本 |
-| `src/main/resources/application.yml`（看 :241-244） | 日志级别配置 | 第 6 | 级别收口 |
+| `src/main/java/com/linkforge/common/web/CorrelationIdFilter.java`（103 行） | 请求关联 ID（S/N 波 N1） | 第 4 | cid 的注入与传播 |
+| `src/main/java/com/linkforge/observability/HttpUriTagAllowList.java`（51 行） | 指标 uri 标签白名单 | 第 5 | 本节主角 |
+| `src/main/java/com/linkforge/link/support/CsvFormat.java`（52 行） | CSV 转义（含公式中和 escapeSpreadsheet，M8） | 第 6 | 静态工具类范本 |
+| `src/main/resources/application.yml`（看 :283-287） | 日志级别与 cid 格式 | 第 7 | 级别与格式收口 |
 
 ## 4. 类的定位
 
-三样东西都是横切关注点：日志看所有类，IP 解析被限流和点击归因共用，uri 白名单管全部 HTTP 指标。ClientIps 在 common/util，HttpUriTagAllowList 在 observability 包（该包还有 BacklogGauges，模块 14 讲）。主源码里 22 个类贴了 `@Slf4j`（实测 grep 计数），集中在 service、filter、relay 这类「出事要留痕」的层。
+几样东西都是横切关注点：日志看所有类，IP 解析被限流和点击归因共用，uri 白名单管全部 HTTP 指标，cid 串起一次请求的全部日志。ClientIps 在 common/util，CorrelationIdFilter 在 common/web，HttpUriTagAllowList 在 observability 包（该包还有 BacklogGauges，模块 14 讲）。主源码里 25 个类贴了 `@Slf4j`（实测 grep 计数），集中在 service、filter、relay 这类「出事要留痕」的层。
 
 ## 5. 核心源码详解
 
@@ -41,7 +42,7 @@ private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(Re
 
 ### 5.2 四条日志纪律（全部来自真实代码）
 
-**纪律一：降级 warn 不打全栈，打关键标识。** RedisRateLimiter.java:98-104：
+**纪律一：降级 warn 不打全栈，打关键标识。** RedisRateLimiter.java:117-127：
 
 ```java
     private RateLimitDecision failOpen(String key, String reason, Exception ex) {
@@ -74,18 +75,22 @@ Redis 挂掉时限流器放行（fail-open），每个失败的键都 warn 一�
 
 对照着看三层。单条投递失败：warn，带 event 标识与第几次尝试，可定位某一条的反复失败。整轮成功：info，只报数量 "delivered N events"，不逐条流水。整轮崩了：warn 一行。同一个类里 info 与 warn 的边界是「这次结果需不需要人看一眼」。
 
-**纪律三：终态 error 用结构化字段而不是堆栈。** outbox 重试超限进入 FAILED 时（ClickOutboxRelay.java:50-52）记 error，内容是 "outbox event={} exceeded {} attempts, marked FAILED"，字段齐整可检索。真正打全栈的 error 只有一处，即 2.1 课讲过的未知异常兜底（GlobalExceptionHandler.java:75），因为那时你不知道错在哪，必须留现场。
+**纪律三：终态 error 用结构化字段而不是堆栈；全栈点有且仅有两个且互斥。** outbox 重试超限进入 FAILED 时（ClickOutboxRelay.java:50-52）记 error，内容是 "outbox event={} exceeded {} attempts, marked FAILED"，字段齐整可检索。真正打全栈的 error 收口（S/N 波 N1 定型）：未知异常走兜底分支记一次；业务异常走 handleBiz 且**仅当 5xx 或带 cause** 时记一次（GlobalExceptionHandler.java:35-56）——代价是抛出点不得自记同栈（Bloom 重建失败的历史双记就是这样清干净的，见 2.1 与 8.3）。两个全栈点永远互斥：一个异常只会被其中一个 handler 接住，绝不双记。
 
-**纪律四：级别在配置收口，框架噪音压到 WARN。** application.yml:241-244：
+**纪律四：级别在配置收口，框架噪音压到 WARN，cid 骑在级别格式串上。** application.yml:279-285：
 
 ```yaml
 logging:
   level:
     com.linkforge: INFO
     com.baomidou.mybatisplus: WARN
+  # S/N wave (audit N1): every log line carries the request correlation id
+  # (CorrelationIdFilter fills the MDC; empty outside a request).
+  pattern:
+    level: "%5p [%X{cid}]"
 ```
 
-业务代码 INFO，MyBatis-Plus 内部压到 WARN，否则它会把每条 SQL 都打出来。测试 profile 更进一步，全项目压到 WARN（application-test.yml:67-69），测试输出只关心断言结果。
+业务代码 INFO，MyBatis-Plus 内部压到 WARN，否则它会把每条 SQL 都打出来。测试 profile 更进一步，全项目压到 WARN（application-test.yml 一带），测试输出只关心断言结果。cid 的注入点选得刁：`pattern.level` 是「级别字段的渲染格式」，对控制台与文件两个 appender 都生效，一处配置全覆盖——机制细节见 5.6。
 
 ### 5.3 ClientIps：带信任门控的 IP 解析（ClientIps.java:5-24）
 
@@ -193,7 +198,24 @@ XFF（X-Forwarded-For）是代理链逐跳追加的请求头：客户端声称�
 
 （CsvFormat.java:9-17，javadoc 自述 RFC4180 风格加「单测无 Spring」）
 
-逻辑三段：空值返回空串；含逗号、双引号或换行才加引号包裹，包裹前把内部双引号翻倍转义；其余原样返回。它与 ClientIps 同一风格：final 类、私有构造、全静态方法、无依赖、纯函数（输入决定输出，不碰任何可变状态），因此不需要成为 Bean。CSV 导入导出的完整流程在模块 06 展开。
+逻辑三段：空值返回空串；含逗号、双引号或换行才加引号包裹，包裹前把内部双引号翻倍转义；其余原样返回。它与 ClientIps 同一风格：final 类、私有构造、全静态方法、无依赖、纯函数（输入决定输出，不碰任何可变状态），因此不需要成为 Bean。
+
+类里还有第二个方法 `escapeSpreadsheet`（审计修复 M8）：先按 escape 处理 CSV 结构，再看首个非空白字符——若是 `=`、`+`、`-`、`@`、Tab 或 CR（Excel/LibreOffice 会当公式求值的六类开头），在最前面加一个单引号中和。导出给人用表格软件打开的每一格都要过它（链接导出与原始点击导出，见 6.3 与 11.3）；注意它不是 escape 的替代：两者语义不同，escape 管结构、escapeSpreadsheet 管求值，且 escapeSpreadsheet 只在导出侧用，导入侧不用。CSV 导入导出的完整流程在模块 06 展开。
+
+### 5.6 CorrelationIdFilter：一次请求的对账键（CorrelationIdFilter.java:1-103，S/N 波 N1）
+
+痛点：服务端日志与客户端手里只有一个「提交时间」可对，排障靠猜。`CorrelationIdFilter` 给每次请求发一个短 ID 并让它出现在四个地方：日志行、响应头、错误日志的字段、客户端可见的引用。实现要点：
+
+```java
+@Component
+@Order(Ordered.HIGHEST_PRECEDENCE)
+public class CorrelationIdFilter extends OncePerRequestFilter {
+```
+
+- **次序**：`HIGHEST_PRECEDENCE` 保证它在包括安全链在内的全部过滤器之前运行——安全过滤器直写的 503 日志也要带 cid。`static String currentId(HttpServletRequest)` 给 handler 与过滤器取当前值：先读请求属性、缺失时回落 MDC（类注释交代过测试里属性存根与 MDC 脱节的坑，所以双通道读取）。
+- **不信任入站值**：请求头 `X-Correlation-Id` 即便带了也**不采信**，一律本地 `UUID.randomUUID()` 生成（类注释原文：ids are server-minted so a caller cannot smuggle arbitrary text into log lines）。理由：采信客户端值等于把日志伪造与注入的口子开给任何人。
+- **三路携带**（类注释原文）：MDC 的 `cid` 键（`doFilterInternal` 里 put、finally 里 remove）；请求属性（handler 记录失败日志时读它，见 2.1）；响应头 `X-Correlation-Id` 回写（客户端可以拿它来对账）。日志侧的消费点是 yml 的 `pattern.level: "%5p [%X{cid}]"`——把 cid 塞进「级别字段的渲染格式」，于是每行日志长这样：`ERROR [3f9a…] …`，控制台与文件 appender 同时生效，请求外（定时任务等）cid 为空显示 `[]`。
+- **边界**：cid 只活在一次请求内，不进 JWT、不进数据库、不承诺跨服务传播——它是个对账键，不是追踪系统。多实例要真追踪是另一个量级的工作（批 4 候选池），这里刻意不做大。
 
 ## 6. 技术原理补充
 
@@ -215,7 +237,7 @@ XFF（X-Forwarded-For）是代理链逐跳追加的请求头：客户端声称�
 
 ## 8. 项目中的真实执行过程
 
-**一次跳转请求的 IP 解析。** 匿名用户请求 `GET /r/AbC123x`。请求先过限流（ShortLinkService.java:604-606）：
+**一次跳转请求的 IP 解析。** 匿名用户请求 `GET /r/AbC123x`。请求先过限流（ShortLinkService 的 resolveForGet 段）：
 
 ```java
         RateLimitDecision decision = rateLimiter.acquire(
@@ -223,7 +245,7 @@ XFF（X-Forwarded-For）是代理链逐跳追加的请求头：客户端声称�
                 rl.getRedirectMax(), rl.getRedirectWindowSeconds());
 ```
 
-默认配置下 `trustXff=false`，`resolve` 返回 socket 地址。攻击者带着伪造的 `X-Forwarded-For: 8.8.8.8` 来，键里仍是他的真实地址，每分钟 300 次（redirect-max，application.yml:200）的上限躲不掉。运维在可信反代后打开 `LINKFORGE_TRUST_XFF=true` 后，同一行代码改取 XFF 最左值，限流对象才变成真实客户端。
+默认配置下 `trustXff=false`，`resolve` 返回 socket 地址。攻击者带着伪造的 `X-Forwarded-For: 8.8.8.8` 来，键里仍是他的真实地址，每分钟 300 次（redirect-max，见 LinkForgeProperties.RateLimit）的上限躲不掉。运维在可信反代后打开 `LINKFORGE_TRUST_XFF=true` 后，同一行代码改取 XFF 最左值，限流对象才变成真实客户端。
 
 **一次 Prometheus 抓取的标签过滤。** 抓取器请求 `/actuator/prometheus`。此前某个客户端在 TLS 握手后立刻断连，这条失败请求的 uri 不在 21 个模板里。`httpUriTagFilter` 把它的 uri 改写成 UNKNOWN，抓取到的指标里它并入 `http_server_requests_seconds_count{uri="UNKNOWN"}`。Grafana 跳转 SLO 面板（slo 桶配置见 application.yml:43-48）读到的每个 uri 都干净可聚合。
 
@@ -237,7 +259,7 @@ XFF（X-Forwarded-For）是代理链逐跳追加的请求头：客户端声称�
 ## 10. 本节总结
 
 - `@Slf4j` 生成日志字段，SLF4J 门面加 Logback 实现，级别在 yml 收口。
-- 四条纪律：warn 一行带标识不打全栈；info 记里程碑只记数量；error 留给终态与未知异常（唯一全栈点是全局兜底）；框架噪音压 WARN。
+- 四条纪律：warn 一行带标识不打全栈；info 记里程碑只记数量；error 留给终态，全栈点有且仅有两个且互斥（兜底 + handleBiz 的 5xx/cause）；框架噪音压 WARN，cid 骑 pattern.level 注入每行日志。
 - `ClientIps.resolve` 默认不信 XFF（伪造可绕过按 IP 限流），信任由调用方传参；四个调用方口径一致。
 - `HttpUriTagAllowList` 用 MeterFilter 把白名单外的 uri 塌缩成 UNKNOWN，防指标基数爆炸，塌缩方向安全。
 - `CsvFormat` 是纯静态工具范本，转义规则三段式。
@@ -246,7 +268,7 @@ XFF（X-Forwarded-For）是代理链逐跳追加的请求头：客户端声称�
 
 **练习 1（执行过程）**：`trustXff=false` 时，攻击者请求头带 `X-Forwarded-For: 8.8.8.8` 注册账号，注册限流键里算的是什么 IP？若运维误开 `LINKFORGE_TRUST_XFF=true` 且前面没有反代，又会怎样？
 
-答案解析：false 时 `resolve` 跳过 XFF 分支返回 `request.getRemoteAddr()`（ClientIps.java:22），伪造头无效，键用攻击者真实地址（AuthService.java:68 的调用点）。误开且无反代时，XFF 是攻击者自己写的值，`split(",")[0]` 取到 8.8.8.8，他可以每次请求换一个假 IP，注册限流被绕过。这就是默认关闭的依据（LinkForgeProperties.java:235 注释 "spoofable otherwise"）。
+答案解析：false 时 `resolve` 跳过 XFF 分支返回 `request.getRemoteAddr()`（ClientIps.java:22），伪造头无效，键用攻击者真实地址（AuthService 登录/注册的调用点）。误开且无反代时，XFF 是攻击者自己写的值，`split(",")[0]` 取到 8.8.8.8，他可以每次请求换一个假 IP，注册与登录限流都被绕过。这就是默认关闭的依据（LinkForgeProperties 的 trust-xff 注释 "spoofable otherwise"）。
 
 **练习 2（概念理解）**：把下面三条日志按本项目纪律指定级别并说明理由。A. 单条 outbox 投递超时进入退避。B. relay 一轮投递完成 12 条。C. 同一条 outbox 第 30 次尝试失败，标记 FAILED。
 

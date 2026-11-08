@@ -2,7 +2,7 @@
 
 ## 1. 本节学习目标
 
-1. 盘点项目全部 8 个 Controller，说出每个类的路由前缀、端点清单和依赖的 Service。
+1. 盘点项目全部 9 个 Controller，说出每个类的路由前缀、端点清单和依赖的 Service。
 2. 掌握五类参数绑定：`@PathVariable`、`@RequestParam`、`@RequestHeader`、`@RequestBody`、`MultipartFile`。
 3. 背下项目的状态码约定：404/409/410/429/503 各在什么场景抛出、源码在哪一行。
 4. 理解 Jackson 在本项目的三个实践点：未知属性捕获、LocalDateTime 序列化、record DTO。
@@ -19,18 +19,19 @@
 
 | 文件 | 职责 | 阅读顺序 | 为什么读它 |
 |------|------|----------|------------|
-| `link/controller/ShortLinkController.java`（128 行） | 短链 CRUD+CSV+QR 入口 | 第 1 | 端点最多、绑定方式最全 |
+| `link/controller/ShortLinkController.java`（135 行） | 短链 CRUD+CSV+QR 入口 | 第 1 | 端点最多、绑定方式最全 |
 | `link/controller/RedirectController.java`（123 行） | `/r/{code}` 跳转入口 | 第 2 | 非 JSON 响应的代表 |
 | `link/controller/HealthController.java`（15 行） | 探活端点 | 第 3 | 最小 Controller 样板 |
 | `link/controller/BloomAdminController.java`（49 行） | Bloom 重建触发 | 第 4 | Service 层做二次授权的样板 |
-| `stats/controller/StatsController.java`（66 行） | 统计三端点 | 第 5 | 枚举白名单校验 |
-| `user/controller/AuthController.java`（33 行） | 注册/登录 | 第 6 | `@Valid` + `HttpServletRequest` |
-| `apikey/controller/ApiKeyController.java`（54 行） | API Key 管理 | 第 7 | DTO 嵌套类组织法 |
-| `webhook/controller/WebhookController.java`（58 行） | Webhook 配置 | 第 8 | PUT upsert 语义 |
-| `link/dto/CreateShortLinkRequest.java`（78 行） | 创建入参 | 第 9 | Jackson 未知属性捕获 |
-| `config/OpenApiConfig.java`（41 行） | OpenAPI 文档信息 | 第 10 | springdoc 装配 |
+| `stats/controller/StatsController.java`（95 行） | 统计五端点 | 第 5 | 枚举白名单校验 + CSV 导出响应头 |
+| `user/controller/AuthController.java`（99 行） | 注册/登录/会话/改密/接受邀请 | 第 6 | `@Valid` + `HttpServletRequest` |
+| `user/controller/TeamController.java`（75 行） | 团队成员与邀请管理（批次 2 新增） | 第 7 | requireUser 自查的又一现场 |
+| `apikey/controller/ApiKeyController.java`（54 行） | API Key 管理 | 第 8 | DTO 嵌套类组织法 |
+| `webhook/controller/WebhookController.java`（58 行） | Webhook 配置 | 第 9 | PUT upsert 语义 |
+| `link/dto/CreateShortLinkRequest.java`（78 行） | 创建入参 | 第 10 | Jackson 未知属性捕获 |
+| `config/OpenApiConfig.java`（41 行） | OpenAPI 文档信息 | 第 11 | springdoc 装配 |
 
-路径缩写：`link/` = `src/main/java/com/linkforge/link/`，下同。本节覆盖 8 个 Controller 的全部 28 个端点。
+路径缩写：`link/` = `src/main/java/com/linkforge/link/`，下同。本节覆盖 9 个 Controller 的全部 41 个端点（映射注解计数）。
 
 ## 4. 类的定位
 
@@ -38,18 +39,21 @@ Controller 是项目的「门面层」：HTTP 进来先到 Filter 链做认证�
 
 ## 5. 核心源码详解
 
-### 5.1 八个 Controller 全景表
+### 5.1 九个 Controller 全景表
 
 | Controller | 路由前缀 | 端点数 | 注入的 Service | 行数 |
 |------------|----------|--------|----------------|------|
-| ShortLinkController | `/api/links` | 11 | ShortLinkService, QrMaterialService | 128 |
-| RedirectController | `/r/{code}` | 3 | ShortLinkService, LinkAccessTokens | 123 |
+| ShortLinkController | `/api/links` | 11 | ShortLinkService, QrMaterialService | 135 |
+| RedirectController | `/r/{code}` | 2 | ShortLinkService, LinkAccessTokens | 123 |
 | HealthController | `/api/health` | 1 | 无 | 15 |
 | BloomAdminController | `/api/admin/bloom` | 1 | UserAccountMapper, CodeBloomFilter | 49 |
-| StatsController | `/api/links/{code}/stats*` | 3 | ShortLinkService, ClickStatsService | 66 |
-| AuthController | `/api/auth` | 2 | AuthService | 33 |
+| StatsController | `/api/links/{code}/stats*` | 5 | ShortLinkService, ClickStatsService | 95 |
+| AuthController | `/api/auth` | 7 | AuthService, SessionService | 99 |
+| TeamController | `/api/tenant` | 7 | TeamService | 75 |
 | ApiKeyController | `/api/keys` | 3 | ApiKeyService | 54 |
 | WebhookController | `/api/webhooks` | 4 | WebhookService | 58 |
+
+批次 2 的增量全在认证面：AuthController 从 2 个端点长到 7 个（新增 refresh、logout、logout-all、change-password、accept-invitation），TeamController 是全新类（成员列表、邀请创建/列表/撤销、改角色、重置口令、禁用/启用、移除）。StatsController 的两个新端点是批次 3 的 ab-report 与 clicks/export（11.3）。注意 AuthController 的分工：账号事实（登录/注册/接受邀请的建号部分）在 AuthService，会话事实（刷新/登出/改密）在 SessionService——5.4 会把这条分工线讲透。
 
 （本项目实现）两个反常点提前说。第一，StatsController 的路由挂在 `/api/links` 下却住在 `stats` 包：资源归属压过代码包归属，URL 是给客户端的，包是给维护者的。第二，BloomAdminController 直接注入 Mapper（BloomAdminController.java:27-28）而不是 Service：重建只是一个只读统计加一次内存重建，为它包一层 Service 不划算（推断：作者按复杂度决定层级）。
 
@@ -76,27 +80,33 @@ public class ShortLinkController {
 
 一个方法集齐三种绑定。（框架行为）`@RequestBody` 把请求体 JSON 反序列化成对象；`@Valid` 让校验注解在方法体执行前生效；`@RequestHeader(required = false)` 取可选的请求头，缺失时参数为 null 而不是报错。方法不写任何状态码，成功默认 200。
 
-列表端点展示 `@RequestParam` 的默认值写法（:51-52）：
+列表端点展示 `@RequestParam` 的默认值写法（:51-54）：
 
 ```java
     public ApiResponse<PageResponse<ShortLinkDetail>> list(@RequestParam(defaultValue = "1") int page,
-                                                           @RequestParam(defaultValue = "20") int size) {
+                                                           @RequestParam(defaultValue = "20") int size,
+                                                           @RequestParam(required = false) String keyword,
+                                                           @RequestParam(required = false) String tag) {
 ```
+
+批次 3 给列表加了两个可选过滤参数：`keyword`（对 code、原始 URL、标题的 LIKE 检索）与 `tag`（标签精确命中），`required = false` 保证旧客户端不带参数时行为不变；导出端点（:58-61）接受同一对过滤参数，让「看到什么就导出什么」。
 
 （框架行为）`defaultValue` 兼任「可选」与「类型转换」：查询串里没有 page 时自动填 1，字符串 "3" 自动转 int。非法字符串（如 `?page=abc`）会抛 `MethodArgumentTypeMismatchException`，它不在 `GlobalExceptionHandler` 的专门分支里，会落进兜底变 500（（本项目实现）现状如此，见 2.1 课的兜底分支分析）。
 
-CSV 导入展示文件上传绑定（:65-68）：
+CSV 导入展示文件上传绑定（:70-74）：
 
 ```java
     @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ApiResponse<ImportResponse> importCsv(@RequestParam("file") MultipartFile file) {
-        return ApiResponse.ok(shortLinkService.importCsv(file));
+    public ApiResponse<ImportResponse> importCsv(@RequestParam("file") MultipartFile file,
+                                                 @RequestHeader(value = "Idempotency-Key", required = false)
+                                                 String idempotencyKey) {
+        return ApiResponse.ok(shortLinkService.importCsv(file, idempotencyKey));
     }
 ```
 
-（框架行为）`consumes` 限定请求的 Content-Type 必须是 multipart/form-data，否则 415；`MultipartFile` 由 multipart 解析器注入。256KiB 上限的配置与超限 400 分支见 3.2 课。
+（框架行为）`consumes` 限定请求的 Content-Type 必须是 multipart/form-data，否则 415；`MultipartFile` 由 multipart 解析器注入。256KiB 上限的配置与超限 400 分支见 3.2 课。批次 3b 起导入也认 `Idempotency-Key` 头（可选，不带就走旧行为）——导入的幂等三件套（结算记录 + 文件指纹 + 在途租约）在 6.3 讲透。
 
-导出端点是少数返回裸 `ResponseEntity<String>` 的地方（:56-61）：`produces = "text/csv;charset=UTF-8"` 声明响应类型，`Content-Disposition` 头让浏览器下载而不是展示。这与 ApiResponse 壳无关，文件不是 JSON API。
+导出端点是少数返回裸 `ResponseEntity<String>` 的地方（:58-61）：`produces = "text/csv;charset=UTF-8"` 声明响应类型，`Content-Disposition` 头让浏览器下载而不是展示。这与 ApiResponse 壳无关，文件不是 JSON API。
 
 ### 5.3 RedirectController：返回 HTML 的 Controller（RedirectController.java:36-48, 85-117）
 
@@ -225,7 +235,7 @@ public record ImportResponse(int successCount, int failureCount,
 
 三点值得学。版本号来自 Maven 的 build-info（1.1 课），IDE 直跑没有这个文件时回退 "dev"，用 `ObjectProvider` 而不是直接注入表达了「可缺席」。（框架行为）两个 SecurityScheme 注册后，swagger-ui 页面会出现 Authorize 按钮，支持 Bearer JWT 与 X-API-Key 两套认证调试。方法级的文档用 `@Parameter`（RedirectController.java:38），目前全项目只有跳转接口用了它，其余接口靠字段名与校验 message 自解释。
 
-开关分三层（全关才算真关）：`springdoc.api-docs.enabled=false` 与 `swagger-ui.enabled=false`（application.yml:255-259）关掉端点本体；`linkforge.docs-enabled=false`（:260-261）让 SecurityConfig 把文档路径与控制台路径 `denyAll`（SecurityConfig.java:47-55）；dev profile 两者全开。（推断）三层重叠是防御纵深：只关 springdoc 时 `/` 上的控制台静态页仍可能被摸到。
+开关分三层（全关才算真关）：`springdoc.api-docs.enabled=false` 与 `swagger-ui.enabled=false`（application.yml:296-301）关掉端点本体；`linkforge.docs-enabled=false`（:302）让 SecurityConfig 把文档路径与控制台路径 `denyAll`（SecurityConfig.java:47-55）；dev profile 两者全开。（推断）三层重叠是防御纵深：只关 springdoc 时 `/` 上的控制台静态页仍可能被摸到。
 
 ## 6. 技术原理补充
 
@@ -267,7 +277,7 @@ Controller 在第 4 步之后就退场了。它绑定参数、声明路由、交
 
 ## 10. 本节总结
 
-- 8 个 Controller、28 个端点；门面层薄到每方法 1-4 行，业务全在 Service。
+- 9 个 Controller、41 个端点；门面层薄到每方法 1-4 行，业务全在 Service。
 - 绑定五件套：`@PathVariable`、`@RequestParam(defaultValue)`、`@RequestHeader`、`@RequestBody + @Valid`、`MultipartFile`。
 - 状态码约定：400 输入、401 认证、403 授权、404 存在性与归属伪装、409 冲突、410 过期/坏目标、429 限流、503 暂不可用。
 - Jackson：`@JsonAnySetter` 捕获未知属性交给 Service 裁决；日期固定东八 ISO 文本；只读响应体用 record。
@@ -297,4 +307,4 @@ Controller 在第 4 步之后就退场了。它绑定参数、声明路由、交
 
 ## 12. 与后续课程的联系
 
-下一课 [3.2 请求生命周期与 Filter](02-request-lifecycle-filters.md) 把镜头拉远：请求在到达这些 Controller 之前要经过什么，Filter 里抛的异常为什么永远到不了 GlobalExceptionHandler。模块 04 起进入 Service 背后的持久层，本节出现过的 `LambdaQueryWrapper`（ShortLinkService.java:892）会在 [4.1 实体与 Mapper](../04-mybatis-mysql/01-entities-mappers-crud.md) 里完整拆解。StatsController 的三个端点在模块 11 会重新出现，那时你已经认识它背后的 lf_click_daily 与 lf_click_dim_daily 两张表。
+下一课 [3.2 请求生命周期与 Filter](02-request-lifecycle-filters.md) 把镜头拉远：请求在到达这些 Controller 之前要经过什么，Filter 里抛的异常为什么永远到不了 GlobalExceptionHandler。模块 04 起进入 Service 背后的持久层，本节出现过的 `LambdaQueryWrapper`（ShortLinkService 的 pageOwn 段）会在 [4.1 实体与 Mapper](../04-mybatis-mysql/01-entities-mappers-crud.md) 里完整拆解。StatsController 的五个端点在模块 11 会重新出现，那时你已经认识它背后的 lf_click_daily 与 lf_click_dim_daily 两张表。

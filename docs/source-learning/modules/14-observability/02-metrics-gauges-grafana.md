@@ -52,14 +52,15 @@
 
 ### 5.1 指标全表：README 每个域对到打点行
 
-| 域 | 指标与 tag | 打点位置（类:行） |
+| 域 | 指标与 tag | 打点位置（类） |
 |----|----|----|
-| 跳转/点击 | `linkforge.links.created` | ShortLinkService.java:270 |
-| | `linkforge.redirects` | ShortLinkService.java:582 |
-| | `linkforge.click.skipped{reason=prefetch\|preview_bot}` | ShortLinkService.java:570 |
-| | `linkforge.click.record.failopen` | ShortLinkService.java:579 |
-| 限流 | `linkforge.ratelimit.rejected{entry=register\|create\|import\|redirect}` | AuthService.java:71、ShortLinkService.java:136、ShortLinkService.java:346、ShortLinkService.java:608 |
-| | `linkforge.ratelimit.failopen{reason=error\|null}` | RedisRateLimiter.java:102 |
+| 跳转/点击 | `linkforge.links.created` | ShortLinkService |
+| | `linkforge.redirects` | ShortLinkService |
+| | `linkforge.click.skipped{reason=prefetch\|preview_bot}` | ShortLinkService |
+| | `linkforge.click.record.failopen` | ShortLinkService |
+| 限流 | `linkforge.ratelimit.rejected{entry=register\|login\|login_account\|refresh\|logout\|accept_invitation\|create\|import\|redirect}` | AuthService、SessionService、TeamService、ShortLinkService（批次 1/2 新增五个 entry） |
+| | `linkforge.ratelimit.failopen{reason=error\|null}` | RedisRateLimiter |
+| 会话（批次 2/S4） | `linkforge.refresh.reuse_kill` | SessionService（重用升级击杀时） |
 | Bloom | `linkforge.bloom.rejected` | ShortLinkService.java:616 |
 | | `linkforge.bloom.loaded` / `.loadfailed` | CodeBloomFilter.java:101 / :110 |
 | | `linkforge.bloom.publish{result=ok\|error}` / `.subscribe.put` / `.subscribe.malformed` | CacheBus.java:45-47、CodeBloomFilter.java:76 / :71 |
@@ -69,21 +70,23 @@
 | | `linkforge.l1.invalidate.publish{result=ok\|error}` / `.remote` / `.malformed` | CacheBus.java:63-65、UrlLocalCache.java:73 / :64 |
 | | `linkforge.cache.l2{result=hit\|miss}` | ShortLinkService.java:642 |
 | | `linkforge.cache.absent.hit` / `.put` | ShortLinkService.java:624 / :947 |
-| | `linkforge.cache.failopen{op=l2_get\|l2_set\|l2_delete\|idem_get\|idem_acquire\|idem_settle\|absent_mark\|absent_clear}` | ShortLinkService.java:158、:189、:279、:639、:950、:962、:975、:987 |
+| | `linkforge.cache.failopen{op=l2_get\|l2_set\|l2_delete\|idem_get\|idem_acquire\|idem_settle\|idem_import_lease\|idem_import_lease_peek\|absent_mark\|absent_clear}` | ShortLinkService（导入租约的两个 op 是 M5 新增） |
 | 门禁 | `linkforge.phishing.gate{action=block\|warn,stage=create\|redirect}` | ShortLinkService.java:686、:700、:801、:805 |
 | | `linkforge.phishing.continue` | ShortLinkService.java:698 |
 | | `linkforge.phishing.reload{result=ok\|unchanged\|failed}` | PhishingPolicy.java:90 / :78 / :119 |
 | | gauge `linkforge.phishing.rules{level=block\|warn}` | PhishingPolicy.java:160-163 |
 | 密码 | `linkforge.link.unlock{result=ok\|bad_password\|rate_limited}` | ShortLinkService.java:789 / :786 / :771,:778 |
 | | `linkforge.link.locked` | ShortLinkService.java:693 |
-| API Key | `linkforge.apikey.auth{result=ok\|invalid\|revoked\|ambiguous}` | ApiKeyAuthFilter.java:94 / :81 / :87 / :75 |
-| | `linkforge.apikey.quota.rejected{window=minute\|day}` | ApiKeyAuthFilter.java:121 / :129 |
+| API Key | `linkforge.apikey.auth{result=ok\|invalid\|revoked\|ambiguous\|forced_change\|owner_inactive\|db_error}` | ApiKeyAuthFilter（后三个是批次 2a/M7/S4-5 的新结果值） |
+| | `linkforge.apikey.quota.rejected{window=minute\|day}` | ApiKeyAuthFilter |
 | Webhook | `linkforge.webhook.enqueued` | WebhookService.java:304、:320 |
 | | `linkforge.webhook.enqueue.failed{reason=duplicate\|异常类名}` | WebhookService.java:271、:273 |
 | | `linkforge.webhook.delivery{result=success\|retry\|failed}` | WebhookDeliveryRelay.java:137 / :165 / :94,:103,:145,:159 |
 | | `linkforge.webhook.blocked` | WebhookDeliveryRelay.java:102 |
 | | `linkforge.webhook.relay.skipped{reason=master_key_unavailable}` | WebhookDeliveryRelay.java:74 |
-| | `linkforge.webhook.aggregate.flush{result=ok\|partial\|error}` | WebhookAggregateFlusher.java:48（常量）、:106（error）、:143（ok/partial） |
+| | `linkforge.webhook.aggregate.flush{result=ok\|error}` | WebhookAggregateFlusher（M3 后 partial 消失：drain 全有或全无） |
+| 恶意 feed（批次 3b/S3） | `linkforge.malicious.feed.sync{result=ok\|failed\|apply_failed}` | MaliciousHostSyncService |
+| | gauge `linkforge.malicious.feed.hosts` / `linkforge.malicious.feed.last_success` | MaliciousHostSnapshot / MaliciousHostSyncService |
 | Outbox | `linkforge.outbox.sent` / `.failed` | ClickOutboxRelay.java:60 / :50 |
 | 积压 gauge | `linkforge.outbox.pending`、`linkforge.webhook.pending`、`linkforge.webhook.failed` | BacklogGauges.java:35-37 |
 | HTTP/JVM | `http.server.requests`（直方图+SLO 桶）、Hikari、JVM 系 | Boot 自带（14.1）；配置在 `application.yml:43-48` |

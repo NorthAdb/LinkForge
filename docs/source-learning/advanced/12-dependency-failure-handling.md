@@ -2,24 +2,28 @@
 
 > 前面各专题分别讲过一处 fail-open：专题 4 的跳转链、专题 5 的 L2、专题 8 的消费回滚、专题 11 的投递退避。本专题把所有依赖故障的处理收进一张总表：Redis 停机时每个组件各走到哪行、留下哪个指标；MySQL 全挂与只读的 500 与 302 之别；RabbitMQ 停机时 outbox 停积而 302 不动；webhook 端点挂掉时的退避与 FAILED。最后对照 fault-drill.sh 三段的 PASS 口径，把「代码应该这样」变成「这台机器上此刻确实这样」。
 
+> **3.0.0 口径注**：本专题的 ShortLinkService 行号已按现行版本（1,503 行）逐处更新。3.0.0 新增两类故障语义已补入第 5 节节点七与第 7 节总表：认证存储（用户行/Key 行回查）故障时两个认证过滤器 fail-closed 回稳定 503（S/N 波 S4-5）；CSV 导入的在途租约在 Redis 故障时 fail-open 无租约执行（审计 M5）。
+
 ## 1. 业务背景：fail-open 的方向从哪来
 
-302 跳转是产品的生命线。项目的设计原则藏在一次点击的写入路径里：跳转主链路不依赖任何一侧的「写成功」——不依赖 Redis 写（缓存与限流都可绕过）、不依赖 MQ 写（点击先落本地 outbox）、甚至不依赖点击记账本身（`ShortLinkService.java:573-581` 的 catch 注释写明「the 302 must not depend on the click write」）。每个依赖因此被分成三类：热路径上的加速器（坏了降级放行）、异步管道（坏了原地积压等恢复）、安全边界（坏了停在安全的一侧，fail-safe）。
+302 跳转是产品的生命线。项目的设计原则藏在一次点击的写入路径里：跳转主链路不依赖任何一侧的「写成功」——不依赖 Redis 写（缓存与限流都可绕过）、不依赖 MQ 写（点击先落本地 outbox）、甚至不依赖点击记账本身（`ShortLinkService.java:1035-1042` 的 catch 注释写明「the 302 must not depend on the click write」）。每个依赖因此被分成三类：热路径上的加速器（坏了降级放行）、异步管道（坏了原地积压等恢复）、安全边界（坏了停在安全的一侧，fail-safe）。
 
 方向判断的成本口径：配额失效的损失是超量使用，可事后对账，所以 Redis 限流 fail-open；签名密钥缺失的损失是伪造签名不可察觉，所以 webhook 主密钥 fail-safe 降级为关。本专题第 8 节把这个判断写成总原则。
 
-观察这套设计有两个入口。代码入口是 grep `failopen`：所有降级点都强制打点，`ShortLinkService` 一处类就有九个计数器。运维入口是 fault-drill.sh：它把第 7 节总表的四行变成可在自己机器上复现的 PASS 行。两个入口在本专题合拢：第 5 节讲代码为什么这样写，第 6 节讲怎么验证它真的这样跑。
+观察这套设计有两个入口。代码入口是 grep `failopen`：所有降级点都强制打点，`ShortLinkService` 一处类就有十余个计数点（3.0.0 又添了导入租约一组）。运维入口是 fault-drill.sh：它把第 7 节总表的四行变成可在自己机器上复现的 PASS 行。两个入口在本专题合拢：第 5 节讲代码为什么这样写，第 6 节讲怎么验证它真的这样跑。
 
 ## 2. 相关类清单
 
 | 类/脚本 | 角色 | 模块课 |
 |----|----|----|
 | `RedisRateLimiter` | 滑窗与固定窗的 fail-open（:44-50、:75-80、:98-104） | [9.1](../modules/09-rate-limit/01-sliding-window-lua.md) |
-| `ShortLinkService`（读路径） | L2 get fail-open :634-640、absent 判定 :926-952、行读 :649 | [8.2](../modules/08-redis-cache/02-l1-l2-write-through.md) |
-| `ShortLinkService`（写路径） | cacheUrl :966-977、evictCache :979-989、idem 三出口 :158/:189/:279 | [8.2](../modules/08-redis-cache/02-l1-l2-write-through.md) |
+| `ShortLinkService`（读路径） | L2 get fail-open :1093-1101、absent 判定 :1404-1415、行读 :1110 | [8.2](../modules/08-redis-cache/02-l1-l2-write-through.md) |
+| `ShortLinkService`（写路径） | cacheUrl :1444-1455、evictCache :1457-1467、idem 三出口 :178/:221/:476 | [8.2](../modules/08-redis-cache/02-l1-l2-write-through.md) |
 | `CodeBloomFilter` | 未加载/加载失败/禁用一律放行（:186-192），load 失败回到 fail-open 态（:105-112） | [8.3](../modules/08-redis-cache/03-negative-cache-bloom.md) |
 | `CacheBus` | 广播失败只打点，对端陈旧等 L1 TTL（:57-68） | [8.2](../modules/08-redis-cache/02-l1-l2-write-through.md) |
 | `ApiKeyAuthFilter` | 配额双闸的 fail-open 依赖（:112-137） | [12.1](../modules/12-api-key/01-apikey-full.md) 第 5.7 节 |
+| `JwtAuthFilter` / `ApiKeyAuthFilter`（回查） | 认证存储故障 → 稳定 503（S4-5），见第 5 节节点七 | [专题 17](17-correctness-waves.md) |
+| `ImportIdempotencyLease` + `ShortLinkService.acquireImportLease` | 导入租约的 fail-open（:694-707 一组计数） | [专题 16](16-link-power-features.md) 节点八 |
 | `ClickRecordService` / `ClickOutboxRelay` | 同事务双写 + 退避抽水（relay :44-78） | [10.2](../modules/10-rabbitmq-outbox/02-outbox-relay.md) |
 | `SingleFlight` | 行读合并与异常重抛（:90-98），决定「MySQL 全挂 → 500」的传播路径 | [8.4](../modules/08-redis-cache/04-singleflight.md) |
 | `WebhookDeliveryRelay` | 主密钥门禁与投递退避（:63-88、:154-166） | [13.2](../modules/13-webhook/02-delivery-signing-retry.md) 第 5.3 节 |
@@ -34,19 +38,19 @@
 GET /r/{code}
   ① RedisRateLimiter（Redis）     挂 → fail-open 放行，meter ratelimit.failopen
   ② CodeBloomFilter（进程内）     未就绪/失败 → 恒 true 放行（不依赖 Redis 写入）
-  ③ absentKnown（Redis）          挂 → 读不到当 miss，继续走 ④（:926-952）
+  ③ absentKnown（Redis）          挂 → 读不到当 miss，继续走 ④（:1404-1415）
   ④ L1（进程内 Caffeine）         与外部依赖无关
-  ⑤ L2 get（Redis）               挂 → fail-open 置空，继续行读（:634-640）
-  ⑥ 行读（MySQL，singleflight）   挂 → 异常穿出 → 500（:649，无 catch）
+  ⑤ L2 get（Redis）               挂 → fail-open 置空，继续行读（:1093-1101）
+  ⑥ 行读（MySQL，singleflight）   挂 → 异常穿出 → 500（:1110，无 catch）
       行读到 → 状态/过期/URL 校验 → B9 → 密码门 → variants → 302 决策
-  ⑦ recordClick（MySQL 写，事务） 失败 → 事务外 catch，302 照常（:573-581）
+  ⑦ recordClick（MySQL 写，事务） 失败 → 事务外 catch，302 照常（:1035-1042）
       事务内：明细行 + lf_outbox 行（RabbitMQ 一根汗毛没碰）
   ⑧ ClickOutboxRelay（RabbitMQ）  挂 → markRetry 退避，行积 PENDING，302 无感
   ⑨ consume → webhook 入队（MySQL 写） → ⑩ WebhookDeliveryRelay（HTTP 出站）
       端点挂 → 退避 8 次 → FAILED；主密钥缺 → 整批跳过
 ```
 
-六与七的不对称是本专题最重要的 nuance：⑥是正确性仲裁（行不存在就 404，不存在「放行」这个选项），没有 fail-open；⑦是记账，丢一次可由对账补，所以 fail-open。fault-drill 第三段测的正是这个不对称（第 7 节）。补充两个边界事实：HEAD 探测走同一条链但从不记账（`ShortLinkService.java:591-593`），所以只读库下 HEAD 同样 302（fault-drill :236-237 断言）；密码门、B9 门禁与 variants 抽签读的都是行数据，依赖 ⑥ 存活，行读失败时它们一起不可达。
+六与七的不对称是本专题最重要的 nuance：⑥是正确性仲裁（行不存在就 404，不存在「放行」这个选项），没有 fail-open；⑦是记账，丢一次可由对账补，所以 fail-open。fault-drill 第三段测的正是这个不对称（第 7 节）。补充两个边界事实：HEAD 探测走同一条链但从不记账（`resolveForProbe`，`ShortLinkService.java:1047-1051`），所以只读库下 HEAD 同样 302（fault-drill :236-237 断言）；密码门、B9 门禁与 variants 抽签读的都是行数据，依赖 ⑥ 存活，行读失败时它们一起不可达。
 
 读这张图的方法是拿一支笔沿 ①到⑩ 走一遍，每站问两个问题：这一站坏了，用户看到的下一个状态是什么？留下的证据是哪个计数器或哪张表？两个答案都能在本专题定位到行号，本专题的完整性就用这个标准衡量。
 
@@ -61,8 +65,8 @@ GET /r/{code}
 ```mermaid
 flowchart TD
     A["docker compose stop redis"] --> B["真等 ping 不通 (:106-110)"]
-    B --> C["带幂等键创建 → 200<br/>idem_acquire fail-open (:152-160)"]
-    B --> D["跳转 → 302<br/>L2 get fail-open (:634-640)"]
+    B --> C["带幂等键创建 → 200<br/>idem_acquire fail-open (:167-183)"]
+    B --> D["跳转 → 302<br/>L2 get fail-open (:1093-1101)"]
     C --> E["grep /actuator/prometheus<br/>cache.failopen op=l2_get 与 op=idem_*"]
     D --> E
     E --> F["compose start redis → 等 PONG"]
@@ -71,9 +75,9 @@ flowchart TD
 
 ## 5. 源码详解：三类依赖的处理差异
 
-**节点一：Redis 挂，九个 fail-open 站点。** 限流侧 `RedisRateLimiter.acquire` 的 catch 返回放行决策（:44-50），`tryAcquireFixedWindow` 同样放行（:75-80），统一打点 `linkforge.ratelimit.failopen{reason=error|null}`（:98-104）。缓存侧三个操作各自吞异常：L2 读（`ShortLinkService.java:634-640`，op=l2_get）、L2 写（:966-977，op=l2_set）、L2 删（:979-989，op=l2_delete），语义都是「少了加速器，正确性无损」。空值缓存的标记与清除同路（op=absent_mark :950、absent_clear :962），读失败按 miss 处理的方向是安全的：一个不存在的 code 由此多付一次 DB 读而不是被错误放行，代价只是热路径上的一次行读。幂等三件套在创建链上：拿不到租约当拿到（op=idem_acquire :152-160，注释写明代价是故障期两个并发同键创建可能都跑）、回放读不到当没建过（op=idem_get :182-191）、结算失败只丢幂等键（op=idem_settle :271-281，链接已提交）。Bloom 是进程内的，但它的对齐广播走 Redis：put 广播失败不重试（`CacheBus.java:57-68`），对端陈旧到 L1 TTL 或下次 rebuild。key 配额与 touch 的两处见专题 10 第 7 节。
+**节点一：Redis 挂，成群的 fail-open 站点。** 限流侧 `RedisRateLimiter.acquire` 的 catch 返回放行决策（:44-50），`tryAcquireFixedWindow` 同样放行（:75-80），统一打点 `linkforge.ratelimit.failopen{reason=error|null}`（:98-104）。缓存侧三个操作各自吞异常：L2 读（`ShortLinkService.java:1093-1101`，op=l2_get）、L2 写（:1444-1455，op=l2_set）、L2 删（:1457-1467，op=l2_delete），语义都是「少了加速器，正确性无损」。空值缓存的标记与清除同路（op=absent_mark :1428、absent_clear :1440），读失败按 miss 处理的方向是安全的：一个不存在的 code 由此多付一次 DB 读而不是被错误放行，代价只是热路径上的一次行读。幂等三件套在创建链上：拿不到租约当拿到（op=idem_acquire :167-183，注释写明代价是故障期两个并发同键创建可能都跑）、回放读不到当没建过（op=idem_get :217-224）、结算失败只丢幂等键（op=idem_settle :465-478，链接已提交）。3.0.0 的导入租约（M5）同族：获取/窥视/释放/结算失败一律 fail-open 无租约执行（op=idem_import_lease 及后缀变体，:694-707 起一组），故障期同 key 并发导入可能双跑——与创建侧的取舍同向，靠 settle 结果缓存兜顺序重放。Bloom 是进程内的，但它的对齐广播走 Redis：put 广播失败不重试（`CacheBus.java:57-68`），对端陈旧到 L1 TTL 或下次 rebuild。key 配额与 touch 的两处见专题 10 第 7 节。
 
-**节点二：MySQL 挂，两个方向的 500 与 302。** 全挂时行读 :649 抛 DataAccessException，SingleFlight 原样重抛（`SingleFlight.java:90-98`），`resolveForGet` 的 catch 只罩 recordClick（:573-581），异常穿到 `GlobalExceptionHandler` 的兜底分支返回 500（:72-77）。行读没有 fail-open：它是「这个 code 到底指向哪」的唯一事实源，绕过它无处可去。只读库（read_only=1）不是全挂：SELECT 全部正常，只有 INSERT/UPDATE 失败，于是点击记账在事务外被 catch（:575-581，meter `linkforge.click.record.failopen`），302 保持，创建类写操作失败，详情与统计的读照常 200。fault-drill 第三段按这个口径断言（第 7 节表）。管理面没有降级：MySQL 挂时 `/api/keys`、`/api/webhooks`、`/api/links` 的写与读全部不可用，这是「正确性数据无降级替代」的自然结果。
+**节点二：MySQL 挂，两个方向的 500 与 302。** 全挂时行读 :1110 抛 DataAccessException，SingleFlight 原样重抛（`SingleFlight.java:90-98`），`resolveForGet` 的 catch 只罩 recordClick（:1035-1042），异常穿到 `GlobalExceptionHandler` 的兜底分支返回 500（:72-77）。行读没有 fail-open：它是「这个 code 到底指向哪」的唯一事实源，绕过它无处可去。只读库（read_only=1）不是全挂：SELECT 全部正常，只有 INSERT/UPDATE 失败，于是点击记账在事务外被 catch（:1035-1042，meter `linkforge.click.record.failopen`），302 保持，创建类写操作失败，详情与统计的读照常 200。fault-drill 第三段按这个口径断言（第 7 节表）。管理面没有降级：MySQL 挂时 `/api/keys`、`/api/webhooks`、`/api/links` 的写与读全部不可用，这是「正确性数据无降级替代」的自然结果。
 
 **节点三：RabbitMQ 挂，积压而不丢失。** recordClick 的事务里只有 MySQL 写（明细 + outbox 行，`ClickRecordService.java:56-75`），MQ 从不在跳转热路径上。relay 每轮 `publish` 等 confirm 5 秒（`RabbitClickEventPublisher.java:27`），失败 markRetry 退避 `min(60, 2^n)`（`ClickOutboxRelay.java:61-65、:75-78`），30 次后 FAILED。停机期间 outbox 行按每跳转一次一行的速度堆积，PENDING 不设上限，恢复后每 tick 搬 100 行追平。恢复段的实际执行者是两道工序：relay 把积压行搬进 MQ，`ClickLogReconciler` 按自己的节奏比对明细与聚合并补差额（mq-drill.sh 恢复段等的 `totalClicks=N+M` 就是这两道工序的产物）。唯一会变成 FAILED 的是毒行（payload 损坏），人工重放是它的出口（10.2 第 5.7 节口径）。mq-drill.sh 与 outbox-drill.sh 分别验证「正常同步写」与「关同步写的更坏情形」（15.3 第 5.6-5.7 节口径）。
 
@@ -82,6 +86,8 @@ flowchart TD
 **节点五：消费侧的 MySQL 写失败，回滚而不吞。** MySQL 只读期间，一次点击走到 consume 时，占坑 INSERT 或聚合 UPDATE 会失败。消费端没有 fail-open：异常穿出 onMessage，容器 reject(requeue=false)，消息进 DLQ（`application.yml:81`）。这个方向与热路径相反，因为消费侧的每一笔写都是「正确性数据」：吞掉异常等于静默丢点击。救济靠 at-least-once 的重投与人工重放（专题 8 第 7 节口径）。同一台只读库上，跳转 302 与消费进 DLQ 同时发生，两边各自做对了自己的事。
 
 **节点六：Bloom 的 fail-open 不是一根开关，是一个状态机。** `CodeBloomFilter` 的降级态有三个入口：禁用（load 直接过，:82-86）、种子加载失败（filter 置 null、ready 置 false，:105-112）、重建失败（恢复上一个 filter 引用，:165-171）。查询端对三种态一律回答 true 放行（`mightContain` :186-192），空值缓存与行读兜住放行后的多查。两个细节防止「降级中变雪崩」：重建采用先发布再播种，播种窗口内新建的码直接进新 filter，不会丢（:151-153 注释引用审计 A9 S1）；重建失败恢复旧 filter 而不是降级到空，一个已加载的 filter 永不因重建失败而消失（:166-168 注释原话）。对照同文件 CacheBus 的广播：Bloom 对自己的 put 消息刻意不跳过 origin（:74-75），因为 put 幂等，跳过只多一个丢消息的口子，与 L1 失效广播的 origin 跳过（8.2 第 5.6 节）方向相反，各自的理由都写在注释里。
+
+**节点七：认证存储挂，fail-closed 的稳定 503（3.0.0 新增，S4-5）。** 批次 2 起两个认证过滤器每请求回查 MySQL（JwtAuthFilter 查用户行、ApiKeyAuthFilter 查 key 行与属主行）。这条回查坏掉时不能 fail-open（放行 = 凭据纪律归零），也不能把驱动异常原样抛成 500（把「依赖故障」伪装成「服务器错误」，还会泄异常细节）。S/N 波 S4-5 的定稿是第三种：两个过滤器统一回稳定 503 `{"code":503,"message":"authentication store unavailable","data":null}`（`JwtAuthFilter.java:37` 的共享常量，ApiKeyAuthFilter 复用），不授任何身份，日志只带 userId/keyId 不带凭据。它与节点二的 500 分工明确：500 是「正确性仲裁无路可走」，503 是「认证依赖暂时不可用、请重试」，客户端能据此区分该不该重试。
 
 ## 6. 正常流程：fault-drill 怎么跑
 
@@ -112,6 +118,8 @@ Redis 段之后的两段换靶子不换节奏。webhook 段的破坏不是停容
 | Redis | 限流（跳转+创建+key 配额） | fail-open 放行 | `linkforge.ratelimit.failopen` | 无专项，含在 302/200 断言内 |
 | Redis | L2 读/写/删 | fail-open 继续行读 | `cache.failopen{op=l2_get\|l2_set\|l2_delete}` | redis 段 grep l2_get（:119-120） |
 | Redis | 幂等租约/回放/结算 | fail-open 继续创建 | `cache.failopen{op=idem_acquire\|get\|settle}` | redis 段 grep idem_*（:121-122） |
+| Redis | 导入在途租约（M5） | fail-open 无租约执行，同 key 并发可能双跑（顺序重放仍靠 settle 兜） | `cache.failopen{op=idem_import_lease*}` | 无专项 |
+| MySQL（认证存储） | 两过滤器回查（用户行/Key 行） | fail-closed：稳定 503 `authentication store unavailable`，不授身份（S4-5） | 无专项 meter（日志只带 userId/keyId） | 无专项 |
 | Redis | 空值缓存 | 读 miss、写跳过 | `cache.failopen{op=absent_mark\|absent_clear}` | 无专项 |
 | Redis | CacheBus 广播 | 丢消息，对端陈旧 ≤ L1 TTL 10 秒 | `l1.invalidate.publish{result=error}` | 无专项 |
 | Redis | Bloom 对齐广播 | put 丢失，靠 rebuild 兜底 | 无（幂等 put 本身无失败面） | 无专项 |

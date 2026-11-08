@@ -26,7 +26,7 @@
 |----|----|----|----|
 | `src/main/java/com/linkforge/link/support/UrlLocalCache.java` | 96 | 主角：构造 :34-47、订阅 :50-58、失效 :61-74、读写 :76-95 | 1 |
 | `src/main/java/com/linkforge/link/support/CacheBus.java` | 85 | 发布 :39-68、载荷解析 :74-84 | 2 |
-| `src/main/java/com/linkforge/link/service/ShortLinkService.java` | 1025 | 读路径 :628-680、update 尾段 :495-519、setStatus :531-541、delete :546-558、cacheUrl :966-977、evictCache :979-989、scheduleStaleClear :991-999 | 3 |
+| `src/main/java/com/linkforge/link/service/ShortLinkService.java` | 1503 | 读路径 resolveTarget、update/setStatus/delete 的收尾段、cacheUrl、evictCache、scheduleStaleClear | 3 |
 | `src/main/resources/application.yml` | 266 | l1 段 :140-145 | 4 |
 | `src/main/java/com/linkforge/config/RedisConfig.java` | 24 | 监听容器 :17-23 | 5 |
 

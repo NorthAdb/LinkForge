@@ -26,7 +26,8 @@
 | `src/main/resources/application.yml` | 266 | `:6-12` 调度线程池 | 2 |
 | `src/main/java/com/linkforge/stats/service/ClickOutboxRelay.java` | 79 | outbox 抽水（2s） | 3 |
 | `src/main/java/com/linkforge/webhook/service/WebhookDeliveryRelay.java` | 167 | webhook 投递（2s） | 4 |
-| `src/main/java/com/linkforge/webhook/service/WebhookAggregateFlusher.java` | 237 | 聚合窗冲刷（5s） | 5 |
+| `src/main/java/com/linkforge/webhook/service/WebhookAggregateFlusher.java` | 278 | 聚合窗冲刷（5s，M3 drain） | 5 |
+| `src/main/java/com/linkforge/link/service/MaliciousHostSyncService.java` | 138 | 恶意 feed 同步（6h，默认关） | 5b |
 | `src/main/java/com/linkforge/stats/service/ClickLogReconciler.java` | 55 | 对账（30s） | 6 |
 | `src/main/java/com/linkforge/retention/SentRowCleanup.java` | 73 | SENT 行清理（1h，本课深讲） | 7 |
 | `src/main/java/com/linkforge/observability/BacklogGauges.java` | 58 | 积压采样（15s） | 8 |
@@ -82,8 +83,9 @@ public class SchedulingConfig {
 | 6 | BacklogGauges.sample | `BacklogGauges.java:40-41` | fixedDelay 15s，首次 15s | 无 | 三条 COUNT（outbox/webhook PENDING、webhook FAILED） | 内存 AtomicLong | 失败保留上次值 + WARN（`:48-57`，14.2 已讲） |
 | 7 | CodeBloomFilter.scheduledRebuild | `CodeBloomFilter.java:116` | fixedDelay 24h，首次同 | `bloom.rebuildEnabled`（`:118-120`）且 `bloom.enabled`（`:135-139`） | lf_short_link 全码 | 内存 BloomFilter，bypass-then-atomic-swap（`:153-154`） | 失败恢复旧 filter 引用（`:168`）；重建中再触发计 `rebuild{result=busy}`（`:141`） |
 | 8 | PhishingPolicy.reload | `PhishingPolicy.java:69-70` | fixedDelay 30s，首次 30s | 名单文件已配置（`:72-74`）；mtime 未变计 `unchanged` 早退（`:77-79`） | 名单文件 | 内存 snapshot（merge 后整体换引用，`:88`） | 解析失败保留旧快照 + `reload{result=failed}`（`:116-119`） |
+| 9 | MaliciousHostSyncService.sync（批次 3b 新增） | `MaliciousHostSyncService.java` 的 @Scheduled | fixedDelay 6h，首次 60s | `malicious-feed.enabled`（默认 false——关时任务在但每轮早退，快照钉空） | URLhaus hostfile（外呼） | lf_malicious_host upsert（单事务）→ 成功后 snapshot.refresh() → 推进 last_success | 拉取/解析失败 `sync{result=failed}`；落库后刷快照失败 `sync{result=apply_failed}` 且 last_success 不推进（S3） |
 
-读表的方法：节奏决定「多快发现积压」，门禁决定「功能关了任务在不在」，失败语义决定「一次抖动会不会放大」。1、2 是重试状态机的驱动器（模块 10、13 的主角），3 是 2 的分身（digest 也走投递行），4 是 1 丢失兜底，5 是三者的垃圾回收，6 是观察者，7、8 是内存数据结构的保鲜。
+读表的方法：节奏决定「多快发现积压」，门禁决定「功能关了任务在不在」，失败语义决定「一次抖动会不会放大」。1、2 是重试状态机的驱动器（模块 10、13 的主角），3 是 2 的分身（digest 也走投递行），4 是 1 丢失兜底，5 是三者的垃圾回收，6 是观察者，7、8、9 是内存数据结构的保鲜——9 与 8 的区别是数据源在网络那头（外部 feed）而非本地文件，所以它多一层「落库为准、快照为缓存」的两段提交。
 
 ### 5.3 SentRowCleanup 深讲：有界批次
 
@@ -220,4 +222,4 @@ public int purgeSent() {
 
 ## 12. 与后续课程的联系
 
-本课的表是前面四个模块的索引页：relay 状态机在 10.2 与 13.2 已深讲，对账 SQL 在 11.3，名单热载与 Bloom rebuild 在 8.3 与 9.1 有各自上下文。测试侧，15.1 的测试盘点会把 `SentRowCleanupTest` 归入纯单测 151 例，`WebhookRetryClockIT` 的时区 fork 机制在 15.2 展开；15.3 的 prod profile 与 compose 部署决定这些任务在生产里的真实节奏。advanced/12（依赖故障处理）会重放本课 8 的时间线，把「隔离买到的故障半径」算成数字。
+本课的表是前面四个模块的索引页：relay 状态机在 10.2 与 13.2 已深讲，对账 SQL 在 11.3，名单热载与 Bloom rebuild 在 8.3 与 9.1 有各自上下文。测试侧，15.1 的测试盘点会把 `SentRowCleanupTest` 归入纯单测 226 例，`WebhookRetryClockIT` 的时区 fork 机制在 15.2 展开；15.3 的 prod profile 与 compose 部署决定这些任务在生产里的真实节奏。advanced/12（依赖故障处理）会重放本课 8 的时间线，把「隔离买到的故障半径」算成数字。
