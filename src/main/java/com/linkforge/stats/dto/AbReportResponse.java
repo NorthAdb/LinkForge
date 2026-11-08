@@ -1,5 +1,6 @@
 package com.linkforge.stats.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 
@@ -22,7 +23,9 @@ public class AbReportResponse {
     /** Null when no fit was computed (NOT_APPLICABLE / INSUFFICIENT_DATA). */
     private Double chiSquare;
     private int degreesOfFreedom;
-    /** Null when no fit was computed. */
+    /** Null when no fit was computed. The explicit name matters: Lombok's
+     * getPValue() makes Jackson derive "PValue"/"pvalue", never "pValue". */
+    @JsonProperty("pValue")
     private Double pValue;
     /** CONSISTENT / SKEWED / INSUFFICIENT_DATA / NOT_APPLICABLE. */
     private String verdict;
