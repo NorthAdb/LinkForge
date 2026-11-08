@@ -248,6 +248,16 @@ public final class MatchRule {
         return primary.isEmpty() ? null : primary;
     }
 
+    /**
+     * True when this rule actually narrows the candidate set in at least one
+     * dimension. A parsed {@code "{}"} constrains nothing (every dimension
+     * absent), and empty arrays normalize to absent dimensions at parse time,
+     * so field nullity is the exact predicate — never test the raw JSON text.
+     */
+    public boolean isConstraining() {
+        return devices != null || os != null || languages != null || timeWindows != null;
+    }
+
     /** AND across the dimensions the rule pins; the time-window list is an OR. */
     public boolean matches(String device, String os, String language, Instant now) {
         if (devices != null && (device == null || !devices.contains(device))) {
@@ -272,19 +282,28 @@ public final class MatchRule {
 
     private static boolean windowMatches(TimeWindow window, Instant now) {
         ZonedDateTime local = now.atZone(window.tz());
-        // The weekday check uses the CURRENT local day of `now` — it is NOT
-        // the day the window opened on. For an overnight window (from > to),
-        // the post-midnight tail therefore matches only when the tail's own
-        // weekday is also listed: e.g. a 23:00-02:00 window with
-        // weekdays=[MONDAY] matches Monday 23:00-24:00 but NOT Tuesday
-        // 00:00-02:00 (that tail instant is a Tuesday). Known simplification:
-        // to cover an overnight tail, list both the opening and the tail
-        // weekday. (An earlier version of this comment claimed start-day
-        // semantics; the code has always checked the current day — audit S4.)
-        if (window.weekdays() != null && !window.weekdays().contains(local.getDayOfWeek())) {
+        LocalTime time = local.toLocalTime();
+        // Strictly from > to; a degenerate from == to window keeps the old
+        // whole-day reading and the instant's own weekday, as before.
+        boolean overnight = window.from().isAfter(window.to());
+        // S/N wave (audit S4-4): the weekday list is read against the day the
+        // window OPENED on. For an overnight window (from > to) the
+        // post-midnight tail belongs to the previous local day's opening:
+        // a 23:00-02:00 window with weekdays=[MONDAY] matches Monday
+        // 23:00-24:00 AND Tuesday 00:00-02:00, but NOT Monday 00:00-02:00
+        // (that tail belongs to Sunday's opening). The opening segment and
+        // every non-overnight window keep the instant's own weekday. (Up to
+        // the audit-fix wave this checked the current day throughout, and
+        // covering a tail meant listing both weekdays; the comment in that
+        // wave described the old behavior — the semantics changed here, in
+        // the S/N wave, deliberately.)
+        DayOfWeek effectiveDay = local.getDayOfWeek();
+        if (overnight && time.isBefore(window.to())) {
+            effectiveDay = local.minusDays(1).getDayOfWeek();
+        }
+        if (window.weekdays() != null && !window.weekdays().contains(effectiveDay)) {
             return false;
         }
-        LocalTime time = local.toLocalTime();
         if (window.from().isBefore(window.to())) {
             return !time.isBefore(window.from()) && time.isBefore(window.to());
         }

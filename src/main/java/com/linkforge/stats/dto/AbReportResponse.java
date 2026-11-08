@@ -29,6 +29,10 @@ public class AbReportResponse {
     private Double pValue;
     /** CONSISTENT / SKEWED / INSUFFICIENT_DATA / NOT_APPLICABLE. */
     private String verdict;
+    /** S/N wave (audit S1): stable reason code when verdict is
+     * NOT_APPLICABLE (CONDITIONAL_ROUTING / CONFIG_CHANGED_IN_WINDOW /
+     * CONFIG_HISTORY_UNKNOWN / TOO_FEW_VARIANTS); null otherwise. */
+    private String reason;
     private List<VariantRow> variants;
 
     @Data

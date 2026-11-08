@@ -15,6 +15,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.ibatis.exceptions.PersistenceException;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpHeaders;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -83,15 +85,30 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
                 writeJson(response, 400, "{\"code\":400,\"message\":\"ambiguous credentials: send either a bearer token or X-API-Key\",\"data\":null}");
                 return;
             }
-            ApiKey key = apiKeyService.authenticate(apiKey);
-            if (key == null) {
-                meterRegistry.counter("linkforge.apikey.auth", "result", "invalid").increment();
-                writeJson(response, 401, "{\"code\":401,\"message\":\"invalid api key\",\"data\":null}");
+            ApiKey key = null;
+            UserAccount owner = null;
+            try {
+                key = apiKeyService.authenticate(apiKey);
+                if (key == null) {
+                    meterRegistry.counter("linkforge.apikey.auth", "result", "invalid").increment();
+                    writeJson(response, 401, "{\"code\":401,\"message\":\"invalid api key\",\"data\":null}");
+                    return;
+                }
+                // The owner row decides both the tombstone distinction below and
+                // the live-key rechecks; selectById hides logically deleted owners.
+                owner = userAccountMapper.selectById(key.getUserId());
+            } catch (DataAccessException | PersistenceException ex) {
+                // S/N wave (audit S4-5, extended from the JWT filter it named):
+                // the authentication STORE failed — not a credential verdict.
+                // Same stable 503 as JwtAuthFilter, no identity granted; the
+                // log carries the key id when one was resolved, never the
+                // plaintext key.
+                log.error("auth store unavailable while authenticating api key (keyId={}): {}",
+                        key == null ? "unresolved" : key.getId(), ex.getMessage(), ex);
+                meterRegistry.counter("linkforge.apikey.auth", "result", "db_error").increment();
+                writeJson(response, 503, JwtAuthFilter.STORE_UNAVAILABLE_BODY);
                 return;
             }
-            // The owner row decides both the tombstone distinction below and
-            // the live-key rechecks; selectById hides logically deleted owners.
-            UserAccount owner = userAccountMapper.selectById(key.getUserId());
             if (key.getRevokedAt() != null) {
                 // Audit M7 tombstone: a KNOWN revoked key whose owner is still
                 // behind the forced-change wall earns the wall's 403 — the

@@ -3,9 +3,13 @@ package com.linkforge.link.support;
 import com.linkforge.common.exception.BizException;
 import com.linkforge.link.entity.LinkVariant;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -125,6 +129,78 @@ class MatchRuleTest {
         assertTrue(rule.matches("desktop", "windows", null, Instant.parse("2026-01-05T23:30:00Z")));
         assertTrue(rule.matches("desktop", "windows", null, Instant.parse("2026-01-06T01:00:00Z")));
         assertFalse(rule.matches("desktop", "windows", null, MONDAY_10Z));
+    }
+
+    /** S/N wave (audit S4-4): an overnight window's weekday list names the
+     * day the window OPENED on; the post-midnight tail is judged by the
+     * previous local day. 2026-01-04 is a Sunday, -05 a Monday, -06 a
+     * Tuesday, -07 a Wednesday. America/New_York springs forward on
+     * 2026-03-08 (02:00 EST -> 03:00 EDT) and falls back on 2026-11-01
+     * (02:00 EDT -> 01:00 EST, the 01:xx hour happens twice). */
+    private static Stream<Arguments> overnightCases() {
+        String monday = "{\"timeWindows\":[{\"from\":\"23:00\",\"to\":\"02:00\",\"tz\":\"UTC\",\"weekdays\":[1]}]}";
+        String sunday = "{\"timeWindows\":[{\"from\":\"23:00\",\"to\":\"02:00\",\"tz\":\"UTC\",\"weekdays\":[7]}]}";
+        String nySaturday = "{\"timeWindows\":[{\"from\":\"23:00\",\"to\":\"02:00\",\"tz\":\"America/New_York\",\"weekdays\":[6]}]}";
+        return Stream.of(
+                // Monday opening: head and tail both match
+                Arguments.of(monday, "2026-01-05T23:30:00Z", true),
+                Arguments.of(monday, "2026-01-06T01:00:00Z", true),
+                // Monday 01:00 is the tail of SUNDAY's opening — not listed
+                Arguments.of(monday, "2026-01-05T01:00:00Z", false),
+                // Tuesday opening / Wednesday tail are not Monday's window
+                Arguments.of(monday, "2026-01-06T23:30:00Z", false),
+                Arguments.of(monday, "2026-01-07T01:00:00Z", false),
+                // week boundary: Sunday opens, Monday's tail belongs to it
+                Arguments.of(sunday, "2026-01-04T23:30:00Z", true),
+                Arguments.of(sunday, "2026-01-05T01:00:00Z", true),
+                Arguments.of(sunday, "2026-01-03T23:30:00Z", false),
+                Arguments.of(sunday, "2026-01-04T01:00:00Z", false),
+                // DST spring forward: Sat 2026-03-07 23:30 EST opens; the
+                // 00:30 EST tail (05:30Z) is still Saturday's window
+                Arguments.of(nySaturday, "2026-03-08T04:30:00Z", true),
+                Arguments.of(nySaturday, "2026-03-08T05:30:00Z", true),
+                // Sunday night opening and its Monday tail are not Saturday's
+                Arguments.of(nySaturday, "2026-03-09T03:30:00Z", false),
+                Arguments.of(nySaturday, "2026-03-09T05:00:00Z", false),
+                // DST fall back: both occurrences of 01:30 on 2026-11-01
+                // (EDT 05:30Z, EST 06:30Z) are the tail of Saturday Oct 31
+                Arguments.of(nySaturday, "2026-11-01T05:30:00Z", true),
+                Arguments.of(nySaturday, "2026-11-01T06:30:00Z", true));
+    }
+
+    @ParameterizedTest(name = "{1} -> {2}")
+    @MethodSource("overnightCases")
+    void overnightWindowUsesOpeningWeekday(String ruleJson, String instant, boolean expected) {
+        MatchRule rule = MatchRule.parse(ruleJson);
+        assertEquals(expected, rule.matches("desktop", "windows", null, Instant.parse(instant)),
+                () -> ruleJson + " @ " + instant);
+    }
+
+    @Test
+    void openingDayShiftAppliesOnlyToOvernightWindows() {
+        // 00:00-02:00 is NOT overnight (from < to): the tail shift must not
+        // leak in — Tuesday 01:00 is judged by Tuesday, not Monday.
+        MatchRule dayWindow = MatchRule.parse(
+                "{\"timeWindows\":[{\"from\":\"00:00\",\"to\":\"02:00\",\"tz\":\"UTC\",\"weekdays\":[2]}]}");
+        assertTrue(dayWindow.matches("desktop", "windows", null, Instant.parse("2026-01-06T01:00:00Z")));
+        assertFalse(dayWindow.matches("desktop", "windows", null, Instant.parse("2026-01-05T01:00:00Z")));
+        // An overnight window without a weekday list is untouched by the shift.
+        MatchRule noWeekdays = MatchRule.parse(
+                "{\"timeWindows\":[{\"from\":\"23:00\",\"to\":\"02:00\",\"tz\":\"UTC\"}]}");
+        assertTrue(noWeekdays.matches("desktop", "windows", null, Instant.parse("2026-01-06T01:00:00Z")));
+    }
+
+    @Test
+    void emptyRuleConstrainsNothing() {
+        // S1 gate input: "{}" parses to a rule object but pins no dimension,
+        // and empty arrays normalize away — neither is conditional routing.
+        assertFalse(MatchRule.parse("{}").isConstraining());
+        assertFalse(MatchRule.parse("{\"devices\":[]}").isConstraining());
+        assertTrue(MatchRule.parse("{\"devices\":[\"mobile\"]}").isConstraining());
+        assertTrue(MatchRule.parse(
+                "{\"timeWindows\":[{\"from\":\"09:00\",\"to\":\"17:00\",\"tz\":\"UTC\"}]}").isConstraining());
+        // A corrupt stored rule degrades to wildcard on the read path.
+        assertNull(MatchRule.parseLenient("{not json"));
     }
 
     @Test

@@ -33,7 +33,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * with fixture text — no test ever calls out. A failed fetch/parse keeps the
  * old table and the old snapshot (fail-open toward the last good data) and
  * only moves the sync counter; the {@code last_success} gauge is the
- * freshness signal. Hosts that vanish from the feed are never deleted.
+ * freshness signal — of the last APPLIED snapshot, not the last fetch
+ * (S/N wave). Hosts that vanish from the feed are never deleted.
  */
 @Slf4j
 @Component
@@ -132,10 +133,25 @@ public class MaliciousHostSyncService {
                 mapper.upsertBatch(batch, SOURCE_URLHAUS, now);
             }
         });
+        // S/N wave (audit S3, the one cut in scope): freshness is claimed
+        // only AFTER the new data is actually applied. The order used to be
+        // timestamp/counter first and snapshot refresh last — and refresh
+        // swallowed its own failures — so the gauge could call a snapshot
+        // "fresh" that verdicts were not using. Now: apply first (snapshot
+        // reload, then the policy view over it); an apply failure counts
+        // apply_failed and leaves the timestamp untouched, while the table
+        // keeps the upserted rows (the next successful refresh picks them
+        // up) and verdicts keep the previous snapshot.
+        boolean applied = snapshot.refresh();
+        phishingPolicy.refreshFeedHosts();
+        if (!applied) {
+            meterRegistry.counter("linkforge.malicious.feed.sync", "result", "apply_failed").increment();
+            log.warn("malicious host feed ingested {} hosts but the snapshot apply failed; "
+                    + "keeping previous snapshot and last-success timestamp", hosts.size());
+            return hosts.size();
+        }
         lastSuccessEpochSeconds.set(Instant.now().getEpochSecond());
         meterRegistry.counter("linkforge.malicious.feed.sync", "result", "ok").increment();
-        snapshot.refresh();
-        phishingPolicy.refreshFeedHosts();
         return hosts.size();
     }
 }

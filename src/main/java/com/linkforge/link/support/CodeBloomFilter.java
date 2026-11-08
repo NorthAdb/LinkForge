@@ -168,10 +168,17 @@ public class CodeBloomFilter {
                 filter = previous;
                 ready = previous != null;
                 meterRegistry.counter("linkforge.bloom.rebuild", "result", "error").increment();
-                log.warn("bloom rebuild failed; previous filter restored: {}", ex.getMessage(), ex);
                 if (manual) {
-                    throw new BizException(500, "bloom rebuild failed: " + ex.getMessage(), ex);
+                    // S/N wave (audit N1): the wire message is FIXED — the
+                    // underlying failure can carry SQL/connection detail that
+                    // must never reach a client. The stack is logged exactly
+                    // once, by GlobalExceptionHandler (this exception carries
+                    // a cause), so there is deliberately no log line here.
+                    throw new BizException(500, "bloom rebuild failed", ex);
                 }
+                // Scheduled/startup path: no handler will see this failure,
+                // so the one stack log lives here instead.
+                log.warn("bloom rebuild failed; previous filter restored: {}", ex.getMessage(), ex);
                 return 0;
             }
         } finally {
