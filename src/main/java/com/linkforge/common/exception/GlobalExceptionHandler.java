@@ -1,8 +1,12 @@
 package com.linkforge.common.exception;
 
 import com.linkforge.common.result.ApiResponse;
+import com.linkforge.common.web.CorrelationIdFilter;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindException;
@@ -30,7 +34,27 @@ public class GlobalExceptionHandler {
         // stays as a safety net for a dual-written legacy value outside 400-599,
         // which used to clamp to 400 here.
         int status = ex.getHttpStatus() >= 400 && ex.getHttpStatus() <= 599 ? ex.getHttpStatus() : 400;
+        // S/N wave (audit N1): this handler is the SINGLE server-side stack
+        // log for a BizException failure. A server-side failure (5xx) or any
+        // exception carrying a cause is logged once, here — the cause object
+        // used to die with the request, leaving nothing an operator could
+        // find. Throw sites must not log the same stack themselves (the one
+        // historical site, bloom rebuild, was adjusted to match). The wire
+        // body stays exactly the exception's fixed message: no cause text,
+        // no SQL, no connection detail ever crosses to the client; the
+        // correlation id is the join key between the two sides.
+        if (status >= 500 || ex.getCause() != null) {
+            log.error("business failure: code={} cid={}", ex.getCode(),
+                    CorrelationIdFilter.currentId(currentRequest()), ex);
+        }
         return ResponseEntity.status(status).body(ApiResponse.fail(ex.getCode(), ex.getMessage()));
+    }
+
+    private static HttpServletRequest currentRequest() {
+        if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attrs) {
+            return attrs.getRequest();
+        }
+        return null;
     }
 
     @ExceptionHandler({MethodArgumentNotValidException.class, BindException.class})

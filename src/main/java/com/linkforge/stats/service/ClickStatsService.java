@@ -5,8 +5,11 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.linkforge.common.result.PageResponse;
 import com.linkforge.config.LinkForgeProperties;
 import com.linkforge.link.entity.LinkVariant;
+import com.linkforge.link.entity.ShortLink;
 import com.linkforge.link.mapper.LinkVariantMapper;
+import com.linkforge.link.mapper.ShortLinkMapper;
 import com.linkforge.link.support.CsvFormat;
+import com.linkforge.link.support.MatchRule;
 import com.linkforge.stats.dto.AbReportResponse;
 import com.linkforge.stats.dto.ClickDetail;
 import com.linkforge.stats.dto.DailyClickCount;
@@ -26,6 +29,7 @@ import com.linkforge.stats.support.ClickDimensions;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDate;
@@ -33,6 +37,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 @Service
@@ -43,15 +48,18 @@ public class ClickStatsService {
     private final ClickDimDailyMapper clickDimDailyMapper;
     private final ClickLogMapper clickLogMapper;
     private final LinkVariantMapper linkVariantMapper;
+    private final ShortLinkMapper shortLinkMapper;
     private final LinkForgeProperties properties;
     private final com.linkforge.webhook.service.WebhookService webhookService;
     private final TransactionTemplate dedupTx;
+    private final TransactionTemplate snapshotTx;
 
     public ClickStatsService(ConsumedEventMapper consumedEventMapper,
                              ClickDailyMapper clickDailyMapper,
                              ClickDimDailyMapper clickDimDailyMapper,
                              ClickLogMapper clickLogMapper,
                              LinkVariantMapper linkVariantMapper,
+                             ShortLinkMapper shortLinkMapper,
                              LinkForgeProperties properties,
                              com.linkforge.webhook.service.WebhookService webhookService,
                              PlatformTransactionManager transactionManager) {
@@ -60,9 +68,15 @@ public class ClickStatsService {
         this.clickDimDailyMapper = clickDimDailyMapper;
         this.clickLogMapper = clickLogMapper;
         this.linkVariantMapper = linkVariantMapper;
+        this.shortLinkMapper = shortLinkMapper;
         this.properties = properties;
         this.webhookService = webhookService;
         this.dedupTx = new TransactionTemplate(transactionManager);
+        // S/N wave (audit S4-1): a SEPARATE read-only RR template for the
+        // stats snapshot reads — never the write-side dedupTx.
+        this.snapshotTx = new TransactionTemplate(transactionManager);
+        this.snapshotTx.setReadOnly(true);
+        this.snapshotTx.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
     }
 
     /**
@@ -143,25 +157,55 @@ public class ClickStatsService {
      * detail, so an MQ backlog could show a day with UV &gt; clicks.
      * totalClicks is exactly the sum of the daily clicks column; totalUv is the
      * window-wide distinct-IP count (not the sum of the daily UV column).
+     * S/N wave (audit S4-1): the three reads also share one read-only RR
+     * snapshot (see {@link #snapshotTx}), so "the same set of clicks" is a
+     * transactional fact, not just a same-source/same-window one.
      */
     public LinkStatsResponse stats(Long linkId, String code, int days) {
         LocalDate today = LocalDate.now();
         LocalDate fromDate = today.minusDays(days - 1L);
         LocalDateTime from = fromDate.atStartOfDay();
         LocalDateTime toExclusive = today.plusDays(1).atStartOfDay();
-        long totalUv = clickLogMapper.countDistinctIps(linkId, from, toExclusive);
-        Map<LocalDate, Long> byDate = clickLogMapper.selectDailyClicks(linkId, from, toExclusive).stream()
-                .collect(Collectors.toMap(DailyClickCount::getStatDate, DailyClickCount::getClicks));
-        Map<LocalDate, Long> uvByDate = clickLogMapper.selectDailyUv(linkId, from, toExclusive).stream()
-                .collect(Collectors.toMap(DailyUv::getStatDate, DailyUv::getUv));
+        // S/N wave (audit S4-1): the three reads run inside ONE read-only RR
+        // transaction, so they share a single consistent snapshot — a click
+        // landing between two of the reads can no longer make one response
+        // describe two different click sets (UV > clicks within a response).
+        StatsReads reads = snapshotTx.execute(status -> new StatsReads(
+                readTotalUv(linkId, from, toExclusive),
+                readDailyClicks(linkId, from, toExclusive),
+                readDailyUv(linkId, from, toExclusive)));
         List<DailyClicks> daily = new ArrayList<>();
         long total = 0;
         for (LocalDate d = fromDate; !d.isAfter(today); d = d.plusDays(1)) {
-            long clicks = byDate.getOrDefault(d, 0L);
+            long clicks = reads.clicksByDate().getOrDefault(d, 0L);
             total += clicks;
-            daily.add(new DailyClicks(d, clicks, uvByDate.getOrDefault(d, 0L)));
+            daily.add(new DailyClicks(d, clicks, reads.uvByDate().getOrDefault(d, 0L)));
         }
-        return new LinkStatsResponse(code, total, totalUv, daily);
+        return new LinkStatsResponse(code, total, reads.totalUv(), daily);
+    }
+
+    /** The three snapshot reads of {@link #stats}, composed by the caller. */
+    protected record StatsReads(long totalUv, Map<LocalDate, Long> clicksByDate,
+                                Map<LocalDate, Long> uvByDate) {
+    }
+
+    // The three reads are separate protected methods on purpose: the
+    // StatsWindowConsistencyIT seam overrides one of them to land a click
+    // between two reads on a second connection (the PR-A insertSuccessor
+    // precedent). Production behavior is exactly the mapper calls below.
+
+    protected long readTotalUv(Long linkId, LocalDateTime from, LocalDateTime toExclusive) {
+        return clickLogMapper.countDistinctIps(linkId, from, toExclusive);
+    }
+
+    protected Map<LocalDate, Long> readDailyClicks(Long linkId, LocalDateTime from, LocalDateTime toExclusive) {
+        return clickLogMapper.selectDailyClicks(linkId, from, toExclusive).stream()
+                .collect(Collectors.toMap(DailyClickCount::getStatDate, DailyClickCount::getClicks));
+    }
+
+    protected Map<LocalDate, Long> readDailyUv(Long linkId, LocalDateTime from, LocalDateTime toExclusive) {
+        return clickLogMapper.selectDailyUv(linkId, from, toExclusive).stream()
+                .collect(Collectors.toMap(DailyUv::getStatDate, DailyUv::getUv));
     }
 
     /**
@@ -170,6 +214,16 @@ public class ClickStatsService {
      * weights come from the CURRENT variant configuration. Buckets whose
      * variant was deleted since are reported as orphaned rows outside the fit.
      * Owner check happens at the controller.
+     *
+     * <p>S/N wave (audit S1): before any fit, the applicability gate
+     * ({@link AbReport#checkApplicability}) decides whether a global-weight
+     * fit means anything at all for this window — conditional routing,
+     * a configuration changed inside the window, or a configuration whose
+     * stability cannot be proven all answer NOT_APPLICABLE with a stable
+     * reason instead of a misleading SKEWED/CONSISTENT. Fewer than two
+     * configured variants skip the gate entirely: no fit exists there
+     * regardless of history, and {@code compute} reports the structural
+     * TOO_FEW_VARIANTS reason itself.
      */
     public AbReportResponse abReport(Long linkId, String code, int days) {
         LocalDate today = LocalDate.now();
@@ -188,13 +242,32 @@ public class ClickStatsService {
                 .sorted(Map.Entry.comparingByKey())
                 .map(e -> new AbReport.VariantInput(e.getKey(), 0, e.getValue()))
                 .toList();
-        AbReport.Result result = AbReport.compute(variants, orphans);
+        AbReport.Result result;
+        if (configured.size() < 2) {
+            result = AbReport.compute(variants, orphans);
+        } else {
+            boolean anyConditional = configured.stream().anyMatch(variant -> {
+                MatchRule rule = MatchRule.parseLenient(variant.getMatchRule());
+                return rule != null && rule.isConstraining();
+            });
+            LocalDateTime configInstalledAt = configured.stream()
+                    .map(LinkVariant::getCreatedAt).filter(Objects::nonNull)
+                    .max(LocalDateTime::compareTo).orElse(null);
+            ShortLink link = shortLinkMapper.selectById(linkId);
+            LocalDateTime linkCreatedAt = link == null ? null : link.getCreatedAt();
+            AbReport.NotApplicableReason gate = AbReport.checkApplicability(anyConditional,
+                    !orphans.isEmpty(), configInstalledAt, linkCreatedAt, from.atStartOfDay());
+            result = gate != null
+                    ? AbReport.notApplicable(variants, orphans, gate)
+                    : AbReport.compute(variants, orphans);
+        }
         List<AbReportResponse.VariantRow> rows = result.rows().stream()
                 .map(r -> new AbReportResponse.VariantRow(r.key(), r.weight(), r.observed(),
                         r.expected(), r.share(), r.ciLow(), r.ciHigh(), r.orphaned()))
                 .toList();
         return new AbReportResponse(code, days, result.totalClicks(), result.chiSquare(),
-                result.degreesOfFreedom(), result.pValue(), result.verdict().name(), rows);
+                result.degreesOfFreedom(), result.pValue(), result.verdict().name(),
+                result.reason() == null ? null : result.reason().name(), rows);
     }
 
     /** One raw-click export: CSV body plus whether the row cap cut it short. */

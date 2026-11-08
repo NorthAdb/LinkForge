@@ -1,5 +1,6 @@
 package com.linkforge.stats.support;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -18,6 +19,28 @@ public final class AbReport {
 
     public enum Verdict {CONSISTENT, SKEWED, INSUFFICIENT_DATA, NOT_APPLICABLE}
 
+    /**
+     * S/N wave (audit S1): why a report is NOT_APPLICABLE before any fit is
+     * attempted. The names are a stable wire contract — once shipped they do
+     * not get renamed. Null on every verdict that carries a fit conclusion
+     * (and on INSUFFICIENT_DATA, where the fit exists but starved).
+     */
+    public enum NotApplicableReason {
+        /** A currently configured variant effectively narrows its candidate
+         * set (conditional routing), so a global-weight fit is meaningless. */
+        CONDITIONAL_ROUTING,
+        /** The configuration demonstrably changed inside the report window:
+         * orphaned buckets exist, or the current set was installed inside
+         * the window after the link's birth. */
+        CONFIG_CHANGED_IN_WINDOW,
+        /** The current set was installed inside the window but a change
+         * cannot be told apart from the link's birth install — stability is
+         * unprovable either way, so no fit is shipped. */
+        CONFIG_HISTORY_UNKNOWN,
+        /** Structural: fewer than two configured variants, no fit exists. */
+        TOO_FEW_VARIANTS
+    }
+
     /** One currently configured variant and its observed clicks in the window. */
     public record VariantInput(String key, int weight, long observed) {
     }
@@ -30,7 +53,8 @@ public final class AbReport {
     }
 
     public record Result(List<Row> rows, long totalClicks, Double chiSquare,
-                         int degreesOfFreedom, Double pValue, Verdict verdict) {
+                         int degreesOfFreedom, Double pValue, Verdict verdict,
+                         NotApplicableReason reason) {
     }
 
     private static final double Z_95 = 1.96;
@@ -58,12 +82,13 @@ public final class AbReport {
         }
         if (variants.size() < 2 || totalWeight <= 0) {
             // Zero variants = plain link; one variant leaves df = 0 — no fit exists.
-            return new Result(rows, total, null, 0, null, Verdict.NOT_APPLICABLE);
+            return new Result(rows, total, null, 0, null, Verdict.NOT_APPLICABLE,
+                    NotApplicableReason.TOO_FEW_VARIANTS);
         }
         boolean starved = total < MIN_TOTAL_CLICKS || variants.stream().anyMatch(v ->
                 totalWeight > 0 && (double) total * v.weight() / totalWeight < MIN_EXPECTED);
         if (starved) {
-            return new Result(rows, total, null, variants.size() - 1, null, Verdict.INSUFFICIENT_DATA);
+            return new Result(rows, total, null, variants.size() - 1, null, Verdict.INSUFFICIENT_DATA, null);
         }
         double chiSquare = 0.0;
         for (VariantInput v : variants) {
@@ -73,7 +98,81 @@ public final class AbReport {
         }
         int df = variants.size() - 1;
         double p = chiSquarePValue(df, chiSquare);
-        return new Result(rows, total, chiSquare, df, p, p < ALPHA ? Verdict.SKEWED : Verdict.CONSISTENT);
+        return new Result(rows, total, chiSquare, df, p, p < ALPHA ? Verdict.SKEWED : Verdict.CONSISTENT, null);
+    }
+
+    /**
+     * S/N wave (audit S1): the applicability gate, evaluated BEFORE
+     * {@link #compute}. The caller derives the inputs; this stays a pure
+     * function so the precedence is unit-testable without a database.
+     *
+     * <p>Stability proof, and the invariant it rests on: variant rows are
+     * NEVER updated in place — the only variant writes in the codebase are
+     * whole-set inserts (create / CSV import) and whole-set delete+insert
+     * replacement inside {@code ShortLinkService.update()}. Every row of a
+     * set therefore carries the same app-side {@code createdAt}: the install
+     * instant of the CURRENT configuration (keys, weights, rules, targets).
+     * If that instant predates the window, the configuration present now is
+     * the configuration every in-window click was drawn under. An in-place
+     * variant edit path, if one is ever added, silently breaks this proof —
+     * it must stamp a fresh install instant instead.
+     *
+     * @param anyConditional   any CURRENT variant's parsed rule narrows its
+     *                         candidate set (parse-based; "{}" is not conditional)
+     * @param orphansPresent   the window holds buckets of variants no longer
+     *                         configured — proof the in-window configuration
+     *                         differed from the current one
+     * @param configInstalledAt max {@code createdAt} over the current variant
+     *                         rows (null when unavailable: nothing is provable)
+     * @param linkCreatedAt    the link's own {@code createdAt}; a replacement
+     *                         must postdate it (beyond a 2s tolerance for the
+     *                         separate {@code now()} calls and DATETIME's
+     *                         second precision at birth) to count as a change
+     * @param windowStart      start of the report window, derived exactly as
+     *                         the caller derives its bucket window
+     * @return the reason the fit does not apply, or null when the current
+     *         configuration is PROVEN stable for the whole window
+     */
+    public static NotApplicableReason checkApplicability(boolean anyConditional,
+                                                         boolean orphansPresent,
+                                                         LocalDateTime configInstalledAt,
+                                                         LocalDateTime linkCreatedAt,
+                                                         LocalDateTime windowStart) {
+        if (anyConditional) {
+            return NotApplicableReason.CONDITIONAL_ROUTING;
+        }
+        if (orphansPresent) {
+            return NotApplicableReason.CONFIG_CHANGED_IN_WINDOW;
+        }
+        if (configInstalledAt == null) {
+            return NotApplicableReason.CONFIG_HISTORY_UNKNOWN;
+        }
+        if (configInstalledAt.isBefore(windowStart)) {
+            return null;
+        }
+        if (linkCreatedAt != null && configInstalledAt.isAfter(linkCreatedAt.plusSeconds(2))) {
+            return NotApplicableReason.CONFIG_CHANGED_IN_WINDOW;
+        }
+        return NotApplicableReason.CONFIG_HISTORY_UNKNOWN;
+    }
+
+    /**
+     * The NOT_APPLICABLE result for a gate rejection: observed counts and
+     * weights are window facts and stay, but every number that encodes the
+     * (invalid) fit — expected, share, confidence interval — is null, so the
+     * response cannot be misread as a significance conclusion.
+     */
+    public static Result notApplicable(List<VariantInput> variants, List<VariantInput> orphans,
+                                       NotApplicableReason reason) {
+        long total = variants.stream().mapToLong(VariantInput::observed).sum();
+        List<Row> rows = new ArrayList<>(variants.size() + orphans.size());
+        for (VariantInput v : variants) {
+            rows.add(new Row(v.key(), v.weight(), v.observed(), null, null, null, null, false));
+        }
+        for (VariantInput o : orphans) {
+            rows.add(new Row(o.key(), null, o.observed(), null, null, null, null, true));
+        }
+        return new Result(rows, total, null, 0, null, Verdict.NOT_APPLICABLE, reason);
     }
 
     private static Row rowWithInterval(VariantInput v, Double expected, long total, boolean orphaned) {

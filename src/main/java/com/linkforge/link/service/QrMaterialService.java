@@ -55,8 +55,8 @@ public class QrMaterialService {
             return png.toByteArray();
         } catch (WriterException | IOException ex) {
             // bounded short-URL content: only a size/content mismatch lands here.
-            // Keep the cause: without it the original stack vanished entirely
-            // (the handler does not log BizException).
+            // Keep the cause: GlobalExceptionHandler logs it once server-side
+            // (audit N1); the wire keeps only the fixed message above.
             throw new BizException(400, "qr rendering failed for the requested size", ex);
         }
     }

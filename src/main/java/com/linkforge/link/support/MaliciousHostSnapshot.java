@@ -39,18 +39,27 @@ public class MaliciousHostSnapshot {
 
     /** Reloads the whole table (feed scale is tens of thousands of short
      * strings — a full copy is cheaper than change tracking). A failed read
-     * keeps the previous snapshot: stale rules beat no rules. */
-    public void refresh() {
+     * keeps the previous snapshot: stale rules beat no rules.
+     *
+     * @return true when the in-memory snapshot now reflects the table (or
+     *         the feed is disabled and the snapshot is pinned empty);
+     *         false when the read failed and the previous snapshot is
+     *         still in force — callers that track freshness (the sync
+     *         service's last-success gauge) must not claim an apply that
+     *         did not happen (S/N wave, audit S3). */
+    public boolean refresh() {
         if (!properties.getMaliciousFeed().isEnabled()) {
             hosts = Set.of();
-            return;
+            return true;
         }
         try {
             hosts = Set.copyOf(new HashSet<>(mapper.selectAllHosts()));
             log.info("malicious host snapshot refreshed: {} hosts", hosts.size());
+            return true;
         } catch (Exception ex) {
             log.warn("malicious host snapshot refresh failed, keeping {} hosts: {}",
                     hosts.size(), ex.getMessage());
+            return false;
         }
     }
 

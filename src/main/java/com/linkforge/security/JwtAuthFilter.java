@@ -9,6 +9,9 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.ibatis.exceptions.PersistenceException;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -20,12 +23,18 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Set;
 
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class JwtAuthFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
     private final UserAccountMapper userAccountMapper;
+
+    /** S/N wave (audit S4-5): the recheck store is unavailable — distinct
+     * from every credential verdict, on both filters byte-identical. */
+    static final String STORE_UNAVAILABLE_BODY =
+            "{\"code\":503,\"message\":\"authentication store unavailable\",\"data\":null}";
 
     /** Paths a must_change_password user may still reach: clearing the flag and
      * ending/rotating the session must never be blocked by the flag itself. */
@@ -103,7 +112,24 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         } catch (RuntimeException ex) {
             return true;
         }
-        UserAccount user = userAccountMapper.selectById(userId);
+        UserAccount user;
+        try {
+            user = userAccountMapper.selectById(userId);
+        } catch (DataAccessException | PersistenceException ex) {
+            // S/N wave (audit S4-5): the recheck STORE failed — that is not
+            // a failed recheck. The A1 semantics above cover "row read, user
+            // unfit" (leave unauthenticated, chain continues); a store
+            // failure instead answers a stable 503 so "dependency down" is
+            // never misreported as "bad credential" and never escapes the
+            // filter as a container 500 — on protected and permitAll paths
+            // alike. No identity is granted. Requests without a token never
+            // reach this call and stay unaffected. The log carries the user
+            // id only, never the token.
+            log.error("auth store unavailable while rechecking user {}: {}",
+                    userId, ex.getMessage(), ex);
+            writeJson(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, STORE_UNAVAILABLE_BODY);
+            return false;
+        }
         if (user == null || user.getStatus() == null || user.getStatus() != 1) {
             return true;
         }

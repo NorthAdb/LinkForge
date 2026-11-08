@@ -279,6 +279,10 @@ logging:
   level:
     com.linkforge: INFO
     com.baomidou.mybatisplus: WARN
+  # S/N wave (audit N1): every log line carries the request correlation id
+  # (CorrelationIdFilter fills the MDC; empty outside a request).
+  pattern:
+    level: "%5p [%X{cid}]"
 
 ---
 spring:
