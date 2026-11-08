@@ -147,6 +147,7 @@
   <div class="who-box">
     <span class="who" id="who"></span>
     <span class="pill pill-admin hidden" id="roleBadge">ADMIN</span>
+    <button class="ghost hidden" id="logoutAll" onclick="logoutAll()">退出全部设备</button>
     <button class="ghost hidden" id="logout" onclick="logout()">退出</button>
   </div>
 </header>
@@ -166,6 +167,38 @@
       </div>
     </div>
     <div class="msg" id="authMsg"></div>
+  </section>
+
+  <section class="card hidden" id="inviteCard">
+    <h2>接受邀请</h2>
+    <div class="stats-line">你打开的是一个邀请链接。为自己设置用户名与密码即可加入对方的租户；链接只能使用一次。</div>
+    <div class="grid2">
+      <div>
+        <label>用户名</label><input id="invUser" placeholder="你的用户名">
+        <label>密码</label><input id="invPass" type="password" placeholder="至少 8 位" autocomplete="new-password">
+        <label>再次输入密码</label><input id="invPass2" type="password" autocomplete="new-password">
+      </div>
+      <div style="display:flex;flex-direction:column;justify-content:flex-end;gap:8px">
+        <button onclick="submitInvite()">接受邀请并登录</button>
+      </div>
+    </div>
+    <div class="msg" id="invMsg"></div>
+  </section>
+
+  <section class="card hidden" id="changeCard">
+    <h2>必须修改密码</h2>
+    <div class="warn-box">当前密码是管理员设置的临时密码（或已被重置），改密前无法使用其它功能。改密成功后服务端会撤销你的全部会话（含本页），需要用新密码重新登录。</div>
+    <div class="grid2">
+      <div>
+        <label>当前（临时）密码</label><input id="chgCurrent" type="password" autocomplete="current-password">
+        <label>新密码</label><input id="chgNew" type="password" autocomplete="new-password">
+        <label>再次输入新密码</label><input id="chgNew2" type="password" autocomplete="new-password">
+      </div>
+      <div style="display:flex;flex-direction:column;justify-content:flex-end;gap:8px">
+        <button onclick="submitChangePassword()">修改密码</button>
+      </div>
+    </div>
+    <div class="msg" id="chgMsg"></div>
   </section>
 
   <section class="card hidden" id="mainCard">
@@ -220,6 +253,10 @@
     <div class="import-result hidden" id="importResult"></div>
 
     <h2 style="margin-top:20px">我的短链</h2>
+    <div class="action-row" style="margin:0 0 10px">
+      <input id="filterKeyword" placeholder="关键词 keyword（子串检索）" style="width:auto;flex:1;min-width:180px" oninput="onFilterChange()">
+      <input id="filterTag" placeholder="标签 tag（整词匹配）" style="width:auto;flex:1;min-width:140px" oninput="onFilterChange()">
+    </div>
     <table>
       <thead><tr><th>短码</th><th>标题</th><th>目标 / 状态</th><th>过期</th><th>操作</th></tr></thead>
       <tbody id="rows"></tbody>
@@ -408,6 +445,34 @@
   </div>
 </div>
 
+<div class="overlay hidden" id="pwOverlay" onclick="if (event.target === this) closePwDialog()">
+  <div class="dialog" role="dialog" aria-modal="true" style="width:420px">
+    <div class="dialog-head">
+      <div class="dialog-title" id="pwTitle">访问密码</div>
+      <button class="ghost sm" onclick="closePwDialog()">关闭</button>
+    </div>
+    <div class="dialog-body">
+      <div id="pwSetBody">
+        <section class="d-sec">
+          <label>accessPassword（4-64 位）</label>
+          <input id="pwInput" type="password" autocomplete="new-password" placeholder="输入访问密码">
+          <div class="action-row"><button onclick="submitPwDialog()">提交</button></div>
+          <div class="msg" id="pwMsg"></div>
+        </section>
+      </div>
+      <div id="pwConfirmBody" class="hidden">
+        <section class="d-sec">
+          <div id="pwConfirmText"></div>
+          <div class="action-row">
+            <button class="danger" onclick="confirmPwDialog()">确认清除</button>
+            <button class="ghost" onclick="closePwDialog()">取消</button>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 const state = { token: '', tenantRole: 'MEMBER', page: 1, days: 7, clicksSize: 10, detail: null, variantBadges: new Map(), idemSeq: 0, editRules: [], editOriginalVariants: [] };
 let qrObjectUrl = '';
@@ -431,20 +496,23 @@ function trunc(s, n) { s = s == null ? '' : String(s); return s.length > n ? s.s
 function storeRefresh(data) { if (data && data.refreshToken) sessionStorage.setItem('lf_refresh_token', data.refreshToken); }
 let refreshInFlight = null;
 // 单飞：并发请求同时撞 401 时只发一次 refresh，其余等同一个结果。
+// 成功返回完整的 LoginResponse 数据（身份字段与 mustChangePassword 都在里面，
+// 启动恢复与强制改密分流要靠它路由），失败返回 null；只关心成败的调用方
+// （api / fetchWithRefresh）按真值判断，与旧的 boolean 合同兼容。
 function tryRefresh() {
   if (!refreshInFlight) {
     refreshInFlight = (async () => {
       const rt = sessionStorage.getItem('lf_refresh_token');
-      if (!rt) return false;
+      if (!rt) return null;
       try {
         const resp = await fetch('/api/auth/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken: rt }) });
-        if (!resp.ok) return false;
+        if (!resp.ok) return null;
         const j = await resp.json();
-        if (!j.data || !j.data.token) return false;
+        if (!j.data || !j.data.token) return null;
         state.token = j.data.token;
         storeRefresh(j.data);
-        return true;
-      } catch (e) { return false; }
+        return j.data;
+      } catch (e) { return null; }
     })();
     refreshInFlight.finally(() => { refreshInFlight = null; });
   }
@@ -479,12 +547,24 @@ async function httpErrorText(resp) {
   try { const j = await resp.json(); return j.message || ('HTTP ' + resp.status); } catch (e) { return 'HTTP ' + resp.status; }
 }
 
+// 带静默刷新的裸 fetch：自动带 Bearer，access 过期（401）时 refresh 一次并
+// 重试一次，绝不循环。二进制下载（fetchBlob）与 CSV 导入上传共用这条链，
+// 避免上传路径像改造前那样裸 fetch、过期即失败。
+async function fetchWithRefresh(path, init) {
+  const withAuth = () => {
+    const headers = new Headers((init && init.headers) || {});
+    headers.set('Authorization', 'Bearer ' + state.token);
+    return { ...(init || {}), headers };
+  };
+  let resp = await fetch(path, withAuth());
+  if (resp.status === 401 && await tryRefresh()) {
+    resp = await fetch(path, withAuth());
+  }
+  return resp;
+}
 // 导出 / QR 是需鉴权的二进制，裸 <a href> 带不上 Bearer 会 401，所以统一 fetch+blob。
 async function fetchBlob(path) {
-  let resp = await fetch(path, { headers: { Authorization: 'Bearer ' + state.token } });
-  if (resp.status === 401 && await tryRefresh()) {
-    resp = await fetch(path, { headers: { Authorization: 'Bearer ' + state.token } });
-  }
+  const resp = await fetchWithRefresh(path);
   if (!resp.ok) throw new Error(await httpErrorText(resp));
   return resp.blob();
 }
@@ -501,12 +581,76 @@ function saveBlob(blob, name) {
 async function login() {
   const r = await api('POST', '/api/auth/login', { tenantName: $('tenant').value.trim(), username: $('user').value.trim(), password: $('pass').value });
   if (r.error) return setMsg('authMsg', '登录失败：' + r.error, false);
-  state.token = r.data.token; storeRefresh(r.data); afterAuth(r.data.username + '@' + r.data.tenantName, r.data.tenantRole);
+  enterSession(r.data);
 }
 async function register() {
   const r = await api('POST', '/api/auth/register', { tenantName: $('tenant').value.trim(), username: $('user').value.trim(), password: $('pass').value });
   if (r.error) return setMsg('authMsg', '注册失败：' + r.error, false);
-  state.token = r.data.token; storeRefresh(r.data); afterAuth(r.data.username + '@' + r.data.tenantName, r.data.tenantRole);
+  enterSession(r.data);
+}
+// 全部签发会话的入口（登录 / 注册 / 接受邀请 / 启动恢复）统一走这里：
+// mustChangePassword 的账号只进改密页——后端的墙会让其余一切请求 403，
+// 直接放进主界面只会满屏报错且无处自救。
+function enterSession(data) {
+  state.token = data.token;
+  storeRefresh(data);
+  if (postAuthRoute(data) === 'force-change') { showForceChange(); return; }
+  afterAuth(data.username + '@' + data.tenantName, data.tenantRole);
+}
+function showForceChange() {
+  $('authCard').classList.add('hidden');
+  $('inviteCard').classList.add('hidden');
+  $('changeCard').classList.remove('hidden');
+}
+async function submitChangePassword() {
+  const next = $('chgNew').value;
+  if (next !== $('chgNew2').value) return setMsg('chgMsg', '两次输入的新密码不一致', false);
+  const body = { currentPassword: $('chgCurrent').value, newPassword: next };
+  let r = await api('POST', '/api/auth/change-password', body);
+  // api() 对 /api/auth/ 路径不做 401 重放；access 恰好过期时手动 refresh 一次再试，
+  // 免得改密页变成死胡同。
+  if (r.status === 401 && await tryRefresh()) r = await api('POST', '/api/auth/change-password', body);
+  if (r.error) return setMsg('chgMsg', '改密失败：' + r.error, false);
+  // 服务端合同：改密即撤销全部 refresh 并 bump token_version，连本次会话一起
+  // 作废——本地同步清掉，回登录页重新登录，不是缺陷。
+  sessionStorage.removeItem('lf_refresh_token');
+  state.token = '';
+  $('chgCurrent').value = ''; $('chgNew').value = ''; $('chgNew2').value = '';
+  setMsg('chgMsg', '');
+  $('changeCard').classList.add('hidden');
+  $('authCard').classList.remove('hidden');
+  setMsg('authMsg', '密码已修改，全部会话（含本页）已撤销，请用新密码重新登录', true);
+}
+let pendingInviteToken = '';
+function showInviteAccept(token) {
+  pendingInviteToken = token;
+  $('authCard').classList.add('hidden');
+  $('inviteCard').classList.remove('hidden');
+}
+async function submitInvite() {
+  const username = $('invUser').value.trim();
+  if (!username) return setMsg('invMsg', '用户名必填', false);
+  if ($('invPass').value !== $('invPass2').value) return setMsg('invMsg', '两次输入的密码不一致', false);
+  let r;
+  try {
+    r = await api('POST', '/api/auth/accept-invitation', { token: pendingInviteToken, username: username, password: $('invPass').value });
+  } catch (e) {
+    r = { error: 'network' };
+  }
+  pendingInviteToken = '';
+  // 失败一律同一句：不区分已用 / 过期 / 不存在，也不回显服务端细节。
+  if (r.error) return setMsg('invMsg', '邀请无效或已过期，请向邀请人索取新链接', false);
+  $('inviteCard').classList.add('hidden');
+  $('invPass').value = ''; $('invPass2').value = '';
+  enterSession(r.data);
+}
+// 启动恢复：有 refresh 就静默换 access 并按身份路由（强制改密同样适用）；
+// 没有或已失效则停在默认的登录卡，不闪主界面。
+async function restoreSession() {
+  if (!sessionStorage.getItem('lf_refresh_token')) return;
+  const data = await tryRefresh();
+  if (!data) { sessionStorage.removeItem('lf_refresh_token'); state.token = ''; return; }
+  enterSession(data);
 }
 function afterAuth(who, role) {
   state.tenantRole = role === 'ADMIN' ? 'ADMIN' : 'MEMBER';
@@ -519,6 +663,7 @@ function afterAuth(who, role) {
     $('bloomCard').remove();
   }
   $('logout').classList.remove('hidden');
+  $('logoutAll').classList.remove('hidden');
   $('authCard').classList.add('hidden');
   for (const id of ['mainCard', 'keysCard', 'hookCard']) $(id).classList.remove('hidden');
   loadLinks(); loadKeys(); loadWebhook();
@@ -526,6 +671,12 @@ function afterAuth(who, role) {
 function logout() {
   const rt = sessionStorage.getItem('lf_refresh_token');
   if (rt) fetch('/api/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken: rt }) }).catch(() => {});
+  sessionStorage.removeItem('lf_refresh_token');
+  state.token = ''; location.reload();
+}
+async function logoutAll() {
+  const r = await api('POST', '/api/auth/logout-all');
+  if (r.error) return setMsg('listMsg', '退出全部设备失败：' + r.error, false);
   sessionStorage.removeItem('lf_refresh_token');
   state.token = ''; location.reload();
 }
@@ -594,6 +745,31 @@ function computeVariantsField(originalVariants, editedVariants) {
     weight: Number(v.weight),
     matchRule: matchRuleForSubmit(v.matchRule)
   }));
+}
+// S2 (console closure): the post-auth routing decision. A session whose
+// LoginResponse says mustChangePassword goes ONLY to the forced-change view:
+// the backend wall 403s every other authenticated call, so opening the app
+// would strand the user with no way to fix it. Strict === true: a missing or
+// malformed flag must never lock a healthy session out of the app.
+function postAuthRoute(data) {
+  return data && data.mustChangePassword === true ? 'force-change' : 'app';
+}
+// S2: extract the invite token from an invitation link's query string
+// (backend mints "/?invite=" + raw). Deterministic on duplicates: the FIRST
+// invite parameter wins. Absent or empty -> null (no invite flow). Decoding
+// is URLSearchParams' own; the token itself is never rendered into the page.
+function inviteTokenFromSearch(search) {
+  if (!search) return null;
+  const token = new URLSearchParams(search).get('invite');
+  return token === null || token === '' ? null : token;
+}
+// S2: access-password input rule for the set-password dialog, mirroring the
+// API's 4-64 contract (same wording as the edit form's inline check). The
+// value is checked and returned AS TYPED — passwords are never trimmed.
+function validateAccessPasswordInput(v) {
+  const s = v === null || v === undefined ? '' : String(v);
+  if (s.length < 4 || s.length > 64) return { ok: false, error: 'accessPassword 须为 4-64 位' };
+  return { ok: true, value: s };
 }
 // == PURE LOGIC END ==
 
@@ -690,7 +866,10 @@ async function importCsv() {
   if (!file) return setMsg('createMsg', '导入失败：请先选择 CSV 文件', false);
   const form = new FormData();
   form.append('file', file);
-  const resp = await fetch('/api/links/import', { method: 'POST', headers: { Authorization: 'Bearer ' + state.token }, body: form });
+  // 上传与下载共用 fetchWithRefresh：access 过期自动 refresh 重试一次（改造前
+  // 这里裸 fetch，过期即导入失败）。FormData 的 Content-Type 由浏览器带
+  // boundary 设置，绝不能手动写。
+  const resp = await fetchWithRefresh('/api/links/import', { method: 'POST', body: form });
   let json = {}; try { json = await resp.json(); } catch (e) {}
   if (!resp.ok || json.code !== 0) return showImportResult(null, '导入失败：' + (json.message || ('HTTP ' + resp.status)));
   showImportResult(json.data, null);
@@ -707,8 +886,20 @@ function showImportResult(d, error) {
   box.innerHTML = head + (failures.length ? '<div class="fail-scroll">' + lines + '</div>' : '');
 }
 
+let filterTimer = null;
+// 筛选变化即回第一页；输入做短防抖，避免逐字敲都打一次列表接口。
+function onFilterChange() {
+  state.page = 1;
+  clearTimeout(filterTimer);
+  filterTimer = setTimeout(loadLinks, 300);
+}
 async function loadLinks() {
-  const r = await api('GET', '/api/links?page=' + state.page + '&size=10');
+  let path = '/api/links?page=' + state.page + '&size=10';
+  const kw = $('filterKeyword').value.trim();
+  const tg = $('filterTag').value.trim();
+  if (kw) path += '&keyword=' + encodeURIComponent(kw);
+  if (tg) path += '&tag=' + encodeURIComponent(tg);
+  const r = await api('GET', path);
   if (r.error) return setMsg('listMsg', '加载失败：' + r.error, false);
   const rows = r.data.records.map(l => {
     const n = state.variantBadges.get(l.code);
@@ -747,17 +938,48 @@ async function del(code) {
   state.variantBadges.delete(code);
   loadLinks();
 }
-async function setPassword(code) {
-  const pw = prompt('PATCH /api/links/' + code + '\n字段 accessPassword（4-64 位）。取消则不提交。');
-  if (pw == null || pw === '') return;
-  const r = await api('PATCH', '/api/links/' + code, { accessPassword: pw });
-  if (r.error) return setMsg('listMsg', '设密码失败：' + r.error, false);
+// 设/清访问密码走页内 dialog，不再用浏览器原生输入框（原先的实现在部分
+// 浏览器里会被抑制，点了没反应）。同一 overlay 两副面孔：set 是密码输入，
+// clear 是确认文案；提交仍是原来那两个 PATCH。
+let pwDialog = null; // { mode: 'set' | 'clear', code }
+function setPassword(code) {
+  pwDialog = { mode: 'set', code: code };
+  $('pwTitle').textContent = '设置访问密码 · ' + code;
+  $('pwSetBody').classList.remove('hidden');
+  $('pwConfirmBody').classList.add('hidden');
+  $('pwInput').value = '';
+  setMsg('pwMsg', '');
+  $('pwOverlay').classList.remove('hidden');
+  $('pwInput').focus();
+}
+function clearPassword(code) {
+  pwDialog = { mode: 'clear', code: code };
+  $('pwTitle').textContent = '清除访问密码 · ' + code;
+  $('pwSetBody').classList.add('hidden');
+  $('pwConfirmBody').classList.remove('hidden');
+  $('pwConfirmText').textContent = '清除 ' + code + ' 的访问密码后，该链恢复公开跳转。继续？';
+  $('pwOverlay').classList.remove('hidden');
+}
+function closePwDialog() {
+  pwDialog = null;
+  $('pwOverlay').classList.add('hidden');
+}
+async function submitPwDialog() {
+  if (!pwDialog || pwDialog.mode !== 'set') return;
+  const v = validateAccessPasswordInput($('pwInput').value);
+  if (!v.ok) return setMsg('pwMsg', v.error, false);
+  const code = pwDialog.code;
+  const r = await api('PATCH', '/api/links/' + code, { accessPassword: v.value });
+  if (r.error) return setMsg('pwMsg', '设密码失败：' + r.error, false);
+  closePwDialog();
   setMsg('listMsg', code + ' 已设置访问密码（明文与哈希都不会回显）', true);
   loadLinks();
 }
-async function clearPassword(code) {
-  if (!confirm('PATCH /api/links/' + code + ' ，字段 clearAccessPassword:true ？')) return;
+async function confirmPwDialog() {
+  if (!pwDialog || pwDialog.mode !== 'clear') return;
+  const code = pwDialog.code;
   const r = await api('PATCH', '/api/links/' + code, { clearAccessPassword: true });
+  closePwDialog();
   if (r.error) return setMsg('listMsg', '清密码失败：' + r.error, false);
   setMsg('listMsg', code + ' 已清除访问密码', true);
   loadLinks();
@@ -1184,7 +1406,18 @@ function esc(s) { const d = document.createElement('div'); d.textContent = s == 
 // esc 只转 &<> 不转引号；进 HTML 属性（value/title/href）的值必须再过 escAttr。
 function escAttr(s) { return esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDetail(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeDetail(); closePwDialog(); } });
+
+// 启动路由：邀请链接优先于会话恢复——接受邀请会签发一份全新会话，先恢复
+// 只会白刷一次并立刻被覆盖。邀请 token 只活在 JS 变量里，消费的第一时间就
+// 把地址栏的 query 抹掉，不让它留在历史/截图里；没有邀请才走启动恢复。
+const startupInviteToken = inviteTokenFromSearch(location.search);
+if (startupInviteToken !== null) {
+  history.replaceState(null, '', location.pathname);
+  showInviteAccept(startupInviteToken);
+} else {
+  restoreSession();
+}
 </script>
 </body>
 </html>
