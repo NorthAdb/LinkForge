@@ -5,12 +5,15 @@ import com.linkforge.common.result.ApiResponse;
 import com.linkforge.common.result.PageResponse;
 import com.linkforge.link.dto.ShortLinkDetail;
 import com.linkforge.link.service.ShortLinkService;
+import com.linkforge.stats.dto.AbReportResponse;
 import com.linkforge.stats.dto.ClickDetail;
 import com.linkforge.stats.dto.DimBreakdown;
 import com.linkforge.stats.dto.LinkStatsResponse;
 import com.linkforge.stats.service.ClickStatsService;
 import com.linkforge.stats.support.ClickDimensions;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -62,5 +65,31 @@ public class StatsController {
         int p = Math.max(1, page);
         int s = size < 1 || size > 100 ? 20 : size;
         return ApiResponse.ok(clickStatsService.clicks(link.getId(), p, s));
+    }
+
+    /** Batch 3b: distribution-fit diagnostic of the variant buckets against the
+     * configured weights (see AbReport) — not a conversion test. */
+    @GetMapping("/api/links/{code}/stats/ab-report")
+    public ApiResponse<AbReportResponse> abReport(@PathVariable String code,
+                                                  @RequestParam(defaultValue = "7") int days) {
+        ShortLinkDetail link = shortLinkService.detail(code);
+        int window = days < 1 ? 7 : Math.min(days, 90);
+        return ApiResponse.ok(clickStatsService.abReport(link.getId(), code, window));
+    }
+
+    /** Batch 3b: raw click rows of the window as CSV. Same ownership path as the
+     * clicks detail endpoint; the truncation flag rides a response header. */
+    @GetMapping(value = "/api/links/{code}/clicks/export", produces = "text/csv;charset=UTF-8")
+    public ResponseEntity<String> exportClicks(@PathVariable String code,
+                                               @RequestParam(defaultValue = "30") int days) {
+        ShortLinkDetail link = shortLinkService.detail(code);
+        int window = days < 1 ? 30 : Math.min(days, 90);
+        ClickStatsService.ClicksExport export = clickStatsService.exportClicks(link.getId(), window);
+        ResponseEntity.BodyBuilder body = ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=clicks-" + code + ".csv");
+        if (export.truncated()) {
+            body.header("X-Export-Truncated", "true");
+        }
+        return body.body(export.csv());
     }
 }

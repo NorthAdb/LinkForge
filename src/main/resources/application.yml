@@ -240,6 +240,15 @@ linkforge:
     blocklist-file: ${LINKFORGE_PHISHING_BLOCKLIST_FILE:}
     reload-interval-ms: ${LINKFORGE_PHISHING_RELOAD_INTERVAL:30000}
     reject-userinfo: ${LINKFORGE_PHISHING_REJECT_USERINFO:true}
+  malicious-feed:
+    # Batch 3b: URLhaus host feed imported on a schedule into lf_malicious_host;
+    # verdicts are computed locally against the imported snapshot (no per-request
+    # reputation call). Default OFF so a local demo grows no external dependency.
+    enabled: ${LINKFORGE_MALICIOUS_FEED_ENABLED:false}
+    url: ${LINKFORGE_MALICIOUS_FEED_URL:https://urlhaus.abuse.ch/downloads/hostfile/}
+    interval-ms: ${LINKFORGE_MALICIOUS_FEED_INTERVAL_MS:21600000}
+    initial-delay-ms: ${LINKFORGE_MALICIOUS_FEED_INITIAL_DELAY_MS:60000}
+  clicks-export-max-rows: ${LINKFORGE_CLICKS_EXPORT_MAX_ROWS:100000}
   link-access:
     # B3: unlock cookie TTL and brute-force windows (rate limit runs before BCrypt)
     ttl-seconds: ${LINKFORGE_LINK_ACCESS_TTL_SECONDS:3600}
