@@ -409,7 +409,7 @@
 </div>
 
 <script>
-const state = { token: '', tenantRole: 'MEMBER', page: 1, days: 7, clicksSize: 10, detail: null, variantBadges: new Map(), idemSeq: 0 };
+const state = { token: '', tenantRole: 'MEMBER', page: 1, days: 7, clicksSize: 10, detail: null, variantBadges: new Map(), idemSeq: 0, editRules: [], editOriginalVariants: [] };
 let qrObjectUrl = '';
 const $ = id => document.getElementById(id);
 const setMsg = (id, text, ok) => { const el = $(id); el.textContent = text || ''; el.className = 'msg ' + (ok ? 'ok' : 'err'); };
@@ -535,6 +535,68 @@ function utmHint() {
   setMsg('utmMsg', bad.length ? '仅允许字母数字 . _ -，≤64 位：' + bad.join(', ') : '');
 }
 
+// == PURE LOGIC BEGIN ==
+// M6 (audit batches 1-3): lossless variant editing. The detail API returns
+// each variant's matchRule as a JSON string; the update API accepts the same
+// shape. computeVariantsField decides the "variants" field of a PATCH body:
+//   - deep-equal after normalization -> undefined (field OMITTED entirely;
+//     the backend contract is "absent = untouched", so a title-only save can
+//     never strip routing rules it never showed the user);
+//   - otherwise -> the full edited set, every matchRule carried through, with
+//     an explicit null clearing exactly that variant's rule.
+// Normalization: weight compared as Number; matchRule compared structurally
+// (JSON-parsed, object keys sorted recursively) so key order never counts as
+// a change. Self-contained: no DOM, no page state (unit-tested by
+// scripts/ui-contract-test.mjs, which extracts this block verbatim).
+function canonicalizeForCompare(value) {
+  if (value === null || value === undefined) return null;
+  if (Array.isArray(value)) return value.map(canonicalizeForCompare);
+  if (typeof value === 'object') {
+    const out = {};
+    for (const k of Object.keys(value).sort()) out[k] = canonicalizeForCompare(value[k]);
+    return out;
+  }
+  return value;
+}
+function normalizeMatchRuleForCompare(matchRule) {
+  if (matchRule === null || matchRule === undefined || matchRule === '') return null;
+  if (typeof matchRule === 'string') {
+    try {
+      return JSON.stringify(canonicalizeForCompare(JSON.parse(matchRule)));
+    } catch (e) {
+      return 'raw:' + matchRule;
+    }
+  }
+  return JSON.stringify(canonicalizeForCompare(matchRule));
+}
+function normalizeVariantForCompare(v) {
+  return {
+    key: v && v.key !== null && v.key !== undefined ? String(v.key) : '',
+    url: v && v.url !== null && v.url !== undefined ? String(v.url) : '',
+    weight: v ? Number(v.weight) : NaN,
+    matchRule: normalizeMatchRuleForCompare(v ? v.matchRule : null)
+  };
+}
+function matchRuleForSubmit(matchRule) {
+  // The API takes matchRule as a JSON string; a string loaded from the detail
+  // view is resubmitted byte-for-byte, an object is serialized, null clears.
+  if (matchRule === null || matchRule === undefined) return null;
+  if (typeof matchRule === 'string') return matchRule;
+  return JSON.stringify(matchRule);
+}
+function computeVariantsField(originalVariants, editedVariants) {
+  const orig = (Array.isArray(originalVariants) ? originalVariants : []).map(normalizeVariantForCompare);
+  const edited = (Array.isArray(editedVariants) ? editedVariants : []).map(normalizeVariantForCompare);
+  if (JSON.stringify(orig) === JSON.stringify(edited)) return undefined;
+  return (Array.isArray(editedVariants) ? editedVariants : []).map(v => ({
+    key: v.key,
+    url: v.url,
+    weight: Number(v.weight),
+    matchRule: matchRuleForSubmit(v.matchRule)
+  }));
+}
+// == PURE LOGIC END ==
+
 function variantRowHtml(r) {
   return '<div class="v-row">'
     + '<input class="v-key" maxlength="32" placeholder="key，如 a" value="' + escAttr(r.key) + '">'
@@ -547,8 +609,20 @@ function addVariantRow(which) {
   const box = $(variantBoxes[which]);
   if (box.querySelectorAll('.v-row').length >= 10) return setMsg(which === 'create' ? 'createMsg' : 'editMsg', 'variants 最多 10 行', false);
   box.insertAdjacentHTML('beforeend', variantRowHtml({ key: '', url: '', weight: '' }));
+  // M6: a user-added edit row has no routing rule; keep the parallel rules
+  // array index-aligned with the edit rows.
+  if (which === 'edit') state.editRules.push(null);
 }
-function removeVariantRow(btn) { btn.closest('.v-row').remove(); }
+function removeVariantRow(btn) {
+  const row = btn.closest('.v-row');
+  const box = row.parentElement;
+  // M6: dropping an edit row drops its preserved matchRule with it.
+  if (box && box.id === variantBoxes.edit) {
+    const idx = Array.from(box.querySelectorAll('.v-row')).indexOf(row);
+    if (idx >= 0) state.editRules.splice(idx, 1);
+  }
+  row.remove();
+}
 function readVariantInputs(which) {
   return Array.from($(variantBoxes[which]).querySelectorAll('.v-row')).map(row => ({
     key: row.querySelector('.v-key').value.trim(),
@@ -556,8 +630,13 @@ function readVariantInputs(which) {
     weight: row.querySelector('.v-weight').value.trim()
   }));
 }
-function collectVariants(which) {
-  const rows = readVariantInputs(which).filter(r => r.key || r.url || r.weight);
+function collectVariants(which, rules) {
+  // M6: when a parallel rules array is given (edit form), attach each raw
+  // row's preserved matchRule BEFORE blank rows are filtered out, so indexes
+  // cannot shift and hand a rule to the wrong variant.
+  const rows = readVariantInputs(which)
+    .map((r, i) => rules ? { key: r.key, url: r.url, weight: r.weight, matchRule: i < rules.length ? rules[i] : null } : r)
+    .filter(r => r.key || r.url || r.weight);
   for (const r of rows) {
     if (!r.key || !r.url || !r.weight) return { error: 'key、URL、weight 三项都要填写（或整行留空忽略）' };
     if (!/^[A-Za-z0-9_-]{1,32}$/.test(r.key)) return { error: 'variant key 不合法：' + r.key };
@@ -777,7 +856,16 @@ function prefillEditForm(d) {
   $('editUrl').value = d.originalUrl || '';
   $('editTitle').value = d.title || '';
   $('editExpire').value = d.expireAt ? String(d.expireAt).slice(0, 16) : '';
-  $(variantBoxes.edit).innerHTML = (Array.isArray(d.variants) ? d.variants : [])
+  const variants = Array.isArray(d.variants) ? d.variants : [];
+  // M6: the form has no rule editor, so each variant's matchRule (a JSON
+  // string from the detail API) is preserved out-of-band — a snapshot for the
+  // unchanged-check plus a per-row parallel array that travels with edits.
+  state.editOriginalVariants = variants.map(v => ({
+    key: v.key, url: v.url, weight: v.weight,
+    matchRule: v.matchRule === undefined ? null : v.matchRule
+  }));
+  state.editRules = variants.map(v => (v.matchRule === undefined ? null : v.matchRule));
+  $(variantBoxes.edit).innerHTML = variants
     .map(v => variantRowHtml({ key: v.key, url: v.url, weight: String(v.weight) })).join('');
 }
 function toggleEdit() {
@@ -803,14 +891,20 @@ async function saveEdit() {
   }
   if (pw) body.accessPassword = pw;
   if (clearPw) body.clearAccessPassword = true;
-  const vc = collectVariants('edit');
+  const vc = collectVariants('edit', state.editRules);
   if (vc.error) return setMsg('editMsg', 'variants 校验失败：' + vc.error, false);
-  // 行数>0 传整集；行数=0 且原链有分流传 [] 清空；行数=0 且原本无分流 omit（缺失=不动）。
-  if (vc.rows.length) body.variants = vc.rows;
-  else if (st.hadVariants) body.variants = [];
+  // M6 无损保存：分流未变（纯改标题/URL 等）时整体 omit variants（后端「缺失
+  // =不动」），绝不把没展示给用户的 matchRule 冲成 null；真有增删改才传整集，
+  // 每行带回保留的规则。删光所有行 = 与原集不同 = 传 [] 清空，语义不变。
+  const editedVariants = vc.rows.map(r => ({
+    key: r.key, url: r.url, weight: Number(r.weight),
+    matchRule: r.matchRule === undefined ? null : r.matchRule
+  }));
+  const variantsField = computeVariantsField(state.editOriginalVariants, editedVariants);
+  if (variantsField !== undefined) body.variants = variantsField;
   const r = await api('PATCH', '/api/links/' + st.code, body);
   if (r.error) return setMsg('editMsg', '保存失败：' + r.error + (r.code === 429 ? '（触发限流，稍后再试）' : ''), false);
-  state.variantBadges.set(st.code, vc.rows.length);
+  state.variantBadges.set(st.code, variantsField === undefined ? state.editOriginalVariants.length : editedVariants.length);
   refreshDetail();
 }
 function showStats(code) { openDetail(code, 'statsSection'); }

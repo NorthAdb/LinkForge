@@ -463,10 +463,10 @@ public class ShortLinkService {
 
     private static String csvRow(ShortLinkDetail l) {
         return String.join(",",
-                CsvFormat.escape(l.getCode()),
-                CsvFormat.escape(l.getOriginalUrl()),
-                CsvFormat.escape(l.getTitle()),
-                CsvFormat.escape(l.getStatus() == null ? "" : String.valueOf(l.getStatus())),
+                CsvFormat.escapeSpreadsheet(l.getCode()),
+                CsvFormat.escapeSpreadsheet(l.getOriginalUrl()),
+                CsvFormat.escapeSpreadsheet(l.getTitle()),
+                CsvFormat.escapeSpreadsheet(l.getStatus() == null ? "" : String.valueOf(l.getStatus())),
                 CsvFormat.escape(l.getExpireAt() == null ? "" : l.getExpireAt().toString()),
                 CsvFormat.escape(l.getCreatedAt() == null ? "" : l.getCreatedAt().toString())) + "\n";
     }
