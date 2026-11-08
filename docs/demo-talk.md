@@ -3,7 +3,7 @@
 > **用途**：春招现场照着说。默认 **12 分钟**，卡点可以收到 10 分钟，追问多就用到 15 分钟。  
 > **对齐**：能力是 C5 收口 `f955313`（合并 `e9ffff4`，跳转代码 `e0c567c`）。`d1e94b2` 只补了 progress 里的 CI / PASS 计数，没有新行为。命令以仓库 README「五步跑通」和「面试 Demo 五步」为准。简历口径见 [`docs/resume.md`](resume.md)。  
 > **终端**：提示符是 `PS` 时只贴 PowerShell 代码块。bash 块贴进去会报 `is not recognized`。  
-> **数字**：只报 **472 = 200 UT + 270 IT + 2 tz**。pom **2.0.0**。  
+> **数字**：只报 **508 = 226 UT + 280 IT + 2 tz**。pom **2.0.0**。  
 > **本文件没有新的 Compose 实测。** `SMOKE OK` / `FAULT DRILL OK` 的原文在 [`docs/progress.md`](progress.md) C5 章，实跑日 2026-11-01 Asia/Shanghai，代码 tip **`e0c567c`**（smoke **8** PASS，fault-drill **7** PASS，无 SKIP）。现场要跑就现场跑；没跑就说「证据在 progress，我今天不临时改口」。
 
 ---
@@ -37,7 +37,7 @@
 - 「我刚才又跑了一遍 Compose，全绿」。除非你本场确实看到终行 `SMOKE OK` 或 `FAULT DRILL OK`。
 - 现场改 hosts、配恶意 DNS、扫内网来「证明 SSRF」。只讲设计和测试名。
 
-测试句可以背下来：**472，200 个单测，270 个 Testcontainers 集成，2 个时区 fork。**
+测试句可以背下来：**508，226 个单测，280 个 Testcontainers 集成，2 个时区 fork。**
 
 ---
 
@@ -51,7 +51,7 @@
 
 开放面上我做了租户 API Key、Webhook、二维码和 UTM、A/B 权重分流，还有批量 CSV 导入。Webhook 这边把 DNS rebinding 关掉了：投递时只解析一次，每个 IP 都校验，连接只打到校验过的地址，用的是 httpclient5 的 DnsResolver。Redis 挂了、点击那次写库失败了、Webhook 对方 5xx，用户这边仍然是 302。`fault-drill.sh` 能把这三段演出来。
 
-当前这条线 472 个测试是绿的。C5 之后功能冻结过一阵，后来按运营者指令解冻了三批（外部审计修复、认证重构加团队协作、P1 主体批），都合进 main 了；其后外部审计把三批交付判了 FAIL/MUST_FIX，8 项必修又以三个 PR 全数修完合入，就是现在这条线。我先按 README 的五步 Demo，细节你们随时打断，我先把主链路走完。
+当前这条线 508 个测试是绿的。C5 之后功能冻结过一阵，后来按运营者指令解冻了三批（外部审计修复、认证重构加团队协作、P1 主体批），都合进 main 了；其后外部审计把三批交付判了 FAIL/MUST_FIX，8 项必修又以三个 PR 全数修完合入。修复波之后又按瘦身口径补了一波 S/N 波——S1 给 A/B 报告加了适用性门（条件路由、窗口内改过配置的链直接回 NOT_APPLICABLE，不硬给拟合结论）、控制台补齐强制改密页和邀请接受这些闭环小件，也已合入，就是现在这条线。我先按 README 的五步 Demo，细节你们随时打断，我先把主链路走完。
 
 **不要在电梯稿里报 QPS。**
 
@@ -64,7 +64,7 @@
 - [ ] `java -jar target/linkforge-2.0.0.jar` 已经在 **8080** 前台或另一个终端里跑着。应用不读 `.env` 文件。启动那个窗口要先导入 `.env`。bash 用 `set -a && source .env && set +a`。Windows PowerShell 用 README 第 3 步的 `Get-Content` 循环，不要用 `source`
 - [ ] 终端字号够大。提示符是 `PS` 时，只贴下面标了 PowerShell 的代码块。`TOKEN=$(...)`、行末 `\`、`source`、`echo "${#TOKEN}"` 都是 bash，贴进 PowerShell 会把整段当成程序名，报 `is not recognized`。请求写 `curl.exe`。`scripts/*.sh` 用 Git Bash 跑
 - [ ] CSV 可以现场生成。PowerShell 写到 `$env:TEMP\links-demo.csv`。bash 写到 `/tmp/links-demo.csv`
-- [ ] 默念：472 · pom 2.0.0 · 不报 B10 · 不说 Geo · SSRF 只口播
+- [ ] 默念：508 · pom 2.0.0 · 不报 B10 · 不说 Geo · SSRF 只口播
 - [ ] fault-drill **要么开场前自己跑通过，要么改口播**。不要在面试里第一次调试这个脚本
 - [ ] 若准备实跑 fault-drill：机器上要有 `powershell.exe`（Webhook 的 5xx 桩）和 `.env` 里的 `MYSQL_ROOT_PASSWORD`。Linux 上常常没有 PowerShell，脚本会打印 `SKIP webhook`，那是设计，不是失败
 
@@ -175,7 +175,7 @@ echo "${#TOKEN}"
 | `$token` 或 `TOKEN` 为空 | 把登录 JSON 打出来看，不要念密码。多半是这个窗口没导入 `.env`，或 bootstrap 口令不对。导入不会生成 token，导入之后还要再跑登录。 |
 | compose 不是 healthy | 不要现拉镜像。改口播，并说依赖没就绪，Demo 改讲设计和 progress 里的证据。 |
 | 8080 拒绝连接 | jar 没起来，或起在了别的端口。`fault-drill.sh` 自己占用的是 **8083**，不要跟 8080 搞混。 |
-| `SMOKE FAIL` | 读它打印的那一行原因。连跑注册会 429。不要说「测试套件挂了」——这是冒烟脚本，和 472 个 `mvn verify` 不是同一次。 |
+| `SMOKE FAIL` | 读它打印的那一行原因。连跑注册会 429。不要说「测试套件挂了」——这是冒烟脚本，和 508 个 `mvn verify` 不是同一次。 |
 | MySQL `Access denied` | README 常见坑：口令写在数据卷里，只改 `.env` 不会改已初始化的账号。现场不要 `docker compose down -v`。 |
 
 ---
@@ -523,7 +523,7 @@ docker compose --profile observability up -d
 
 五步对应五件事：跳转是稳定的 302，并且读行，不靠旧缓存；A/B 在门禁之后抽签，统计能按 variant 拆开；CSV 可以部分成功，失败带文件行号；Redis、点击写库、Webhook 任何一侧写失败，302 还在；Webhook 出站把 DNS 再绑定这一下钉死了。
 
-代码线已经过了 C5：冻结后按运营者指令解冻三批，审计修复、认证重构（refresh 轮换）、团队协作和 P1 主体（标签检索、动态路由、幂等深化、恶意域名 feed）都合进 main 了，其后外部审计复审的 8 项必修也已全数修复合入。测试 472。pom 2.0.0。后面再开新批还是等运营者指令，我现在准备的是把这些取舍讲清楚。可以问 Outbox、Bloom 广播、API Key 的两种 scope、refresh 重用检测、动态路由的规则怎么收窄抽签，或者 rebinding 为什么用 httpclient5。
+代码线已经过了 C5：冻结后按运营者指令解冻三批，审计修复、认证重构（refresh 轮换）、团队协作和 P1 主体（标签检索、动态路由、幂等深化、恶意域名 feed）都合进 main 了，其后外部审计复审的 8 项必修也已全数修复合入，其后又补了 S/N 波（A/B 适用性门、控制台闭环）。测试 508。pom 2.0.0。后面再开新批还是等运营者指令，我现在准备的是把这些取舍讲清楚。可以问 Outbox、Bloom 广播、API Key 的两种 scope、refresh 重用检测、动态路由的规则怎么收窄抽签，或者 rebinding 为什么用 httpclient5。
 
 ---
 
