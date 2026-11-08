@@ -30,8 +30,13 @@ public class PhishingPolicy {
 
     private final LinkForgeProperties properties;
     private final MeterRegistry meterRegistry;
+    private final MaliciousHostSnapshot maliciousHostSnapshot;
 
     private volatile TargetPolicy.Config snapshot = TargetPolicy.Config.EMPTY;
+    /** The local lists only (properties ∪ blocklist file). The feed hosts live in
+     * {@link #snapshot}'s third set and are merged from this base, so a feed host
+     * can never leak into the local block set and steal its reason attribution. */
+    private volatile TargetPolicy.Config localConfig = TargetPolicy.Config.EMPTY;
     private volatile LocalDateTime fileMtime;
 
     @PostConstruct
@@ -44,9 +49,22 @@ public class PhishingPolicy {
         if (fileConfigured() && parseFile(fromProperties, fileBlock, fileWarn) != null) {
             fileMtime = mtimeOf(Path.of(properties.getPhishing().getBlocklistFile()));
         }
-        snapshot = merge(fromProperties, fileBlock, fileWarn);
+        localConfig = merge(fromProperties, fileBlock, fileWarn);
+        snapshot = withFeed(localConfig);
         registerGauges();
         log.info("phishing policy loaded: {} block / {} warn domains", blockCount(), warnCount());
+    }
+
+    /** Batch 3b: re-merge the feed snapshot into the verdict config. Called by
+     * the feed sync after every successful ingest (and safe to call any time —
+     * with the feed off the snapshot is empty and this is a no-op in effect). */
+    public void refreshFeedHosts() {
+        snapshot = withFeed(localConfig);
+    }
+
+    private TargetPolicy.Config withFeed(TargetPolicy.Config local) {
+        return new TargetPolicy.Config(local.blockDomains(), local.warnDomains(),
+                maliciousHostSnapshot.hosts());
     }
 
     public TargetPolicy.Verdict evaluate(String url, boolean forCreate) {
@@ -78,14 +96,15 @@ public class PhishingPolicy {
             meterRegistry.counter("linkforge.phishing.reload", "result", "unchanged").increment();
             return;
         }
-        TargetPolicy.Config current = snapshot;
+        TargetPolicy.Config current = localConfig;
         Set<String> fileBlock = new LinkedHashSet<>();
         Set<String> fileWarn = new LinkedHashSet<>();
         TargetPolicy.Config parsed = parseFile(current, fileBlock, fileWarn);
         if (parsed == null) {
             return;
         }
-        snapshot = merge(parsed, fileBlock, fileWarn);
+        localConfig = merge(parsed, fileBlock, fileWarn);
+        snapshot = withFeed(localConfig);
         fileMtime = mtime;
         meterRegistry.counter("linkforge.phishing.reload", "result", "ok").increment();
         log.info("phishing blocklist file reloaded: {} block / {} warn domains", blockCount(), warnCount());

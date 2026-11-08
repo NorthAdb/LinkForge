@@ -63,11 +63,15 @@ public class ShortLinkController {
                 .body(shortLinkService.exportOwnCsv(keyword, tag));
     }
 
-    /** C3 (D-C3-14): synchronous CSV import. D-C3-23: the Idempotency-Key header is
-     * deliberately not honored on imports — the response itself reports every row. */
+    /** C3 (D-C3-14): synchronous CSV import. Batch 3b reverses D-C3-23 on the
+     * operator's instruction (batch-3 plan §5): an Idempotency-Key header IS now
+     * honored — the stored outcome replays for the same file bytes, a different
+     * file under the same key is a 409, and a replay burns no import quota. */
     @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ApiResponse<ImportResponse> importCsv(@RequestParam("file") MultipartFile file) {
-        return ApiResponse.ok(shortLinkService.importCsv(file));
+    public ApiResponse<ImportResponse> importCsv(@RequestParam("file") MultipartFile file,
+                                                 @RequestHeader(value = "Idempotency-Key", required = false)
+                                                 String idempotencyKey) {
+        return ApiResponse.ok(shortLinkService.importCsv(file, idempotencyKey));
     }
 
     @GetMapping("/{code}")

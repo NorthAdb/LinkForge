@@ -31,6 +31,20 @@ public interface ClickLogMapper extends BaseMapper<ClickLog> {
                                                         @Param("toExclusive") java.time.LocalDateTime toExclusive);
 
     /**
+     * Batch 3b raw export: id-cursor batches inside the window, ascending id
+     * (insertion order). The caller stitches batches and stops at its row cap;
+     * no unbounded select ever runs for an export.
+     */
+    @Select("SELECT * FROM lf_click_log "
+            + "WHERE link_id = #{linkId} AND clicked_at >= #{from} AND clicked_at < #{toExclusive} "
+            + "AND id > #{lastId} ORDER BY id ASC LIMIT #{limit}")
+    List<ClickLog> selectExportBatch(@Param("linkId") Long linkId,
+                                     @Param("from") java.time.LocalDateTime from,
+                                     @Param("toExclusive") java.time.LocalDateTime toExclusive,
+                                     @Param("lastId") long lastId,
+                                     @Param("limit") int limit);
+
+    /**
      * Per-day click counts from the same detail rows as {@link #selectDailyUv}:
      * the stats response reads its whole daily series from lf_click_log so the
      * clicks and UV columns of a day always describe the same set of clicks.

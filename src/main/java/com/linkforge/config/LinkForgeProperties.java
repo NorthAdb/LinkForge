@@ -29,6 +29,10 @@ public class LinkForgeProperties {
     private Webhook webhook = new Webhook();
     private ClickFilter clickFilter = new ClickFilter();
     private Phishing phishing = new Phishing();
+    private MaliciousFeed maliciousFeed = new MaliciousFeed();
+    /** Batch 3b: hard cap on rows in one raw-click CSV export (the rest is cut and
+     * flagged via the X-Export-Truncated header, never silently dropped). */
+    private int clicksExportMaxRows = 100_000;
     private LinkAccess linkAccess = new LinkAccess();
     private Metrics metrics = new Metrics();
     private Retention retention = new Retention();
@@ -84,6 +88,19 @@ public class LinkForgeProperties {
         private long reloadIntervalMs = 30000;
         /** Create/update rejects userinfo targets (https://user@host); existing rows only warn. */
         private boolean rejectUserinfo = true;
+    }
+
+    @Data
+    public static class MaliciousFeed {
+        /** Batch 3b: URLhaus host feed -> lf_malicious_host -> TargetPolicy BLOCK set.
+         * Default OFF: no external fetch (and no external failure source) unless the
+         * operator opts in. Verdicts stay purely local either way (D-Bw345-29 holds:
+         * no per-request reputation call). */
+        private boolean enabled = false;
+        private String url = "https://urlhaus.abuse.ch/downloads/hostfile/";
+        /** @Scheduled reads millis (its placeholder parsing knows no Boot duration style). */
+        private long intervalMs = 21_600_000L;
+        private long initialDelayMs = 60_000L;
     }
 
     @Data

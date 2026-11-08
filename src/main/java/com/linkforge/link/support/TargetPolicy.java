@@ -11,8 +11,10 @@ import java.util.Set;
  * B9: pure verdict over a target URL against normalized domain lists. Matching is by
  * label-boundary suffix (evil.com matches a.evil.com but never notevil.com or
  * evil.com.cn), hosts are IDN-normalized so a punycode URL and its Unicode listing
- * hit the same entry, and BLOCK wins over WARN. This is a locally maintained list
- * gate — no reputation service, no content scan (D-Bw345-29).
+ * hit the same entry, and BLOCK wins over WARN. This is a list gate — no reputation
+ * service, no content scan (D-Bw345-29). Batch 3b adds a third list: hosts imported
+ * from the malicious-host feed (URLhaus) into a local table; the verdict is still
+ * computed purely locally against the in-memory snapshot, never by calling out.
  */
 @Slf4j
 public final class TargetPolicy {
@@ -20,7 +22,9 @@ public final class TargetPolicy {
     public enum Action { ALLOW, WARN, BLOCK }
 
     public enum Reason {
-        BLOCK_LIST("block_list"), WARN_LIST("warn_list"), USERINFO("userinfo");
+        BLOCK_LIST("block_list"), WARN_LIST("warn_list"), USERINFO("userinfo"),
+        /** Batch 3b: matched the imported malicious-host feed, not a local list. */
+        MALICIOUS_FEED("malicious_feed");
 
         private final String tag;
 
@@ -37,9 +41,22 @@ public final class TargetPolicy {
         public static final Verdict ALLOW = new Verdict(Action.ALLOW, null);
     }
 
-    /** Both sets hold normalized (IDN ASCII, lowercase, no trailing dot) hosts. */
-    public record Config(Set<String> blockDomains, Set<String> warnDomains) {
-        public static final Config EMPTY = new Config(Set.of(), Set.of());
+    /** All sets hold normalized (IDN ASCII, lowercase, no trailing dot) hosts.
+     * {@code feedDomains} is the imported malicious-host feed snapshot (batch 3b);
+     * it BLOCKs like the local block list but reports its own reason. */
+    public record Config(Set<String> blockDomains, Set<String> warnDomains, Set<String> feedDomains) {
+        public static final Config EMPTY = new Config(Set.of(), Set.of(), Set.of());
+
+        /** Pre-3b shape, kept so existing call sites and tests compile unchanged. */
+        public Config(Set<String> blockDomains, Set<String> warnDomains) {
+            this(blockDomains, warnDomains, Set.of());
+        }
+
+        public Config {
+            if (feedDomains == null) {
+                feedDomains = Set.of();
+            }
+        }
     }
 
     private TargetPolicy() {
@@ -55,6 +72,11 @@ public final class TargetPolicy {
         if (host != null) {
             if (matchesAny(host, config.blockDomains())) {
                 return new Verdict(Action.BLOCK, Reason.BLOCK_LIST);
+            }
+            // Batch 3b: the feed BLOCKs too, and beats WARN — but a host on the
+            // local block list keeps the block_list attribution (checked first).
+            if (matchesAny(host, config.feedDomains())) {
+                return new Verdict(Action.BLOCK, Reason.MALICIOUS_FEED);
             }
             if (matchesAny(host, config.warnDomains())) {
                 return new Verdict(Action.WARN, Reason.WARN_LIST);

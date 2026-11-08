@@ -3,6 +3,8 @@ package com.linkforge.link.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.linkforge.common.exception.BizException;
 import com.linkforge.common.exception.RateLimitedException;
 import com.linkforge.common.ratelimit.RateLimitDecision;
@@ -57,7 +59,10 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
+import java.util.HexFormat;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -133,6 +138,20 @@ public class ShortLinkService {
     public CreateShortLinkResponse create(CreateShortLinkRequest request, String idempotencyKey) {
         AuthUser user = requireUser();
         LinkForgeProperties.RateLimit rl = properties.getRateLimit();
+        boolean keyed = idempotencyKey != null && !idempotencyKey.isBlank();
+        String idemKey = keyed ? rl.getKeyPrefix() + "idem:" + user.getUserId() + ":" + idempotencyKey : null;
+        String fingerprint = keyed ? createFingerprint(request) : null;
+        if (keyed) {
+            // Batch 3b: a settled key is answered BEFORE the create bucket is
+            // touched — a replay no longer burns create quota (audit low item),
+            // and a body mismatch is a 409 here instead of a silent replay of
+            // the first link. A miss falls through to the normal path below.
+            CreateShortLinkResponse replayed = replayIdempotentCreate(idemKey, user, fingerprint);
+            if (replayed != null) {
+                rejectSmuggledAttribution(request.getUnknown());
+                return replayed;
+            }
+        }
         RateLimitDecision decision = rateLimiter.acquire(
                 RateLimitKeys.sw(rl.getKeyPrefix(), "create:user:" + user.getUserId()),
                 rl.getCreateMax(), rl.getCreateWindowSeconds());
@@ -142,12 +161,7 @@ public class ShortLinkService {
         }
 
         rejectSmuggledAttribution(request.getUnknown());
-        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
-            String idemKey = rl.getKeyPrefix() + "idem:" + user.getUserId() + ":" + idempotencyKey;
-            CreateShortLinkResponse replayed = replayIdempotentCreate(idemKey, user);
-            if (replayed != null) {
-                return replayed;
-            }
+        if (keyed) {
             /**
              * D-C4-16 fail-open: with Redis down the pending lease cannot be taken, so
              * the acquire is treated as won — two concurrent same-key creates can both
@@ -163,11 +177,11 @@ public class ShortLinkService {
                 acquired = true;
             }
             if (acquired) {
-                return doCreate(request, user, idemKey);
+                return doCreate(request, user, idemKey, fingerprint);
             }
             for (int i = 0; i < 10; i++) {
                 sleepQuietly(200);
-                CreateShortLinkResponse resolved = replayIdempotentCreate(idemKey, user);
+                CreateShortLinkResponse resolved = replayIdempotentCreate(idemKey, user, fingerprint);
                 if (resolved != null) {
                     return resolved;
                 }
@@ -176,25 +190,43 @@ public class ShortLinkService {
             // two links under one Idempotency-Key, so the caller retries instead.
             throw new BizException(503, "idempotent create still in progress, retry later");
         }
-        return doCreate(request, user, null);
+        return doCreate(request, user, null, null);
     }
 
     /**
      * Returns the previously created link for an idempotency key, or null when the key
      * holds no settled code. A code owned by a different user is treated as a miss.
+     *
+     * <p>Batch 3b: settled values carry the request fingerprint
+     * ({@code v2:<sha256hex>:<code>}); a settled key whose fingerprint differs
+     * from this request's is a 409 IDEMPOTENCY_KEY_REUSED, never a silent replay.
+     * Pre-3b plain-code values hold no fingerprint and replay unchecked (they
+     * age out with the 24h TTL).
      */
-    private CreateShortLinkResponse replayIdempotentCreate(String idemKey, AuthUser user) {
-        String code;
+    private CreateShortLinkResponse replayIdempotentCreate(String idemKey, AuthUser user, String fingerprint) {
+        String settled;
         try {
-            code = stringRedisTemplate.opsForValue().get(idemKey);
+            settled = stringRedisTemplate.opsForValue().get(idemKey);
         } catch (Exception ex) {
             // fail-open (D-C4-16): an unreadable key replays nothing, so the create proceeds
             log.warn("idempotency replay read failed for {}: {}", idemKey, ex.getMessage());
             meterRegistry.counter("linkforge.cache.failopen", "op", "idem_get").increment();
             return null;
         }
-        if (code == null || code.isBlank() || "pending".equals(code)) {
+        if (settled == null || settled.isBlank() || "pending".equals(settled)) {
             return null;
+        }
+        String code = settled;
+        if (settled.startsWith("v2:")) {
+            int split = settled.indexOf(':', 3);
+            if (split > 3) {
+                String storedFingerprint = settled.substring(3, split);
+                code = settled.substring(split + 1);
+                if (fingerprint != null && !storedFingerprint.equals(fingerprint)) {
+                    throw new BizException(409, "IDEMPOTENCY_KEY_REUSED: this Idempotency-Key "
+                            + "was already used with a different request body");
+                }
+            }
         }
         ShortLink link = shortLinkMapper.selectOne(new LambdaQueryWrapper<ShortLink>().eq(ShortLink::getCode, code));
         if (link == null || link.getCreatedBy() == null || !link.getCreatedBy().equals(user.getUserId())) {
@@ -204,7 +236,68 @@ public class ShortLinkService {
                 "/r/" + link.getCode());
     }
 
-    private CreateShortLinkResponse doCreate(CreateShortLinkRequest request, AuthUser user, String idemKey) {
+    /**
+     * Batch 3b: stable fingerprint of a create request — SHA-256 over a
+     * length-prefixed canonical form (fixed field order; variants sorted by
+     * key; tags in their normalized stored form). The access password itself
+     * never enters the fingerprint, only whether one was set.
+     */
+    private static String createFingerprint(CreateShortLinkRequest request) {
+        StringBuilder sb = new StringBuilder("create-v1");
+        appendField(sb, "originalUrl", request.getOriginalUrl());
+        appendField(sb, "customCode", request.getCustomCode());
+        appendField(sb, "expireAt", request.getExpireAt() == null ? null : request.getExpireAt().toString());
+        appendField(sb, "title", request.getTitle());
+        appendField(sb, "utmSource", request.getUtmSource());
+        appendField(sb, "utmMedium", request.getUtmMedium());
+        appendField(sb, "utmCampaign", request.getUtmCampaign());
+        appendField(sb, "utmTerm", request.getUtmTerm());
+        appendField(sb, "utmContent", request.getUtmContent());
+        appendField(sb, "tags", LinkTags.normalize(request.getTags()));
+        appendField(sb, "accessPasswordSet",
+                request.getAccessPassword() != null && !request.getAccessPassword().isBlank() ? "1" : "0");
+        if (request.getVariants() != null) {
+            List<VariantSpec> sorted = new ArrayList<>(request.getVariants());
+            sorted.sort(java.util.Comparator.comparing(VariantSpec::getKey,
+                    java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())));
+            for (VariantSpec spec : sorted) {
+                appendField(sb, "variant.key", spec.getKey());
+                appendField(sb, "variant.url", spec.getUrl());
+                appendField(sb, "variant.weight", spec.getWeight() == null ? null : spec.getWeight().toString());
+                appendField(sb, "variant.matchRule", spec.getMatchRule());
+            }
+        }
+        return sha256Hex(sb.toString());
+    }
+
+    private static void appendField(StringBuilder sb, String name, String value) {
+        sb.append('\n').append(name).append('=');
+        if (value == null) {
+            sb.append("-1:");
+        } else {
+            sb.append(value.length()).append(':').append(value);
+        }
+    }
+
+    private static String sha256Hex(String text) {
+        try {
+            return HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256 unavailable", ex);
+        }
+    }
+
+    private static String sha256Hex(byte[] bytes) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256 unavailable", ex);
+        }
+    }
+
+    private CreateShortLinkResponse doCreate(CreateShortLinkRequest request, AuthUser user,
+                                             String idemKey, String fingerprint) {
         String url = mergeUtm(request.getOriginalUrl().trim(), UtmMerger.canonical(request.getUtmSource(),
                 request.getUtmMedium(), request.getUtmCampaign(), request.getUtmTerm(), request.getUtmContent()));
         LinkValidations.requireHttpUrl(url);
@@ -277,7 +370,12 @@ public class ShortLinkService {
         meterRegistry.counter("linkforge.links.created").increment();
         if (idemKey != null) {
             try {
-                stringRedisTemplate.opsForValue().set(idemKey, link.getCode(),
+                // Batch 3b: the settled value carries the request fingerprint so a
+                // later same-key/different-body request can be told apart from a
+                // true replay (see replayIdempotentCreate for the format).
+                String settledValue = fingerprint != null
+                        ? "v2:" + fingerprint + ":" + link.getCode() : link.getCode();
+                stringRedisTemplate.opsForValue().set(idemKey, settledValue,
                         Duration.ofSeconds(properties.getRateLimit().getIdempotencyTtlSeconds()));
             } catch (Exception ex) {
                 // fail-open (D-C4-16): the link is already committed; the key keeps its
@@ -380,9 +478,37 @@ public class ShortLinkService {
      * is a report entry while its neighbours stay committed (D-C3-19/20/21 — Bloom,
      * broadcast and cache warm come from doCreate's tail, no divergent validation).
      */
-    public ImportResponse importCsv(MultipartFile file) {
+    /** Stored import outcome for an Idempotency-Key: the file fingerprint guards
+     * the replay exactly like the create fingerprint guards its own. */
+    private record StoredImport(String fingerprint, ImportResponse result) {
+    }
+
+    private static final ObjectMapper IMPORT_RESULT_JSON = new ObjectMapper();
+
+    public ImportResponse importCsv(MultipartFile file, String idempotencyKey) {
         AuthUser user = requireUser();
         LinkForgeProperties.RateLimit rl = properties.getRateLimit();
+        boolean keyed = idempotencyKey != null && !idempotencyKey.isBlank()
+                && file != null && !file.isEmpty();
+        String idemKey = keyed
+                ? rl.getKeyPrefix() + "idem-import:" + user.getUserId() + ":" + idempotencyKey : null;
+        byte[] fileBytes = null;
+        String fileFingerprint = null;
+        if (keyed) {
+            try {
+                fileBytes = file.getBytes();
+            } catch (IOException ex) {
+                throw new BizException("failed to read uploaded file");
+            }
+            fileFingerprint = sha256Hex(fileBytes);
+            // Batch 3b: a stored outcome replays BEFORE the import bucket is
+            // touched (same quota rule as create); a different file under the
+            // same key is a 409, never a silent second import.
+            ImportResponse replayed = replayIdempotentImport(idemKey, fileFingerprint);
+            if (replayed != null) {
+                return replayed;
+            }
+        }
         RateLimitDecision decision = rateLimiter.acquire(
                 RateLimitKeys.sw(rl.getKeyPrefix(), "import:user:" + user.getUserId()),
                 rl.getImportMax(), rl.getImportWindowSeconds());
@@ -398,7 +524,7 @@ public class ShortLinkService {
         }
         String text;
         try {
-            text = new String(file.getBytes(), StandardCharsets.UTF_8);
+            text = new String(fileBytes != null ? fileBytes : file.getBytes(), StandardCharsets.UTF_8);
         } catch (IOException ex) {
             throw new BizException("failed to read uploaded file");
         }
@@ -421,13 +547,62 @@ public class ShortLinkService {
                 continue;
             }
             try {
-                CreateShortLinkResponse created = doCreate(importRowRequest(row, columns), user, null);
+                CreateShortLinkResponse created = doCreate(importRowRequest(row, columns), user, null, null);
                 successes.add(new ImportResponse.RowSuccess(row.fileLine(), created.getCode()));
             } catch (BizException | DataIntegrityViolationException ex) {
                 failures.add(new ImportResponse.RowFailure(row.fileLine(), rowReason(ex)));
             }
         }
-        return new ImportResponse(successes.size(), failures.size(), successes, failures);
+        ImportResponse result = new ImportResponse(successes.size(), failures.size(), successes, failures);
+        if (idemKey != null) {
+            settleIdempotentImport(idemKey, fileFingerprint, result);
+        }
+        return result;
+    }
+
+    /**
+     * Batch 3b: the stored import outcome for a key, or null on a miss. A stored
+     * fingerprint that differs from this file's is a 409 IDEMPOTENCY_KEY_REUSED.
+     * Every Redis/JSON failure is a miss (fail-open, D-C4-16): the import then
+     * simply runs again instead of erroring.
+     */
+    private ImportResponse replayIdempotentImport(String idemKey, String fileFingerprint) {
+        String stored;
+        try {
+            stored = stringRedisTemplate.opsForValue().get(idemKey);
+        } catch (Exception ex) {
+            log.warn("import idempotency read failed for {}: {}", idemKey, ex.getMessage());
+            meterRegistry.counter("linkforge.cache.failopen", "op", "idem_import_get").increment();
+            return null;
+        }
+        if (stored == null || stored.isBlank()) {
+            return null;
+        }
+        StoredImport parsed;
+        try {
+            parsed = IMPORT_RESULT_JSON.readValue(stored, StoredImport.class);
+        } catch (JsonProcessingException ex) {
+            log.warn("import idempotency value unreadable for {}, treating as a miss", idemKey);
+            return null;
+        }
+        if (!parsed.fingerprint().equals(fileFingerprint)) {
+            throw new BizException(409, "IDEMPOTENCY_KEY_REUSED: this Idempotency-Key "
+                    + "was already used with a different import file");
+        }
+        return parsed.result();
+    }
+
+    private void settleIdempotentImport(String idemKey, String fileFingerprint, ImportResponse result) {
+        try {
+            String json = IMPORT_RESULT_JSON.writeValueAsString(new StoredImport(fileFingerprint, result));
+            stringRedisTemplate.opsForValue().set(idemKey, json,
+                    Duration.ofSeconds(properties.getRateLimit().getIdempotencyTtlSeconds()));
+        } catch (Exception ex) {
+            // fail-open (D-C4-16): the import already committed; a same-key retry
+            // during the outage just imports again.
+            log.warn("import idempotency settle failed for {}: {}", idemKey, ex.getMessage());
+            meterRegistry.counter("linkforge.cache.failopen", "op", "idem_import_settle").increment();
+        }
     }
 
     /** Maps one parsed record onto the create contract. Rejects are BizExceptions so a
