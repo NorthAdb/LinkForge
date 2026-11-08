@@ -5,7 +5,7 @@
 ![Java](https://img.shields.io/badge/Java-17-orange)
 ![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.3.5-6DB33F)
 ![MySQL·Redis·RabbitMQ](https://img.shields.io/badge/MySQL%20%C2%B7%20Redis%20%C2%B7%20RabbitMQ-8%20%C2%B7%207%20%C2%B7%203.13-informational)
-![tests](https://img.shields.io/badge/tests-472%20%28200%2B270%2B2%29-brightgreen)
+![tests](https://img.shields.io/badge/tests-508%20%28226%2B280%2B2%29-brightgreen)
 
 多租户短链 + 访问分析后端服务。**v2.0.0**＝P0–P5 全阶段交付（v1.0.0）+ 深化 A2–A10 + B 档波 1–5（B7/B8、B4/B5、B6/B2/B9/B3/B1），多轮外部审计通过。
 
@@ -41,7 +41,7 @@
 | 安全 | BCrypt 密码短链（签名 cookie、先限流后校验）、本地域名名单门禁（BLOCK/WARN，可选 URLhaus 恶意域名 feed 同步，默认关）、非人点击不计 | [密码短链](#密码短链b3)、[域名门禁](#目标域名名单门禁b9)、[非人点击](#非人点击b2预取与预览-bot-照常-302-但不计) |
 | 开放 | API Key（哈希存储+配额，USER/TENANT 双 scope、TENANT 仅 ADMIN 签发）、点击 Webhook（HMAC 签名、AES-256-GCM at-rest、SSRF 防护、逐次/聚合双模式） | [开放能力](#开放能力b4-api-key--b5-webhook) |
 | 可观测 | 令牌守卫的 `/actuator/prometheus`、Grafana 自动 provision 看板、积压 gauge | [可观测](#可观测b1-prometheus--grafana) |
-| 工程 | Flyway 版本化迁移（V1–V15）、测试 472 例（含 Testcontainers 集成 272）、GitHub Actions CI、prod profile 一键收紧 | [测试与质量](#-测试与质量) |
+| 工程 | Flyway 版本化迁移（V1–V15）、测试 508 例（含 Testcontainers 集成 282）、GitHub Actions CI、prod profile 一键收紧 | [测试与质量](#-测试与质量) |
 
 **明确不做**（冻结决策，详见[待办](docs/backlog.md)）：AI / PostgreSQL / Supabase / 向量库（整体延期另立方案）；Spring Cloud / Seata / 多机房；独立前端 SPA（静态控制台已够用）；云公网部署（D5=本地 Compose，prod profile 已备好收紧开关）。
 
@@ -261,6 +261,8 @@ PowerShell 里通常没有 `bash`。Git 默认只把 `Git\cmd` 放进 PATH。打
 
 浏览器入口是 `http://localhost:8080/`。那是一个极简控制台，能登录、注册、建链、看列表、启停、删除、看统计、导入导出 CSV、设访问密码、管 API Key 和点击 Webhook。控制台走的是同一套 API，没有另一套接口。接口文档是 `http://localhost:8080/swagger-ui/index.html`。springdoc 生成这个页面，prod profile 下关闭。
 
+**控制台闭环小件组（S/N 波，审计 S2）**：被管理员重置密码后登录会先进**强制改密页**（改完按服务端合同回登录页重新登录），不再撞满屏 403；邀请链接 `/?invite=` 打开即进**邀请接受视图**（设用户名/口令直接入租户）；设访问密码改走页内 modal（原生 `prompt()` 已移除）；打开页面会先用存量 refresh **恢复会话**再决定落点；CSV 导入走与其它请求一致的 401 刷新重试；页眉有 **logout-all** 按钮；链接列表带 keyword/tag 筛选输入。**仍未进控制台**：团队成员管理区（邀请/成员/重置的后端 API 已在，UI 未做，排批次 4 池）与 A/B 报告、原始点击导出的控制台入口。**验证口径**：控制台流程由 Node 合同测试（`scripts/ui-contract-test.mjs`，纯逻辑）+ 后端 IT 覆盖，**真实浏览器 E2E 未做**，不宣称已浏览器验证。
+
 ### 常见坑
 
 - **必填环境变量缺失起不来**：`LINKFORGE_BOOTSTRAP_PASSWORD`、`SPRING_DATASOURCE_PASSWORD`、`SPRING_RABBITMQ_PASSWORD`、`JWT_SECRET`（至少 32 字符）没有默认值，Spring 占位符解析失败即退出。
@@ -347,6 +349,7 @@ flowchart LR
 - **刷新** `POST /api/auth/refresh`：refresh token 单次轮换（条件更新原子轮换 + 新旧行 replaced_by 互指）；已轮换 token 在 10 秒宽限外被重用即判定泄露——整 family 撤销 + token_version 自增。失败口径统一 401 不区分原因
 - **登出** `POST /api/auth/logout`：撤销该 refresh 的 family（幂等、未知 token 同样成功）；access 自然过期前仍有效。`POST /api/auth/logout-all`（需登录）：全部 refresh 撤销 + token_version 自增，access 下一请求即失效。**撤销与轮换同锁原子**（外部审计 M1）：refresh 轮换、单点登出、logout-all、管理员重置、改密、禁用/删除全部在用户行锁内串行，轮换与撤销并发时不会再签出可用的后继 token；token_version 改为 SQL 原子自增、凭据路径只做列级更新
 - **改密** `POST /api/auth/change-password`（需登录）：验当前密码后换哈希、清强制改密标记、token_version 自增并撤销全部 refresh（含当前会话，强制重新登录）
+- **认证存储故障口径（S/N 波，审计 S4-5）**：凭据复查（JwtAuthFilter 回查用户行、ApiKeyAuthFilter 回查 Key 与所属用户）遇 DB 故障时，两个过滤器回稳定 **503** `{"code":503,"message":"authentication store unavailable","data":null}`——不再逃逸成容器 500，也不会误报成 401「凭据不对」；无凭据的公开请求不查库、不受影响，普通查无/禁用/`tv` 不符仍是原未认证语义
 
 **团队协作（批次 2b）**：租户内两级角色 `ADMIN` / `MEMBER`（注册创办人与 bootstrap 用户为 ADMIN；V12 把存量空角色回填为 MEMBER，读取处容忍空值）。凭据撤销统一走 2a 的机制——过滤器每请求回查用户行 + token_version + refresh 全撤，没有第二套通道：
 
@@ -369,11 +372,11 @@ flowchart LR
 | PATCH | `/api/links/{code}` | 改目标 URL / 备注 / 过期时间；设/换密码用 `accessPassword`、清除用 `clearAccessPassword:true`（两者同发 400）；`variants` 整表替换（不传=不动、空数组=清空） |
 | POST | `/api/links/{code}/disable` `/enable` | 禁用/启用（过期时间不受影响） |
 | DELETE | `/api/links/{code}` | 逻辑删除；**短码永久保留不可复用** |
-| GET | `/api/links/{code}/stats?days=7` | 窗口总量（=按天 clicks 之和，与 UV 同窗同源）、精确 UV（按 IP 去重）+ 按天序列；days 1..90 |
+| GET | `/api/links/{code}/stats?days=7` | 窗口总量（=按天 clicks 之和，与 UV 同窗同源）、精确 UV（按 IP 去重）+ 按天序列；days 1..90。总量/按天/UV 三读在同一可重复读快照事务内完成（S/N 波，审计 S4-1），单次响应自洽、不会读到一半新一半旧的窗口 |
 | GET | `/api/links/{code}/stats/breakdown?dim=device\|referer_host\|os\|browser\|variant` | 维度分布（口径是点击数不是 UV） |
 | GET | `/api/links/{code}/clicks?page=&size=` | 点击明细（时间/IP/UA/Referer） |
 | GET | `/api/links/{code}/clicks/export?days=30` | 原始点击 CSV（窗口 1..90 天；id 游标分批；上限 10 万行，超限末行注释 + `X-Export-Truncated` 头）；单元格做电子表格公式中和（外部审计 M8） |
-| GET | `/api/links/{code}/stats/ab-report?days=7` | A/B 分布拟合诊断（每 variant 的观测/期望/份额 + Wilson 95% CI、整体卡方与 p 值、四档 verdict，见 A/B 节） |
+| GET | `/api/links/{code}/stats/ab-report?days=7` | A/B 分布拟合诊断（每 variant 的观测/期望/份额 + Wilson 95% CI、整体卡方与 p 值、verdict 含 NOT_APPLICABLE 适用性判定，见 A/B 节） |
 | GET | `/api/links/export` | CSV（UTF-8 BOM；1 万行上限；支持同样的 `keyword`/`tag` 筛选；哈希/明文永不出现在任何导出；单元格做电子表格公式中和） |
 | POST | `/api/links/import` | CSV 批量导入（multipart 字段 `file`；同步处理 ≤100 数据行；部分失败返回文件行号+原因；同样支持 `Idempotency-Key`，见[A/B 权重分流与批量导入](#ab-权重分流与批量导入c3)） |
 | GET | `/r/{code}` | 302 跳转（全判定链见上节） |
@@ -382,7 +385,7 @@ flowchart LR
 
 **标签与检索（批次 3a）**：`tags` 是链接上的规范化标签集（小写、去重、单标签 `[a-z0-9_-]{1,32}`、最多 10 个），存单列逗号串（本量级不建关联表），更新三态与 variants 同款（不传=不动、空数组=清空）；列表/导出用 `tag` 整词筛选（子串不误命中）、`keyword` 子串检索，二者可组合。
 
-**缓存一致性**：更新/禁用走**写穿 + 1 秒延迟双删**（清并发读旧库行回填的脏值），最终一致窗口约 1 秒、上限为 TTL（默认 3600 秒）。过期链路不依赖缓存（每次跳转都校验 DB 行）。缓存键 `linkforge:code:{code}`；幂等键 Redis 两段式（pending→`v3:<指纹v2>:<code>`）保留 24h，重放先于限流判定、指纹不一致 409（批次 3b）；**指纹含访问密码的 HMAC**（服务端 pepper，`LINKFORGE_IDEMPOTENCY_PEPPER`）——同 key 换密码不再静默重放旧链，存量无密码指纹遇带密码请求一律 409 fail-closed（外部审计 M4）。CSV 导入的同 key 并发由 owner lease 互斥（同文件回 IN_PROGRESS、异文件回 REUSED，外部审计 M5）。
+**缓存一致性**：更新/禁用走**写穿 + 1 秒延迟双删**（清并发读旧库行回填的脏值），最终一致窗口约 1 秒、上限为 TTL（默认 3600 秒）。过期链路不依赖缓存（每次跳转都校验 DB 行）。缓存键 `linkforge:code:{code}`；幂等键 Redis 两段式（pending→`v3:<指纹v2>:<code>`）保留 24h，重放先于限流判定、指纹不一致 409（批次 3b）；**指纹含访问密码的 HMAC**（服务端 pepper，`LINKFORGE_IDEMPOTENCY_PEPPER`）——同 key 换密码不再静默重放旧链，存量无密码指纹遇带密码请求一律 409 fail-closed（外部审计 M4）。CSV 导入的同 key 并发由 owner lease 互斥（同文件回 IN_PROGRESS、异文件回 REUSED，外部审计 M5）。**创建幂等的并发口径（S/N 波文档修正，S4-2）**：上面的 settle 后重放去重只覆盖**顺序重放**；同 key 的并发首创**不被租约串行化**——`pending` 只是 5 秒的尽力而为在途标记（无 owner 校验、Redis 故障即 fail-open，输者短轮询等 settle、等不到回 503 重试），并发首创仍可能双双执行，冲突最终由短码唯一索引等唯一约束兜底；把 pending 升级为带 owner 的 CAS 租约在批次 4 池，未做之前不宣称「同 key 只执行一次」。
 
 ### 限流体系（B6：滑动窗口）
 
@@ -446,6 +449,7 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 - **设备桶**（bot 优先 → tablet → mobile → desktop → unknown；轻量确定性规则无第三方库）；**来源桶**（Referer 归一化 host，小写、去 `www.`、截断 128；缺失/非法 → direct）
 - API：`GET /api/links/{code}/stats/breakdown?dim=device|referer_host|os|browser|variant&days=1..90`（仅链主）；控制台同步展示
 - 口径：维度计数是**点击数**，与 UV（按 IP 去重）不同；历史明细不回填
+- **一致性口径分层（S/N 波明示）**：breakdown 读的是消费端异步预聚合表（`lf_click_dim_daily`），**最终一致**——刚发生的点击要等 outbox 消费落桶后才计入，短暂落后于明细；与之相对，`stats` 的总量/按天/UV 直读明细并在同一可重复读快照内完成（见上表），单次响应自洽。两条读路径的口径差异是设计，不是 bug
 
 ### 非人点击（B2：预取与预览 bot 照常 302 但不计）
 
@@ -464,7 +468,7 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 - **检查时机**：① 建链/改链 BLOCK → 400（消息不回显名单项）；② 跳转时对**行上的 URL** 复查——名单变更对存量链立即生效，零额外 I/O
 - **页面**：无 JS、无外链资源、全部动态值 `HtmlUtils.htmlEscape` 转义（有直接单测 `GatePagesTest` 钉住）、CSP `default-src 'none'`。BLOCK → 403 拦截页（无 Location、`no-store`）；WARN → 200 警示页（显示转义后目标与 punycode host，`noindex` + `no-referrer`）
 - **名单来源**：`LINKFORGE_PHISHING_BLOCK_DOMAINS` / `_WARN_DOMAINS`（逗号分隔整表覆盖，默认空）+ 可选 `_BLOCKLIST_FILE`（每行一域、`#` 注释、`!warn ` 前缀=警示级）；按 mtime 热加载（默认 30s），坏文件/消失 → 保留旧快照 + `linkforge.phishing.reload{result=failed}`。**无管理 API**
-- **恶意域名 feed（批次 3b，可选）**：`LINKFORGE_MALICIOUS_FEED_ENABLED=true` 时定时（默认 6h）拉取 URLhaus hostfile 落库 `lf_malicious_host`，内存快照并入 BLOCK 集（policy 层理由码 `malicious_feed`，wire 层不回显）。边界不变：同步是「名单来源自动化」，判定仍纯本地、**零逐请求外呼信誉服务**，不破 D-Bw345-29；默认关；feed 里消失的 host 不自动解禁；失败保留旧快照 + 新鲜度 gauge（`linkforge.malicious.feed.*`）
+- **恶意域名 feed（批次 3b，可选）**：`LINKFORGE_MALICIOUS_FEED_ENABLED=true` 时定时（默认 6h）拉取 URLhaus hostfile 落库 `lf_malicious_host`，内存快照并入 BLOCK 集（policy 层理由码 `malicious_feed`，wire 层不回显）。边界不变：同步是「名单来源自动化」，判定仍纯本地、**零逐请求外呼信誉服务**，不破 D-Bw345-29；默认关；feed 里消失的 host 不自动解禁；失败保留旧快照 + 新鲜度 gauge（`linkforge.malicious.feed.*`）。**`last_success` 口径（S/N 波，审计 S3）**：指最后一次**成功应用**（快照重建完成）的同步时刻，不是最后一次下载成功——某轮下载与落库都成功、但内存快照重建失败时，该轮计 `linkforge.malicious.feed.sync{result=apply_failed}` 且 `last_success` 不推进，旧快照继续判定
 - **与 `WebhookTargetGuard` 分工**：Guard 防**服务端出站请求**（SSRF：DNS 解析后拒私网/元数据 IP）；B9 管**浏览器去访问的目标域**——私网/内网目标照常允许（企业内网短链是合法用法）。互不复用
 
 ### 密码短链（B3）
@@ -496,8 +500,9 @@ SELECT (SELECT COUNT(*) FROM lf_click_log) AS detail,
 - **热路径**：抽签点在全部链层门禁（B9 BLOCK → B3 密码 → WARN 放行）通过后、构造 302 前（`VariantPicker` 权重累积抽签，每成功 302 一次索引点查，O(≤10)）；BLOCK/Locked/WARN 路径不查 variants；**门禁/密码/UTM 的评估对象仍是链层 `original_url`**。`unlock` 成功 303 回 `/r/{code}`，抽签发生在解锁后的 GET——密码链解锁后照常分流
 - **缓存与多实例**：L1/L2 仍缓存 `original_url` 作加速提示；**有 variants 时最终 `Location` 以抽签为准**。variants 变更（创建带 variants / 更新替换）走既有 `publishL1Invalidate` 广播（C2 链路，订阅只剔本地 L1）
 - **统计**：`V10__link_variant.sql` 建 `lf_link_variant`（`uk_link_variant (link_id, variant_key)`，`variant_key` 内联 `utf8mb4_0900_bin` 大小写敏感）+ `lf_click_log.variant` 可空列。点击事件带所抽 key，`consume` 在既有维度之后**仅当 variant 非空**写 `dim_type=variant`（无 variant 不写该维）；`dim=variant` 合法，`dim=geo` 等非法仍 400
-- **动态路由（批次 3a）**：variant 可带可选 `matchRule`（JSON：`devices`/`os`/`languages`/`timeWindows`，键内 OR、键间 AND；写入严格校验、非法 400，跳转读时容错降级为通配）。抽签前先按请求特征（UA 分类的设备/os——与统计分桶同一份实现、Accept-Language 主标签、规则时区下的当前时刻）收窄候选集，无一命中则回退全体抽签，规则只收窄、永不指空。Geo 维度仍不做
+- **动态路由（批次 3a）**：variant 可带可选 `matchRule`（JSON：`devices`/`os`/`languages`/`timeWindows`，键内 OR、键间 AND；写入严格校验、非法 400，跳转读时容错降级为通配）。抽签前先按请求特征（UA 分类的设备/os——与统计分桶同一份实现、Accept-Language 主标签、规则时区下的当前时刻）收窄候选集，无一命中则回退全体抽签，规则只收窄、永不指空。Geo 维度仍不做。**跨午夜时间窗的星期归属（S/N 波，审计 S4-4）**：`timeWindows` 中 `from > to` 的跨午夜窗（如周一 23:00 → 次日 02:00），午夜后的尾段按**开窗日**（起始那天）的星期判定——周二凌晨 01:00 落在「周一开窗」的窗内，而不是按周二判定；非跨午夜窗仍按当日星期
 - **分布拟合诊断（批次 3b）**：`GET /api/links/{code}/stats/ab-report` 把 variant 观测分布与配置权重做卡方拟合优度检验（期望、份额 + Wilson 95% CI、p 值手写实现）。先说清定义：本服务只观测点击本身、点击数由抽签决定、没有转化事件——这个报告抓的是**抽签管线失真**（picker 偏差、缓存把某 variant 钉死、路由规则吃掉流量），不是「哪个版本转化更好」；数据不足（总量 <30 或期望 <5）返回 `INSUFFICIENT_DATA` 不硬算；已删 variant 的历史桶单列（orphaned），不进拟合
+- **适用性门（S/N 波，审计 S1）**：拟合成立的前提是「窗口内流量只由当前权重抽签产生」。不满足时报告返回 `verdict=NOT_APPLICABLE` 并在 `reason` 字段给理由码，不再对失真分布硬算 CONSISTENT/SKEWED：任一 variant 带实质 `matchRule`（条件路由，流量按请求特征收窄、与权重不可比）→ `CONDITIONAL_ROUTING`；存在孤儿桶或当前变体集的安装时刻落在报告窗口内且晚于链接出生（配置在窗口内被整表替换过，桶里混着旧配置的流量）→ `CONFIG_CHANGED_IN_WINDOW`（孤儿桶的存在本身即构成该证据）；变体集生于窗口内但无法证明先于窗口 → `CONFIG_HISTORY_UNKNOWN`；变体不足两条 → `TOO_FEW_VARIANTS`。配置稳定（变体集安装时刻早于窗口起点）的链接口径不变，照常给拟合结论
 - **诚实边界**：按权重随机抽签 + 上述规则收窄；**非 Geo 定向**（明确不做），无转化跟踪、无实验分组框架
 
 **批量 CSV 导入**：`POST /api/links/import`（multipart 字段 `file`，鉴权同 `/api/links/**`）。
@@ -551,6 +556,7 @@ curl -X POST -H "X-API-Key: lfk_xxxxxxxx_xxx" -H "Content-Type: application/json
 - **一键起观测栈**：`docker compose --profile observability up -d`（默认 up 不含）。镜像 tag 写死（prom/prometheus:v2.55.1、grafana/grafana-oss:11.3.0），端口只绑 127.0.0.1。Prometheus 是 9090，Grafana 宿主机端口是 3001（容器内仍是 3000，避开本机已被占用的 3000）；Grafana 密码 `GRAFANA_ADMIN_PASSWORD`（默认值仅限本机）；看板「LinkForge SLO」自动 provision（datasource uid `linkforge-prom`），截图见 `docs/img/grafana-*.png`
 - **看板**：跳转 QPS/状态、P50/P95/P99（直方图）、SLO 达标率（≤100ms）与 5xx 率、跳过与限流拒绝、L1（本进程）/ L2（Redis）命中、Bloom（本进程）/ absent、singleflight、fail-open、Outbox/Webhook 积压、API Key、门禁与解锁、JVM/Hikari。L1 与 Bloom 面板不是集群命中率。**SLO 阈值是 Demo 目标不是生产承诺**；`DashboardMetricsIT` 断言看板引用的每个指标都真实存在于 scrape
 - **tag 有界**：任何 tag 不含 code/URL/域名/IP/用户/Key id，`uri` 只出现模板值（`/r/{code}`）；`http.server.requests` 开 percentile 直方图 + SLO 桶（仅该 meter）；积压 gauge（`BacklogGauges` 每 15s 采样，不在 scrape 线程查库，失败保留上次值）
+- **关联与错误日志（S/N 波，审计 N1）**：每个响应带 `X-Correlation-Id` 响应头（服务端生成、不采信入站值），服务端日志行以 `[%X{cid}]` 标注同一 id，一次请求的前后端证据可按 id 对齐；5xx 或带 cause 的 `BizException` 由全局异常处理器在服务端**恰好记一次** error（含堆栈与 cause 链），wire 仍只回固定文案——如 Bloom 手动重建失败只回 `bloom rebuild failed`，底层 SQL/连接细节只进服务端日志、不进响应体
 
 ### 数据迁移（Flyway，V1–V15）
 
@@ -657,12 +663,12 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 
 ## 🧪 测试与质量
 
-- **472 例**（v2.0.0 发布口径 211 → v2.1 抛光 220 → C1 261 → C2 +20 → C3 +26 → C4 +8 → C5 +4 → 批次 1 +16 → 批次 2a +18 → 批次 2b +13 → 批次 3a +34 → 批次 3b +40 → 外部审计修复波 +32）：surefire 纯单测 **200** + failsafe Testcontainers 集成 **270** + 时区 fork **2**（`WebhookRetryClockIT` 独立 fork 到 Asia/Shanghai，钉 DB 时钟退避）。静态徽章会随例数变化，以本行拆分为准
+- **508 例**（v2.0.0 发布口径 211 → v2.1 抛光 220 → C1 261 → C2 +20 → C3 +26 → C4 +8 → C5 +4 → 批次 1 +16 → 批次 2a +18 → 批次 2b +13 → 批次 3a +34 → 批次 3b +40 → 外部审计修复波 +32 → S/N 波 +36）：surefire 纯单测 **226** + failsafe Testcontainers 集成 **280** + 时区 fork **2**（`WebhookRetryClockIT` 独立 fork 到 Asia/Shanghai，钉 DB 时钟退避）。静态徽章会随例数变化，以本行拆分为准
 - **红先纪律**：每个特性先提交测试（CI 红 = 证据）再提交实现（CI 绿）；B 波 3+4+5 轮 13 次分支红全部留档根因（progress.md）
 - **CI**：GitHub Actions `mvn -B verify`（ubuntu + 原生 Docker Testcontainers），push 即跑，main 恒绿
 - **连接预算口径**：集成测试共享一个 Testcontainers MySQL（`--max-connections=500` 是**配置侧天花板**）；上下文峰值 ≈ 27×10+15×4 = **330 是最坏情形推导值**（每上下文 Hikari 同时满池的纸面相加；42 个 *IT、15 个显式 4，其中 C1/C2/C3/C4 新增各 3/4/2/1 个均 4，C5 零新 IT；时区 fork 独立 JVM 另计），余量 170，全绿即零 `Too many connections`。三个 relay-enabled webhook IT 钉 `@DirtiesContext(AFTER_CLASS)`，类结束即关上下文，实际峰值低于纸面。（注：330 是 C5 时点的推导；批次 1–3 累计新增 25 个 *IT 类（现共 67 个）后纸面峰值待重算，「全绿即零 `Too many connections`」的实测结论不变）
 - **对账与故障演练**：`scripts/mq-drill.sh` / `scripts/outbox-drill.sh` 断 MQ 追平；`scripts/fault-drill.sh`（C4）redis 停服 / webhook 5xx / mysql 只读三段，本机实测 `FAULT DRILL OK`（C5 于 tip `e0c567c` 复验，2026-11-01：只读态 GET /r 仍 302——点击记账 fail-open，HEAD 保留次要；PASS 行原文见 [docs/progress.md](docs/progress.md) C5 章 Compose 手验证据），回归皆绿
-- 审计证据与逐轮记录：[docs/progress.md](docs/progress.md)（1655 行，每阶段验收、决策、红绿史）
+- 审计证据与逐轮记录：[docs/progress.md](docs/progress.md)（1770 行，每阶段验收、决策、红绿史）
 
 ## 📈 性能与压测
 
@@ -687,6 +693,7 @@ schema 版本化在 `src/main/resources/db/migration`，应用启动自动迁移
 | **解冻批次 1–2（未发版）** | 2026-11-07 | C5 冻结后经运营者指令解冻：批次 1 审计修复（登录双桶限流 + 失败时序恒定、stats 口径统一、Webhook 冲刷快照删除、Outbox 状态守卫、update 单事务、BizException 拆 httpStatus/code）→ 批次 2a 认证地基（access 1h + refresh 轮换/重用检测、token_version、过滤器状态复查、强制改密；V11）→ 批次 2b 团队协作（邀请、成员管理、最后 ADMIN 护栏、管理员重置；V12）；测试 319→366；两批各带收尾文档对账 |
 | **解冻批次 3（未发版）** | 2026-11-08 | P1 主体：3a 链接标签/关键词检索 + variant 动态路由（设备/语言/时间窗规则收窄抽签；V13）→ 3b 原始点击导出（10 万行上限）、A/B 分布拟合诊断、幂等深化（请求指纹 409、重放不烧限流、导入支持 Idempotency-Key）、URLhaus 恶意域名 feed 同步（默认关；V14）；测试 366→440；收尾文档对账随批完成 |
 | **外部审计修复波（未发版）** | 2026-11-08 | 批次 1–3 交付经外部审计（Grok）复审判 FAIL/MUST_FIX，8 项必修以三 PR 全数修复并合入：PR-A 会话撤销原子化（refresh/logout-all 同锁串行、token_version 原子自增）+ 最后 ADMIN 护栏改锁内当前读 + 管理员重置连带永久撤销 API Key 且改密墙覆盖被撤 Key（M1/M2/M7）；PR-B 聚合冲刷改单事务 drain + 单调 flush_seq（V15）、幂等指纹纳入密码 HMAC、CSV 导入 owner lease 互斥（M3/M4/M5）；PR-C 控制台编辑无损保存 matchRule、CSV 导出公式中和（M6/M8）；并发合同测试以屏障交错钉住竞态。测试 440→472；收尾文档对账随波完成。审计的 Should-fix（S1–S4/N1/N2）排下一波，S1 优先 |
+| **S/N 波（未发版）** | 2026-11-08 | 审计 Should-fix 的瘦身一波（两 PR 合入）：PR-α（#25）S1 A/B 报告适用性门（条件路由/窗口内配置变更/配置史不可证时返回 NOT_APPLICABLE + 理由码，不再对失真分布硬给拟合结论）、S4-4 跨午夜时间窗改开窗日星期归属、S4-1 stats 总量/按天/UV 改同一可重复读快照、N1 异常日志卫生（带 cause 的 BizException 服务端恰记一次 + X-Correlation-Id 贯穿）、S4-5 认证存储故障时双过滤器回稳定 503、S3 feed `last_success` 改「最后成功应用」口径；PR-γ（#24）S2 控制台闭环小件组（强制改密页、邀请接受、`prompt()` 移除改 modal、启动会话恢复、导入 refresh 重试、logout-all 按钮、列表关键词/标签筛选）。测试 472→508（226+280+2），无新迁移（V15 仍最新）。S2 成员管理区、S3 上限/阈值、S4-2 lease CAS、S4-3 retention 推迟批次 4 池；Grok 复审待本波后随修复波一并提交 |
 | **C5（未发版）** | 2026-11-01 | 收口 C5：点击记账 fail-open（`resolveForGet` 调用点 catch `DataAccessException`、meter `linkforge.click.record.failopen`——主链路 302 不依赖 Redis/点击写/Webhook 任一侧写成功）+ C4 nit 收尾（main tip 记账行、absent fail-open meter、Compose 手验证据入档 progress）+ fault-drill mysql-ro 主探针改 GET 302 + 面试 Demo 五步（README）；测试 315→319；**C5 审计通过后功能冻结** |
 | **C4（未发版）** | 2026-11-01 | 深化 C4：Webhook SSRF DNS rebinding 钉死（httpclient5 + 自定义 DnsResolver——投递时一次解析、全 IP 校验、只连已校验地址，Host/SNI 保原 hostname）+ 故障演练 `scripts/fault-drill.sh`（redis 停服 / webhook 5xx / mysql 只读，SKIP 语义）+ Redis L2/幂等 fail-open（`linkforge.cache.failopen`）+ C3 审计修复并入（S1 建链+variants 同事务 / N2 update 带 variants / N3 delete 清 variants）；测试 307→315；红先三块 CI 留档（conclusion 列） |
 | **C3（未发版）** | 2026-10-31 | 深化 C3：A/B 权重分流（一码多目标 ≤10 按权重抽签、密码/门禁/UTM 仍链层、`dim=variant` 统计分桶）+ 批量 CSV 导入（同步 multipart ≤100 行、部分失败返回文件行号+原因、专用 import 限流）；V10 迁移；测试 281→307；红先两块 CI 留档（conclusion 列） |
