@@ -43,6 +43,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class IdempotencyPasswordFingerprintIT extends AbstractIntegrationTest {
 
     private static final String KEY_PREFIX = "linkforge:rl:it-idempw:";
+    private static final String FIRST_PASSWORD = "it-pass-123456";
+    private static final String SECOND_PASSWORD = "new-pass-123456";
 
     @Autowired
     private StringRedisTemplate redis;
@@ -55,7 +57,7 @@ class IdempotencyPasswordFingerprintIT extends AbstractIntegrationTest {
 
     private Registered registerUser() throws Exception {
         var reg = postJson("/api/auth/register", om.writeValueAsString(Map.of(
-                "tenantName", unique("t"), "username", unique("u"), "password", "it-pass-123456")), null);
+                "tenantName", unique("t"), "username", unique("u"), "password", FIRST_PASSWORD)), null);
         assertEquals(200, reg.getStatusCode().value(), reg.getBody());
         return new Registered(body(reg).path("data").path("userId").asLong(),
                 body(reg).path("data").path("token").asText());
@@ -87,13 +89,13 @@ class IdempotencyPasswordFingerprintIT extends AbstractIntegrationTest {
         Registered user = registerUser();
         String url = "https://example.com/pwfp-" + unique("");
         String first = om.writeValueAsString(Map.of(
-                "originalUrl", url, "accessPassword", "it-pass-123456"));
+                "originalUrl", url, "accessPassword", FIRST_PASSWORD));
         var created = create(user.token(), first, "pw-diff");
         assertEquals(200, created.getStatusCode().value(), created.getBody());
         String code = body(created).path("data").path("code").asText();
 
         String otherPassword = om.writeValueAsString(Map.of(
-                "originalUrl", url, "accessPassword", "new-pass-123456"));
+                "originalUrl", url, "accessPassword", SECOND_PASSWORD));
         var conflict = create(user.token(), otherPassword, "pw-diff");
         assertEquals(409, conflict.getStatusCode().value(), conflict.getBody());
         assertTrue(conflict.getBody().contains("IDEMPOTENCY_KEY_REUSED"), conflict.getBody());
@@ -103,8 +105,8 @@ class IdempotencyPasswordFingerprintIT extends AbstractIntegrationTest {
 
         // the FIRST password is still the effective one — the second caller
         // must not silently end up with a link their password does not open
-        assertEquals(303, unlockStatus(code, "it-pass-123456"), "the original password still unlocks");
-        assertEquals(401, unlockStatus(code, "new-pass-123456"), "the replayed password must not unlock");
+        assertEquals(303, unlockStatus(code, FIRST_PASSWORD), "the original password still unlocks");
+        assertEquals(401, unlockStatus(code, SECOND_PASSWORD), "the replayed password must not unlock");
     }
 
     @Test
@@ -112,7 +114,7 @@ class IdempotencyPasswordFingerprintIT extends AbstractIntegrationTest {
         Registered user = registerUser();
         String json = om.writeValueAsString(Map.of(
                 "originalUrl", "https://example.com/pwfp-same-" + unique(""),
-                "accessPassword", "it-pass-123456"));
+                "accessPassword", FIRST_PASSWORD));
         var first = create(user.token(), json, "pw-same");
         assertEquals(200, first.getStatusCode().value(), first.getBody());
         var replay = create(user.token(), json, "pw-same");
@@ -124,7 +126,7 @@ class IdempotencyPasswordFingerprintIT extends AbstractIntegrationTest {
         String settled = redis.opsForValue().get(idemRedisKey(user.userId(), "pw-same"));
         assertTrue(settled != null && settled.startsWith("v3:"),
                 "new settled values use the v3 envelope: " + settled);
-        assertFalse(settled.contains("it-pass-123456"),
+        assertFalse(settled.contains(FIRST_PASSWORD),
                 "the settled value must never carry the plaintext password");
     }
 
@@ -134,7 +136,7 @@ class IdempotencyPasswordFingerprintIT extends AbstractIntegrationTest {
         String url = "https://example.com/pwfp-mix-" + unique("");
         String without = om.writeValueAsString(Map.of("originalUrl", url));
         String with = om.writeValueAsString(Map.of(
-                "originalUrl", url, "accessPassword", "it-pass-123456"));
+                "originalUrl", url, "accessPassword", FIRST_PASSWORD));
 
         var plainFirst = create(user.token(), without, "pw-mix-a");
         assertEquals(200, plainFirst.getStatusCode().value(), plainFirst.getBody());
@@ -165,7 +167,7 @@ class IdempotencyPasswordFingerprintIT extends AbstractIntegrationTest {
         String code = createLink(user.token(), url);
         String noPasswordBody = om.writeValueAsString(Map.of("originalUrl", url));
         String passwordBody = om.writeValueAsString(Map.of(
-                "originalUrl", url, "accessPassword", "it-pass-123456"));
+                "originalUrl", url, "accessPassword", FIRST_PASSWORD));
 
         // plain pre-3b value: password-bearing retry fails closed…
         redis.opsForValue().set(idemRedisKey(user.userId(), "legacy-plain"), code, Duration.ofMinutes(5));

@@ -243,9 +243,10 @@ class WebhookAggregateDrainIT extends AbstractIntegrationTest {
                 "and with their click counts");
         assertTrue(deliveries().isEmpty(), "no delivery row survives the rollback");
         Integer seq = jdbc.queryForObject(
-                "SELECT flush_seq FROM lf_webhook_flush_state WHERE endpoint_id = ?",
+                "SELECT COALESCE((SELECT flush_seq FROM lf_webhook_flush_state"
+                        + " WHERE endpoint_id = ?), 0)",
                 Integer.class, ENDPOINT_ID);
-        assertTrue(seq == null || seq == 0, "the failed drain consumed no sequence, got " + seq);
+        assertEquals(0, seq.intValue(), "the failed drain consumed no sequence");
 
         flusher.flushWindow(endpoint(), WINDOW_C);
         List<WebhookDelivery> retried = deliveries();
