@@ -48,7 +48,7 @@
 
 ### 5.2 轮换：一次 refresh 的完整事务（M1 的原子性）
 
-`SessionService.refresh`（`:146-211`）分两段：
+`SessionService.refresh`（`:133-195`）分两段：
 
 1. **入口限流与无锁 peek**：先按 IP 过 refresh 桶（5/600s，与 login 同级，因为这是公开凭据入口）；再用 token 哈希做一次**无锁**点查（`selectOne` by hash）。peek 只回答「这枚 token 属于哪个用户」以便决定锁哪一行，它的结果**从不被信任**。
 2. **锁内事务**（`tx.executeWithoutResult`）：第一条凭据语句就是 `userAccountMapper.selectForUpdate(userId)` 锁住用户行；随后 `refreshTokenMapper.selectByHashForUpdate(hash)` 以 `FOR UPDATE` 复读 token 行——校验与动作之间没有读-改间隙。分支：
@@ -59,7 +59,7 @@
 
 ### 5.3 重用检测：为什么只对 ROTATED 超宽限升级
 
-已撤销行被再次出示时，`isReuseKill`（`:226-230`）只认一种盗用信号：`revoke_cause = ROTATED` 且撤销时刻距今超过 `REUSE_GRACE_SECONDS = 10` 秒（`:56`）。
+已撤销行被再次出示时，`isReuseKill`（`:218-222`）只认一种盗用信号：`revoke_cause = ROTATED` 且撤销时刻距今超过 `REUSE_GRACE_SECONDS = 10` 秒（`:59`）。
 
 - **ROTATED + 宽限内**：多半是客户端并发刷新/重试的良性竞态——401，但 family 活着。
 - **ROTATED + 超宽限**：这枚 token 是被一次合法轮换淘汰的，现在还拿它来的人要么是小偷、要么拿着被偷的副本——升级处置：`revokeFamily(REUSE_KILL)` 整族撤销 + `incrementTokenVersion` 让全部 access 立刻失效，打点 `linkforge.refresh.reuse_kill`，然后回 401。
@@ -71,9 +71,9 @@
 
 | 操作 | refresh 侧 | access 侧 | 说明 |
 |---|---|---|---|
-| `logout`（`:238-258`） | 只撤本 family（CAUSE_LOGOUT） | **不 bump tv**：本 family 的 access 活到自然过期（≤1h） | 幂等且安静：未知 token 也回成功，端点不是有效性预言机；撤销前先取属主行锁，与在途轮换串行 |
-| `logoutAll`（`:265-272`） | 全撤（CAUSE_LOGOUT） | tv +1，全部 access 下一请求即死 | 用户行锁内一气呵成 |
-| `changePassword`（`:284-303`） | 全撤（CAUSE_PASSWORD） | tv +1 | 锁内验当前口令 → 列级 UPDATE 写新哈希 + 清 must_change → tv 自增 → 全撤 refresh，**包括调用者自己的会话**：改密后必须用新口令重登，无一幸免 |
+| `logout`（`:233-253`） | 只撤本 family（CAUSE_LOGOUT） | **不 bump tv**：本 family 的 access 活到自然过期（≤1h） | 幂等且安静：未知 token 也回成功，端点不是有效性预言机；撤销前先取属主行锁，与在途轮换串行 |
+| `logoutAll`（`:255-270`） | 全撤（CAUSE_LOGOUT） | tv +1，全部 access 下一请求即死 | 用户行锁内一气呵成 |
+| `changePassword`（`:272-315`） | 全撤（CAUSE_PASSWORD） | tv +1 | 锁内验当前口令 → 列级 UPDATE 写新哈希 + 清 must_change → tv 自增 → 全撤 refresh，**包括调用者自己的会话**：改密后必须用新口令重登，无一幸免 |
 | 管理员禁用/移除/重置（TeamService） | 全撤（CAUSE_ADMIN 或 PASSWORD） | tv +1 | 见 5.6 |
 
 注意 `changePassword` 的写是 `LambdaUpdateWrapper` 列级 SET（只写 password_hash、must_change_password、updated_at 三列），不是整行 `updateById`——整行回写会把锁外读到的旧实体盖回去，冲掉并发撤销刚自增的 tv。**tv 只许经 `incrementTokenVersion` 的原子 SQL（`SET token_version = token_version + 1`）移动，永不读改写整行**，这是 M1 的另一半。
@@ -160,7 +160,7 @@ stateDiagram-v2
 
 **练习 2（源码定位）。** 一枚 ROTATED 后第 5 秒被重现的 refresh 与第 60 秒被重现的 refresh，结局分别是什么？判定代码在哪？
 
-参考答案：判定在 `SessionService.isReuseKill`（`:226-230`）+ 常量 `REUSE_GRACE_SECONDS = 10`（`:56`）。第 5 秒：宽限内，判良性竞态，只回 401，family 不动。第 60 秒：判盗用，事务内 `revokeFamily(REUSE_KILL)` + `incrementTokenVersion` 先提交，随后回 401，打点 `linkforge.refresh.reuse_kill`。
+参考答案：判定在 `SessionService.isReuseKill`（`:218-222`）+ 常量 `REUSE_GRACE_SECONDS = 10`（`:59`）。第 5 秒：宽限内，判良性竞态，只回 401，family 不动。第 60 秒：判盗用，事务内 `revokeFamily(REUSE_KILL)` + `incrementTokenVersion` 先提交，随后回 401，打点 `linkforge.refresh.reuse_kill`。
 
 **练习 3（执行过程）。** 两个 ADMIN 同时点「降级对方」，为什么最终至少留下一个 ADMIN？把关键的两步写出来。
 

@@ -60,7 +60,7 @@ flowchart LR
 - **审计发现**：`refresh` 的「标记旧行 ROTATED + 插后继行」与 `logout-all` / 改密的「撤全部行 + bump token_version」可以交错：撤销先提交、轮换后提交时，轮换新铸的后继行逃过撤销——撤销接口已经返回成功，会话却还活着。
 - **根因**：两条路径没有共同的串行化点。版本号还是实体读-改-写，交错时后写覆盖先写，bump 会丢。
 - **修法**：确立全局锁序 **租户行 → 用户行 → refresh 行**；SessionService 全部 mint/revoke 临界区进同一事务，第一条凭据语句 `selectForUpdate` 锁用户行，轮换在锁内重读 token 行（FOR UPDATE）再 rotate + 插后继 + 回填 replaced_by_id，一起提交；token_version 只走原子 SQL 自增。撤销排在轮换后面时，它撤的集合里包含刚铸的后继行——「撤销返回后无会话存活」成为可断言的合同（`SessionService.java:44-54` 类注释、:133-196）。
-- **测试证据**：`insertSuccessor` 接缝（:344-347）让合同测试把轮换卡在半路，并发执行 logout-all / 改密，断言两边都返回后无任何可用会话；后继插入失败时整单回滚、旧 token 未被消费也可断言。
+- **测试证据**：`insertSuccessor` 接缝（:326）让合同测试把轮换卡在半路，并发执行 logout-all / 改密，断言两边都返回后无任何可用会话；后继插入失败时整单回滚、旧 token 未被消费也可断言。
 
 ### M2 · 最后 ADMIN 护栏被 RR 旧快照击穿
 
@@ -80,7 +80,7 @@ flowchart LR
 
 - **审计发现**：create-v1 指纹对访问密码只记一位 set/unset。同一个 Idempotency-Key、同一个 URL、**不同密码**的第二次请求被判为重放，返回第一次的短链——密码被静默吞掉。
 - **根因**：指纹的规范形在「密码不可入指纹」的顾虑下过度脱敏，把一位布尔当成了密码的全部信息。
-- **修法**：指纹升 create-v2：密码以 `HMAC-SHA256(pepper, trim 后字节)` 进规范形（pepper 走环境变量，带 pv1 版本段）；settle 信封升 `v3:<fpV2>:<code>`；旧 v2/无前缀存量值对带密码重试 fail-closed 409（证明不了相等就不重放）。细节见 [专题 16](16-link-power-features.md) 节点六、七（`ShortLinkService.java:277-303`、:213-264）。
+- **修法**：指纹升 create-v2：密码以 `HMAC-SHA256(pepper, trim 后字节)` 进规范形（pepper 走环境变量，带 pv1 版本段）；settle 信封升 `v3:<fpV2>:<code>`；旧 v2/无前缀存量值对带密码重试 fail-closed 409（证明不了相等就不重放）。细节见 [专题 16](16-link-power-features.md) 节点六、七（`ShortLinkService.java:294-307`、:213-264）。
 - **测试证据**：同 key 异密码 → 409；同 key 同密码（含 trim 等价形）→ 正常重放；旧信封三代读回各有对应用例。
 
 ### M5 · CSV 导入没有在途互斥
@@ -109,7 +109,7 @@ flowchart LR
 
 - **审计发现**：链接导出与点击导出只做 RFC4180 引号转义。标题、URL 等用户可控文本以 `=`、`+`、`-`、`@` 开头时，Excel/表格软件打开会当公式执行（CSV 公式注入）。
 - **根因**：转义解决的是 CSV 语法问题，不是表格语义问题，两层被混为一谈。
-- **修法**：`CsvFormat.escapeSpreadsheet`（`CsvFormat.java:29-52`）：先在**原文**上跳过前导空白类字符看首字符，命中四字符就在原值前加单引号再走原转义；其余值与旧行为逐字节一致。全部 CSV 出口换用它。
+- **修法**：`CsvFormat.escapeSpreadsheet`（`CsvFormat.java:29-48`）：先在**原文**上跳过前导空白类字符看首字符，命中四字符就在原值前加单引号再走原转义；其余值与旧行为逐字节一致。全部 CSV 出口换用它。
 - **测试证据**：纯函数单测覆盖四字符、前导空白藏匿、引号内藏匿、正常值不变四类样本。
 
 ## 6. S/N 波处置（应修与建议）

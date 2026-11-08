@@ -35,19 +35,19 @@ GET /r/aB3xK9m（匿名，无凭据）
   → SecurityFilterChain：GET/HEAD /r/** 放行（SecurityConfig.java:43-44）
   → RedirectController.redirect（RedirectController.java:36-41）
   → ShortLinkService.resolveForGet（ShortLinkService.java:565-585）
-  → resolveTarget(code, request, true)（:601-712，12 步）
-      ├─ 1 IP 滑动窗口限流（:604-610，键 redirect:ip:{ip}，默认 300 次/60 秒）→ 429
-      ├─ 2 Bloom 负答 = 码从未创建（:615-618）→ 404，不碰 MySQL
-      ├─ 3 空值缓存命中（:623-626）→ 404
-      ├─ 4 L1 进程内缓存查 URL（:631-632）
-      ├─ 5 L2 Redis 查 URL（:633-644）；Redis 异常 fail-open 继续（:636-640）
-      ├─ 6 singleflight 合并并发，读 DB 行（:649-654）；行不存在 → markAbsent + 404
-      ├─ 7 状态与过期（:656-661）：禁用 → 404；过期 → 410
-      ├─ 8 URL 可渲染校验（:663-671）：脏行 → 410；脏缓存值 → 410
-      ├─ 9 B9 BLOCK（:684-688）→ Blocked（403 拦截页）
-      ├─ 10 密码门（:691-695）→ Locked（GET 200 解锁页 / HEAD 401）
-      ├─ 11 B9 WARN（:696-704）→ Warn（200 警示页；lf_continue=1 且 GET 可继续）
-      └─ 12 抽签（:705-711）→ Redirect(link, targetUrl, variantKey)
+  → resolveTarget(code, request, true)（:1061-1174，12 步）
+      ├─ 1 IP 滑动窗口限流（:1065-1073，键 redirect:ip:{ip}，默认 300 次/60 秒）→ 429
+      ├─ 2 Bloom 负答 = 码从未创建（:1078-1081）→ 404，不碰 MySQL
+      ├─ 3 空值缓存命中（:1085-1088）→ 404
+      ├─ 4 L1 进程内缓存查 URL（:1090-1092）
+      ├─ 5 L2 Redis 查 URL（:1094-1105）；Redis 异常 fail-open 继续（:1096-1100）
+      ├─ 6 singleflight 合并并发，读 DB 行（:1110-1117）；行不存在 → markAbsent + 404
+      ├─ 7 状态与过期（:1118-1122）：禁用 → 404；过期 → 410
+      ├─ 8 URL 可渲染校验（:1126-1133）：脏行 → 410；脏缓存值 → 410
+      ├─ 9 B9 BLOCK（:1147-1151）→ Blocked（403 拦截页）；理由含静态名单与恶意 feed 快照命中的 MALICIOUS_FEED（批次 3b）
+      ├─ 10 密码门（:1150-1157）→ Locked（GET 200 解锁页 / HEAD 401）
+      ├─ 11 B9 WARN（:1159-1167）→ Warn（200 警示页；lf_continue=1 且 GET 可继续）
+      └─ 12 抽签（:1171-1174）：pickVariant 先按 match_rule 收窄候选集（批次 3a，无命中回退全集，详见 [专题 16](16-link-power-features.md) 节点二、三），再按权重抽 → Redirect(link, targetUrl, variantKey)
   → 回到 resolveForGet：
       ├─ B2 分类（:568-572）：预取/预览 bot → 打点后原样返回 302，不记账
       ├─ recordClick（:573-574，ClickRecordService.java:40-75）
@@ -92,17 +92,17 @@ HEAD /r/aB3xK9m
 
 **节点一：RedirectOutcome 把失败分成了两个通道。** 404/410/429 是「没有页面可渲染」，抛 BizException 走全局异常处理器，所有接口共享；Redirect/Blocked/Locked/Warn 是「判定成功，渲染不同页面」，走 sealed interface 返回值，由 `render` 逐分支翻译。新增分支漏改 render 会显式炸出 IllegalStateException（`RedirectController.java:116`）。回看 [7.1](../modules/07-redirection/01-decision-chain.md) 第 5.3 节。
 
-**节点二：缓存只加速、行才权威，三处可查证。** URL 校验先验行再验缓存值（:663-671）；B9 门禁判行的 URL（:684，注释 :682-683）；抽签结果压过缓存 URL（:705-711）。L1 命中省的只是 Redis 往返，第 6 步的行读照做。三处共享同一个反面假设：陈旧的缓存条目绝不能改变 DB 今天给出的判定。回看 [7.1](../modules/07-redirection/01-decision-chain.md) 第 9 节。
+**节点二：缓存只加速、行才权威，三处可查证。** URL 校验先验行再验缓存值（:1126-1133）；B9 门禁判行的 URL（:1147，注释 :1145-1146）；抽签结果压过缓存 URL（:1171-1174）。L1 命中省的只是 Redis 往返，第 6 步的行读照做。三处共享同一个反面假设：陈旧的缓存条目绝不能改变 DB 今天给出的判定。回看 [7.1](../modules/07-redirection/01-decision-chain.md) 第 9 节。
 
-**节点三：门禁顺序有安全含义。** BLOCK 在密码门之前（D-Bw345-51）：恶意链接即使加了密码，用户也永远看不到解锁页。403 拦截页不回显目标。WARN 在密码门之后、抽签之前：被拦的请求走不到抽签，桶数据不被门禁损耗。回看 [7.2](../modules/07-redirection/02-password-and-domain-gates.md) 第 5.5 节、[7.3](../modules/07-redirection/03-variants-split.md) 第 5.3 节。
+**节点三：门禁顺序有安全含义。** BLOCK 在密码门之前（D-Bw345-51）：恶意链接即使加了密码，用户也永远看不到解锁页。403 拦截页不回显目标。WARN 在密码门之后、抽签之前：被拦的请求走不到抽签，桶数据不被门禁损耗。3.0.0 的增量在第 9 步的理由集里：除静态名单外，`MALICIOUS_FEED`（`lf_malicious_host` 内存快照命中，`TargetPolicy.java:79`）也出 BLOCK——feed 的导入与快照语义见 [专题 16](16-link-power-features.md) 节点八、九，判定顺序不变。回看 [7.2](../modules/07-redirection/02-password-and-domain-gates.md) 第 5.5 节、[7.3](../modules/07-redirection/03-variants-split.md) 第 5.3 节。
 
 **节点四：记账与跳转的解耦边界。** `recordClick` 的两行写入在请求线程内同事务完成；302 不依赖这两行成功，catch 写在调用方、事务回滚之后，只捕 `DataAccessException`。序列化失败抛 IllegalStateException 会穿透 catch 变 500。为什么 catch 必须在事务外，回看 [11.1](../modules/11-statistics/01-click-record-pipeline.md) 第 5.4 节。
 
-**节点五：singleflight 是合并，不是缓存。** `singleFlight.run(code, () -> rowLoader.load(code))`（:649）让并发同码的 N 个请求共享一次行读，飞行结束条目即删：没有 TTL、没有「上一次的结果」。它压不住跨请求的重复读（那是缓存的事），也绝不用旧结果回答新请求（那是缓存的禁区）。超时或禁用时各读各的，只多打点不报错。回看 [7.1](../modules/07-redirection/01-decision-chain.md) 第 5.4 节，实现细节在 8.4 课。
+**节点五：singleflight 是合并，不是缓存。** `singleFlight.run(code, () -> rowLoader.load(code))`（:1110）让并发同码的 N 个请求共享一次行读，飞行结束条目即删：没有 TTL、没有「上一次的结果」。它压不住跨请求的重复读（那是缓存的事），也绝不用旧结果回答新请求（那是缓存的禁区）。超时或禁用时各读各的，只多打点不报错。回看 [7.1](../modules/07-redirection/01-decision-chain.md) 第 5.4 节，实现细节在 8.4 课。
 
-**节点六：L1 回填的严格条件。** :672-680 有两个看似相近的分支。只有「Redis 命中且通过行校验」的值才回填 L1（:675-677，注释 Bw1-N1：回填点被刻意挪到两项校验之后，保证进 L1 的值既过了行门又过了可渲染检查）；缓存全 miss 时才 cacheUrl 预热（:678-680）。行脏或缓存脏的请求永远不会污染 L1，这是「缓存只加速」在第 8 步之后 still 成立的保障。
+**节点六：L1 回填的严格条件。** :1138-1143 有两个看似相近的分支。只有「Redis 命中且通过行校验」的值才回填 L1（:1138-1140，注释 Bw1-N1：回填点被刻意挪到两项校验之后，保证进 L1 的值既过了行门又过了可渲染检查）；缓存全 miss 时才 cacheUrl 预热（:1141-1143）。行脏或缓存脏的请求永远不会污染 L1，这是「缓存只加速」在第 8 步之后 still 成立的保障。
 
-**节点七：三种入口的共性与差异一览。** 共用的是第 1-9 步判定与安全响应头（no-store、CSP、nosniff）。差异有三处：GET 独有 B2 分类与记账（:565-585）；GET 独有 `lf_continue` 确认能力（:589 注释）；Locked 的状态码随入口变化（GET 200 给人看解锁页，HEAD 401 表达未授权）。差异全部压在参数里（warnContinueAllowed、withBody），没有第二套判定代码。
+**节点七：三种入口的共性与差异一览。** 共用的是第 1-9 步判定与安全响应头（no-store、CSP、nosniff）。差异有三处：GET 独有 B2 分类与记账（:1025-1046）；GET 独有 `lf_continue` 确认能力（resolveForProbe 的 javadoc :1047-1050）；Locked 的状态码随入口变化（GET 200 给人看解锁页，HEAD 401 表达未授权）。差异全部压在参数里（warnContinueAllowed、withBody），没有第二套判定代码。
 
 ## 6. 正常流程：缓存已热的第二次访问（点击被完整记录）
 
@@ -110,16 +110,16 @@ HEAD /r/aB3xK9m
 |----|----|----|----|
 | t0 | Tomcat W1 | GET /r/aB3xK9m 进链，GET/HEAD 放行 | `SecurityConfig.java:43-44` |
 | t1 | W1 | redirect 入口调 resolveForGet | `RedirectController.java:36-41` |
-| t2 | W1 | 限流键 redirect:ip:{ip} 计数，未超 300/60s | `ShortLinkService.java:604-610` |
-| t3 | W1 | Bloom 正答（码存在），继续 | `ShortLinkService.java:615-618` |
-| t4 | W1 | 空值缓存未命中，L1 未命中，L2 命中拿到 URL | `ShortLinkService.java:623-644` |
-| t5 | W1 | singleflight 行读：状态 1、未过期 | `ShortLinkService.java:649-661` |
-| t6 | W1 | 行 URL 与缓存 URL 均可渲染；L1 回填 | `ShortLinkService.java:663-680` |
-| t7 | W1 | 三道门全过：无 BLOCK、无密码、无 WARN | `ShortLinkService.java:684-704` |
-| t8 | W1 | 无 variants，Location 取主 URL；返回 Redirect | `ShortLinkService.java:708-711` |
-| t9 | W1 | B2 分类：真人，不跳过 | `ShortLinkService.java:568-572` |
+| t2 | W1 | 限流键 redirect:ip:{ip} 计数，未超 300/60s | `ShortLinkService.java:1065-1073` |
+| t3 | W1 | Bloom 正答（码存在），继续 | `ShortLinkService.java:1078-1081` |
+| t4 | W1 | 空值缓存未命中，L1 未命中，L2 命中拿到 URL | `ShortLinkService.java:1085-1105` |
+| t5 | W1 | singleflight 行读：状态 1、未过期 | `ShortLinkService.java:1110-1122` |
+| t6 | W1 | 行 URL 与缓存 URL 均可渲染；L1 回填 | `ShortLinkService.java:1126-1143` |
+| t7 | W1 | 三道门全过：无 BLOCK、无密码、无 WARN | `ShortLinkService.java:1147-1167` |
+| t8 | W1 | 无 variants（或规则收窄后抽签），Location 取目标 URL；返回 Redirect | `ShortLinkService.java:1171-1174` |
+| t9 | W1 | B2 分类：真人，不跳过 | `ShortLinkService.java:1029-1033` |
 | t10 | W1 | recordClick 开事务，插 lf_click_log（id 回填），eventId=log-{id}，插 lf_outbox PENDING，提交 | `ClickRecordService.java:40-75` |
-| t11 | W1 | redirects 计数加一 | `ShortLinkService.java:582` |
+| t11 | W1 | redirects 计数加一 | `ShortLinkService.java:1043` |
 | t12 | W1 | render 输出 302 + Location，响应离开服务 | `RedirectController.java:86-90` |
 | t13 | 调度线程池 | （响应后约 2 秒内）ClickOutboxRelay 抽走 outbox 行发往 RabbitMQ | [11.1](../modules/11-statistics/01-click-record-pipeline.md) 第 8 节 |
 | t14 | MQ 消费线程 | 消费事件，聚合表加一；同 eventId 去重 | 10.3、11.2 课 |
@@ -131,9 +131,9 @@ t13 与 t14 即使全部失败，t12 的 302 也早已送达；这就是 outbox 
 | 时刻 | 线程 | 动作 | 证据 |
 |----|----|----|----|
 | h0 | Tomcat W3 | HEAD /r/aB3xK9m，与 GET 同一条 permitAll 规则放行 | `SecurityConfig.java:43-44` |
-| h1 | W3 | resolveForProbe 直接进 resolveTarget，warnContinueAllowed=false | `ShortLinkService.java:591-593` |
-| h2 | W3 | 第 1-9 步照跑（限流键是同一个 redirect:ip:{ip}，拨测消耗配额） | `ShortLinkService.java:604-711` |
-| h3 | W3 | 返回 Redirect；没有 B2 分类，没有 recordClick，没有 redirects 计数 | `ShortLinkService.java:566` 直接回传 |
+| h1 | W3 | resolveForProbe 直接进 resolveTarget，warnContinueAllowed=false | `ShortLinkService.java:1051-1054` |
+| h2 | W3 | 第 1-9 步照跑（限流键是同一个 redirect:ip:{ip}，拨测消耗配额） | `ShortLinkService.java:1065-1174` |
+| h3 | W3 | 返回 Redirect；没有 B2 分类，没有 recordClick，没有 redirects 计数 | `ShortLinkService.java:1052` 直接回传 |
 | h4 | W3 | render 输出 302，无正文 | `RedirectController.java:85-90` |
 
 同一条链、同一时刻，GET 与 HEAD 的差别只有一件事：GET 留下一条点击记录，HEAD 什么都不留。这就是「HEAD 契约」的全部含义，监控可以放心用它探活而不污染统计。附带一个推论：HEAD 也不做 B2 分类，所以拨测流量永远不会出现在 click.skipped 指标里，该指标的流量全部来自真实 GET。
@@ -142,25 +142,25 @@ t13 与 t14 即使全部失败，t12 的 302 也早已送达；这就是 outbox 
 
 | 触发条件 | 返回 | 副作用 | 出处 |
 |----|----|----|----|
-| 同 IP 60 秒内第 301 次跳转 | 429 + Retry-After | Redis 窗口计数在走 | `ShortLinkService.java:604-610` |
-| Redis L2 读失败 | 正常继续（降级到行读） | 打点 cache.failopen{op=l2_get} | `ShortLinkService.java:636-640` |
-| MySQL 行读本身失败 | 500 | 无缓存兜底（行是权威，无降级路径） | `ShortLinkService.java:649` 无 catch |
-| Bloom 负答（码从未创建） | 404 | 无，未碰 MySQL | `ShortLinkService.java:615-618` |
-| 空值缓存命中（DB 近期确认不存在） | 404 | 无 | `ShortLinkService.java:623-626` |
-| DB 行不存在（Bloom 误报/逻辑删） | 404 | markAbsent 写空值缓存（短 TTL 加抖动） | `ShortLinkService.java:650-654` |
-| 链已禁用（status != 1） | 404 | 无；绝不进空值缓存 | `ShortLinkService.java:656-658` |
-| 链已过期 | 410 "short link expired" | 无 | `ShortLinkService.java:659-661` |
-| 行的 URL 脏 / 缓存值脏 | 410 "short link target is invalid" | 无 | `ShortLinkService.java:663-671` |
-| B9 名单 BLOCK | 403 + 拦截页（无目标回显） | 打点 phishing.gate | `ShortLinkService.java:684-688` |
-| 链带密码且 cookie 无效 | GET 200 解锁页 / HEAD 401 | 打点 linkforge.link.locked | `ShortLinkService.java:691-695`、`RedirectController.java:98-105` |
-| 解锁表单密码错误 | 401 + 错误解锁页 | 打点 unlock{result=bad_password}；两级限流计数 | `RedirectController.java:71-78`、`ShortLinkService.java:767-788` |
-| 对没有密码的链提交 unlock | 303 跳回 /r/{code}，无 Set-Cookie | 两级限流计数（先于判定执行） | `ShortLinkService.java:781-783`、`RedirectController.java:79-81` |
-| unlock 的 Bloom/行状态镜像不通过 | 404 | 无 | `ShortLinkService.java:754-763`（[7.2](../modules/07-redirection/02-password-and-domain-gates.md) 第 5.3 节） |
-| 短码大小写不匹配 | 404（码是大小写敏感的精确匹配） | 无 | `RedirectController.java:38` 参数说明、`:615-618` |
-| HEAD 撞上 WARN 名单 | 200 无正文（lf_continue 被忽略） | 打点 phishing.gate | `ShortLinkService.java:696-704`、`RedirectController.java:112-114` |
-| B9 名单 WARN 且未确认 | 200 警示页（lf_continue 仅 GET） | 打点 phishing.gate；确认后打点 phishing.continue | `ShortLinkService.java:696-704` |
-| B2 命中（预取头/预览 bot UA） | 302（与正常完全一致） | 不写任何表；打点 click.skipped | `ShortLinkService.java:568-572` |
-| 点击写库失败（MySQL 故障等） | 302 照常 | 事务已回滚，明细与事件双丢；打点 failopen | `ShortLinkService.java:575-581` |
+| 同 IP 60 秒内第 301 次跳转 | 429 + Retry-After | Redis 窗口计数在走 | `ShortLinkService.java:1065-1073` |
+| Redis L2 读失败 | 正常继续（降级到行读） | 打点 cache.failopen{op=l2_get} | `ShortLinkService.java:1096-1100` |
+| MySQL 行读本身失败 | 500 | 无缓存兜底（行是权威，无降级路径） | `ShortLinkService.java:1110` 无 catch |
+| Bloom 负答（码从未创建） | 404 | 无，未碰 MySQL | `ShortLinkService.java:1078-1081` |
+| 空值缓存命中（DB 近期确认不存在） | 404 | 无 | `ShortLinkService.java:1085-1088` |
+| DB 行不存在（Bloom 误报/逻辑删） | 404 | markAbsent 写空值缓存（短 TTL 加抖动） | `ShortLinkService.java:1111-1117` |
+| 链已禁用（status != 1） | 404 | 无；绝不进空值缓存 | `ShortLinkService.java:1118` |
+| 链已过期 | 410 "short link expired" | 无 | `ShortLinkService.java:1119-1122` |
+| 行的 URL 脏 / 缓存值脏 | 410 "short link target is invalid" | 无 | `ShortLinkService.java:1126-1133` |
+| B9 名单 BLOCK（含 feed 的 MALICIOUS_FEED） | 403 + 拦截页（无目标回显） | 打点 phishing.gate | `ShortLinkService.java:1147-1151` |
+| 链带密码且 cookie 无效 | GET 200 解锁页 / HEAD 401 | 打点 linkforge.link.locked | `ShortLinkService.java:1150-1157`、`RedirectController.java:98-105` |
+| 解锁表单密码错误 | 401 + 错误解锁页 | 打点 unlock{result=bad_password}；两级限流计数 | `RedirectController.java:71-78`、`ShortLinkService.java:1241-1261` |
+| 对没有密码的链提交 unlock | 303 跳回 /r/{code}，无 Set-Cookie | 两级限流计数（先于判定执行） | `ShortLinkService.java:1256`、`RedirectController.java:79-81` |
+| unlock 的 Bloom/行状态镜像不通过 | 404 | 无 | `ShortLinkService.java:1228-1237`（[7.2](../modules/07-redirection/02-password-and-domain-gates.md) 第 5.3 节） |
+| 短码大小写不匹配 | 404（码是大小写敏感的精确匹配） | 无 | `RedirectController.java:38` 参数说明、`:1078-1081` |
+| HEAD 撞上 WARN 名单 | 200 无正文（lf_continue 被忽略） | 打点 phishing.gate | `ShortLinkService.java:1159-1167`、`RedirectController.java:112-114` |
+| B9 名单 WARN 且未确认 | 200 警示页（lf_continue 仅 GET） | 打点 phishing.gate；确认后打点 phishing.continue | `ShortLinkService.java:1159-1167` |
+| B2 命中（预取头/预览 bot UA） | 302（与正常完全一致） | 不写任何表；打点 click.skipped | `ShortLinkService.java:1029-1033` |
+| 点击写库失败（MySQL 故障等） | 302 照常 | 事务已回滚，明细与事件双丢；打点 failopen | `ShortLinkService.java:1035-1042` |
 | 点击事件序列化失败 | 500 | 无（IllegalStateException 穿透 catch） | `ClickRecordService.java:77-83`、[11.1](../modules/11-statistics/01-click-record-pipeline.md) 第 5.3 节 |
 
 404 的四个触发点在图 [12-redirect-decision](../diagrams/archify/html/12-redirect-decision.html) 上按就近合并成两个终端；排障时按第 2 节清单顺序反查即可定位来源。各失败分支互不吞并：禁用 404 不进空值缓存（重新启用立即生效），过期 410 不与脏目标 410 混淆，BLOCK 永远先于密码门被看见。
@@ -169,9 +169,9 @@ t13 与 t14 即使全部失败，t12 的 302 也早已送达；这就是 outbox 
 
 ## 8. 设计取舍
 
-**一、每个请求都读一次 DB 行。** 三层缓存齐全，行读照做。`UrlLocalCache` 的 javadoc（:17-20）承诺命中绝不跳过行读；:645-648 注释给出一致性界（跟车者最多旧一个查询延迟，远小于 1 秒双删窗口）。换来的是禁用、改密、改目标下一个请求立即生效。这是明确的一致性换吞吐，不是疏忽。回看 [7.1](../modules/07-redirection/01-decision-chain.md) 第 9 节。
+**一、每个请求都读一次 DB 行。** 三层缓存齐全，行读照做。`UrlLocalCache` 的 javadoc（:17-20）承诺命中绝不跳过行读；:1106-1109 注释给出一致性界（跟车者最多旧一个查询延迟，远小于 1 秒双删窗口）。换来的是禁用、改密、改目标下一个请求立即生效。这是明确的一致性换吞吐，不是疏忽。回看 [7.1](../modules/07-redirection/01-decision-chain.md) 第 9 节。
 
-**二、缓存的可靠性分等：Bloom 负答权威，正答与 URL 值只是提示。** Bloom 说「不存在」可以直接 404（:612-614 注释）；缓存值永远要过行校验。fail-open 方向一致：L2 读失败降级到行读，绝不 500（:636-640）。
+**二、缓存的可靠性分等：Bloom 负答权威，正答与 URL 值只是提示。** Bloom 说「不存在」可以直接 404（:1076-1077 注释）；缓存值永远要过行校验。fail-open 方向一致：L2 读失败降级到行读，绝不 500（:1096-1100）。
 
 **三、判定顺序互不吞并。** 每一步的失败有自己的出口与状态码，后面的步骤永远看不到前面的失败。两个 410 语义不同（行状态对内容校验），两个 404 语义不同（从未创建对存在但不可用）。写成一条直线加提前返回，正是为了让出口一眼可见（回看 [7.1](../modules/07-redirection/01-decision-chain.md) 第 6 节）。
 

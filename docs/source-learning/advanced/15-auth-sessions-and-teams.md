@@ -144,7 +144,7 @@ stateDiagram-v2
 | 登录凭据任一不合（含租户/用户不存在、停用） | 401 "invalid credentials"，且每条路径恰好跑一次 BCrypt | `AuthService.java:82-91` |
 | refresh 出示未知/过期/已撤销（非升级格） | 401 "invalid refresh token"，四类不可区分 | `SessionService.java:151-175` |
 | refresh 出示 ROTATED 超宽限 | 401 + 整 family REUSE_KILL + tv 自增 + `linkforge.refresh.reuse_kill` 打点 | :159-175、:193-196 |
-| 轮换事务中后继插入失败 | 整单回滚，旧 token **未被消费**、仍可用（M1 合同） | 类注释 :46-54；接缝 `insertSuccessor` :344-347 |
+| 轮换事务中后继插入失败 | 整单回滚，旧 token **未被消费**、仍可用（M1 合同） | 类注释 :46-54；接缝 `insertSuccessor` :326 |
 | logout 出示未知 token | 200 静默成功（端点不是有效性预言机） | `SessionService.java:233-253` |
 | must_change 用户访问非豁免路径（JWT 或 API Key） | 403 `PASSWORD_CHANGE_REQUIRED`，两凭据同文案同体 | `JwtAuthFilter.java:138-144`、`ApiKeyAuthFilter.java:54-56` |
 | 接受邀请：token 任一不合 | 401 "invalid invitation"（不说哪项） | `TeamService.java:166-174` |
