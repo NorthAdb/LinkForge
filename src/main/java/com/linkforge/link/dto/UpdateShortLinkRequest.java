@@ -56,6 +56,10 @@ public class UpdateShortLinkRequest {
      * complete variant collection (empty clears back to single-target), null = untouched. */
     private List<@Valid VariantSpec> variants;
 
+    /** Batch 3a: tags with the same three-state shape as variants — null = untouched,
+     * [] = clear all tags, otherwise the array replaces the stored set (normalized). */
+    private List<String> tags;
+
     /** D-C1-8: unknown props land here; the service 400s utm* and click-attribution
      * ids captured this way, everything else stays silently ignored. */
     @JsonIgnore

@@ -61,6 +61,9 @@ public class CreateShortLinkRequest {
      * chain-level originalUrl stays required (D-C3-5) — gates and UTM keep living there. */
     private List<@Valid VariantSpec> variants;
 
+    /** Batch 3a: optional tags; normalized server-side (see LinkTags), null = untagged. */
+    private List<String> tags;
+
     /** D-C1-8: unknown props land here; the service 400s utm* and click-attribution
      * ids captured this way, everything else stays silently ignored. */
     @JsonIgnore

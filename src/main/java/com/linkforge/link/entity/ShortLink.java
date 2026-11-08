@@ -27,4 +27,6 @@ public class ShortLink {
     private Integer deleted;
     /** B3: BCrypt hash of the access password; null = the link is public. */
     private String accessPasswordHash;
+    /** Batch 3a: normalized comma-joined tag string (see LinkTags); null = untagged. */
+    private String tags;
 }

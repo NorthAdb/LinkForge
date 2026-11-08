@@ -25,4 +25,9 @@ public class VariantSpec {
     @Min(value = 1, message = "variant weight must be >= 1")
     @Max(value = 10000, message = "variant weight must be <= 10000")
     private Integer weight;
+
+    /** Batch 3a: optional dynamic-routing match rule (JSON, see MatchRule);
+     * null/absent = wildcard. Parsed and domain-validated server-side -> 400. */
+    @Size(max = 1024, message = "matchRule too long")
+    private String matchRule;
 }
