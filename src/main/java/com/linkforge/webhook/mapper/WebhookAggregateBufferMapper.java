@@ -49,6 +49,19 @@ public interface WebhookAggregateBufferMapper extends BaseMapper<WebhookAggregat
     List<WebhookAggregateBuffer> selectWindow(@Param("endpointId") Long endpointId,
                                               @Param("windowStart") long windowStart);
 
+    /**
+     * Audit fix M3: the drain's read of the window, with row locks. A consume
+     * upsert that lands on one of these buckets while the drain is in flight
+     * blocks on the row lock; once the drain commits (and deletes the row),
+     * the blocked upsert re-evaluates against the unique key, finds no row,
+     * and inserts a FRESH bucket that the next drain delivers — the increment
+     * is never deleted unsent and never counted twice.
+     */
+    @Select("SELECT * FROM lf_webhook_agg_buffer WHERE endpoint_id = #{endpointId} "
+            + "AND window_start = #{windowStart} ORDER BY link_id FOR UPDATE")
+    List<WebhookAggregateBuffer> selectByEndpointWindowForUpdate(@Param("endpointId") Long endpointId,
+                                                                 @Param("windowStart") long windowStart);
+
     /** Every window the endpoint still buffers, oldest first (mode-switch flush-all). */
     @Select("SELECT DISTINCT window_start FROM lf_webhook_agg_buffer "
             + "WHERE endpoint_id = #{endpointId} ORDER BY window_start")
@@ -67,10 +80,13 @@ public interface WebhookAggregateBufferMapper extends BaseMapper<WebhookAggregat
     List<WebhookAggregateBuffer> selectExpiredWindows();
 
     /**
-     * Flush cleanup (T-M2): delete ONLY the rows the flush actually snapshotted.
-     * The old whole-window delete also removed buckets a concurrent consume had
-     * written into the same window after the snapshot — clicks that never made
-     * any digest and were lost without a trace.
+     * Flush cleanup: delete rows by id. Since audit fix M3 the caller passes
+     * exactly the ids its drain locked with
+     * {@link #selectByEndpointWindowForUpdate} in the same transaction, so the
+     * delete can only remove rows whose clicks the drain's deliveries carry;
+     * buckets written later (or still blocked on the row locks) are untouched.
+     * (T-M2's original form — deleting the rows of an unlocked snapshot — lost
+     * increments that landed on a snapshotted bucket after the read.)
      */
     @Delete("<script>DELETE FROM lf_webhook_agg_buffer WHERE endpoint_id = #{endpointId} "
             + "AND window_start = #{windowStart} AND id IN "
