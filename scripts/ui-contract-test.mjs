@@ -1,11 +1,19 @@
-// M6 contract test for the console's lossless variant editing (audit batches
-// 1-3, probe name: editTitleOmitsUnchangedVariants).
+// Console contract tests (audit batches 1-3 M6 + S-wave S2 console closure).
 //
 // Extracts the PURE LOGIC block verbatim from src/main/resources/static/
-// index.html, evaluates it, and asserts computeVariantsField's contract:
-// unchanged variants (incl. routing rules) -> undefined (PATCH omits the
-// field, backend treats absent as untouched); any real change -> the full
-// edited set with every untouched variant's matchRule preserved.
+// index.html, evaluates it, and asserts:
+//  - computeVariantsField (M6): unchanged variants (incl. routing rules) ->
+//    undefined (PATCH omits the field, backend treats absent as untouched);
+//    any real change -> the full edited set with every untouched variant's
+//    matchRule preserved.
+//  - postAuthRoute / inviteTokenFromSearch / validateAccessPasswordInput
+//    (S2): the pure decisions behind the forced-change view, the invite
+//    accept view, and the set-password dialog.
+//  - a static invariant: the page no longer uses the native prompt dialog
+//    anywhere (it was suppressible in some browsers; the set-password flow
+//    is an in-page dialog now).
+//
+// These are logic contracts only — no browser E2E is claimed or implied.
 //
 // Run: node scripts/ui-contract-test.mjs   (exit 0 = pass, non-zero = fail)
 import assert from 'node:assert';
@@ -25,10 +33,13 @@ assert.notStrictEqual(endIdx, -1, 'PURE LOGIC END marker missing from index.html
 assert.ok(beginIdx < endIdx, 'PURE LOGIC markers out of order');
 const block = html.slice(beginIdx + BEGIN.length, endIdx);
 
-const { computeVariantsField } = new Function(
-  block + '\nreturn { computeVariantsField };'
+const { computeVariantsField, postAuthRoute, inviteTokenFromSearch, validateAccessPasswordInput } = new Function(
+  block + '\nreturn { computeVariantsField, postAuthRoute, inviteTokenFromSearch, validateAccessPasswordInput };'
 )();
 assert.strictEqual(typeof computeVariantsField, 'function', 'computeVariantsField not defined by the extracted block');
+for (const [name, fn] of Object.entries({ postAuthRoute, inviteTokenFromSearch, validateAccessPasswordInput })) {
+  assert.strictEqual(typeof fn, 'function', name + ' not defined by the extracted block');
+}
 
 // Detail API shape: matchRule is a JSON string (ShortLinkDetail.VariantView),
 // weight a number. The edit form hands back weight as a string.
@@ -118,4 +129,71 @@ assert.strictEqual(computeVariantsField([], []), undefined,
     'an object matchRule must be serialized to the API\'s string shape');
 }
 
-console.log('ui-contract-test: all assertions passed (editTitleOmitsUnchangedVariants)');
+// --- S2: postAuthRoute -------------------------------------------------
+// A must-change session goes ONLY to the forced-change view; everything
+// else (flag false, flag absent, malformed payload) opens the app — a
+// missing flag must never lock a healthy session out.
+assert.strictEqual(postAuthRoute({ mustChangePassword: true }), 'force-change',
+  'postAuthRoute: mustChangePassword=true must route to force-change');
+assert.strictEqual(postAuthRoute({ mustChangePassword: false }), 'app',
+  'postAuthRoute: mustChangePassword=false must route to app');
+assert.strictEqual(postAuthRoute({}), 'app',
+  'postAuthRoute: missing flag must route to app');
+assert.strictEqual(postAuthRoute(null), 'app',
+  'postAuthRoute: null data must route to app');
+assert.strictEqual(postAuthRoute({ mustChangePassword: 1 }), 'app',
+  'postAuthRoute: only strict boolean true routes to force-change');
+
+// --- S2: inviteTokenFromSearch ------------------------------------------
+// Present/absent/empty/duplicate/encoded, all deterministic: duplicates
+// resolve to the FIRST invite parameter.
+assert.strictEqual(inviteTokenFromSearch('?invite=abc123'), 'abc123',
+  'invite: plain token must be extracted');
+assert.strictEqual(inviteTokenFromSearch('?x=1&invite=zzz'), 'zzz',
+  'invite: token among other params must be extracted');
+assert.strictEqual(inviteTokenFromSearch(''), null,
+  'invite: empty search must be null');
+assert.strictEqual(inviteTokenFromSearch(null), null,
+  'invite: null search must be null');
+assert.strictEqual(inviteTokenFromSearch('?foo=1'), null,
+  'invite: no invite param must be null');
+assert.strictEqual(inviteTokenFromSearch('?invite='), null,
+  'invite: empty value must be null');
+assert.strictEqual(inviteTokenFromSearch('?invite'), null,
+  'invite: valueless param must be null');
+assert.strictEqual(inviteTokenFromSearch('?invite=first&invite=second'), 'first',
+  'invite: duplicate params must resolve to the first');
+assert.strictEqual(inviteTokenFromSearch('?invite=tok%2Bxyz%3D'), 'tok+xyz=',
+  'invite: percent-encoded token must be decoded');
+
+// --- S2: validateAccessPasswordInput -------------------------------------
+// Mirrors the API's 4-64 contract; the value is returned AS TYPED
+// (passwords are never trimmed — surrounding spaces are significant).
+const pwLowerBound = 'x'.repeat(4);
+assert.deepStrictEqual(validateAccessPasswordInput(pwLowerBound), { ok: true, value: pwLowerBound },
+  'pw: 4 chars (lower bound) must pass');
+assert.deepStrictEqual(validateAccessPasswordInput('x'.repeat(64)), { ok: true, value: 'x'.repeat(64) },
+  'pw: 64 chars (upper bound) must pass');
+const pwUntrimmed = ' '.repeat(2) + 'ab' + ' '.repeat(2);
+assert.deepStrictEqual(validateAccessPasswordInput(pwUntrimmed), { ok: true, value: pwUntrimmed },
+  'pw: value must be returned untrimmed');
+{
+  const tooShort = validateAccessPasswordInput('x'.repeat(3));
+  assert.strictEqual(tooShort.ok, false, 'pw: 3 chars must fail');
+  assert.ok(/4-64/.test(tooShort.error), 'pw: failure must name the 4-64 rule');
+  const empty = validateAccessPasswordInput('');
+  assert.strictEqual(empty.ok, false, 'pw: empty must fail');
+  const tooLong = validateAccessPasswordInput('x'.repeat(65));
+  assert.strictEqual(tooLong.ok, false, 'pw: 65 chars must fail');
+  const missing = validateAccessPasswordInput(null);
+  assert.strictEqual(missing.ok, false, 'pw: null must fail, not throw');
+}
+
+// --- S2 static invariant --------------------------------------------------
+// The native prompt dialog is gone from the page for good: the string
+// "prompt(" must not occur anywhere in index.html (code, strings, or
+// comments). Set/clear access password is an in-page dialog now.
+assert.ok(!html.includes('prompt('),
+  'index.html must not contain "prompt(" anywhere');
+
+console.log('ui-contract-test: all assertions passed (editTitleOmitsUnchangedVariants + S2 console closure)');
