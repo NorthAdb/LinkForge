@@ -164,15 +164,24 @@ public final class AbReport {
             771.32342877765313, -176.61502916214059, 12.507343278686905,
             -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7};
 
-    /** Lanczos approximation of ln Γ(x) for x > 0 (Numerical Recipes, gammln). */
+    /**
+     * Lanczos approximation of ln Γ(x) for x > 0, in the g=7 form that matches
+     * the LANCZOS coefficients above: with z = x − 1 and A(z) = c₀ + Σ cₖ/(z+k),
+     * ln Γ(x) = ½ln(2π) + (z+½)·ln(z+7.5) − (z+7.5) + ln A(z). (An earlier draft
+     * paired these coefficients with the Numerical Recipes gammln skeleton —
+     * different parametrization — which AbReportTest's known values caught.)
+     * Below 0.5 the reflection formula Γ(x)Γ(1−x) = π/sin(πx) applies.
+     */
     static double logGamma(double x) {
-        double y = x;
-        double tmp = x + 5.5;
-        tmp -= (x + 0.5) * Math.log(tmp);
-        double ser = LANCZOS[0];
-        for (int j = 1; j < LANCZOS.length; j++) {
-            ser += LANCZOS[j] / ++y;
+        if (x < 0.5) {
+            return Math.log(Math.PI) - Math.log(Math.sin(Math.PI * x)) - logGamma(1.0 - x);
         }
-        return -tmp + Math.log(2.5066282746310005 * ser / x);
+        double z = x - 1.0;
+        double a = LANCZOS[0];
+        for (int k = 1; k < LANCZOS.length; k++) {
+            a += LANCZOS[k] / (z + k);
+        }
+        double t = z + 7.5;
+        return 0.5 * Math.log(2.0 * Math.PI) + (z + 0.5) * Math.log(t) - t + Math.log(a);
     }
 }
