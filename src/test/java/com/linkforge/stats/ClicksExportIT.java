@@ -8,6 +8,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
@@ -70,6 +73,72 @@ class ClicksExportIT extends AbstractIntegrationTest {
 
     private static long dataRows(String csv) {
         return csv.lines().filter(line -> !line.startsWith("\uFEFFclicked_at") && !line.startsWith("#")).count();
+    }
+
+    /** Splits one CSV line into parsed cell values (RFC4180 quoting undone). */
+    private static List<String> parseCsvLine(String line) {
+        List<String> cells = new ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        boolean inQuotes = false;
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (inQuotes) {
+                if (c == '"') {
+                    if (i + 1 < line.length() && line.charAt(i + 1) == '"') {
+                        cur.append('"');
+                        i++;
+                    } else {
+                        inQuotes = false;
+                    }
+                } else {
+                    cur.append(c);
+                }
+            } else if (c == '"') {
+                inQuotes = true;
+            } else if (c == ',') {
+                cells.add(cur.toString());
+                cur.setLength(0);
+            } else {
+                cur.append(c);
+            }
+        }
+        cells.add(cur.toString());
+        return cells;
+    }
+
+    @Test
+    void visitorFormulaIsSafeSpreadsheetText() throws Exception {
+        String token = registerForToken();
+        String code = createLink(token, "https://example.com/export-formula-" + unique(""));
+
+        // M8: a REAL anonymous click whose User-Agent / Referer are formula
+        // payloads. Click recording is synchronous in the test profile, but
+        // poll the export briefly rather than assuming timing.
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("User-Agent", "=1+1");
+        headers.set("Referer", "@formula.example");
+        ResponseEntity<String> redirect = rest.exchange("/r/" + code, HttpMethod.GET,
+                new HttpEntity<>(headers), String.class);
+        assertEquals(302, redirect.getStatusCode().value(), redirect.getBody());
+
+        String csv = null;
+        for (int i = 0; i < 40; i++) {
+            csv = get("/api/links/" + code + "/clicks/export", token).getBody();
+            if (csv != null && csv.contains("1+1")) {
+                break;
+            }
+            Thread.sleep(250);
+        }
+        assertTrue(csv != null && csv.contains("1+1"), "the click row must be exported: " + csv);
+        String rowLine = csv.lines()
+                .filter(line -> line.contains("1+1"))
+                .findFirst().orElseThrow();
+        List<String> cells = parseCsvLine(rowLine);
+        // Columns: clicked_at, ip, user_agent, referer, variant.
+        assertEquals("'=1+1", cells.get(2),
+                "visitor UA must be neutralized to spreadsheet text, not a formula: " + rowLine);
+        assertEquals("'@formula.example", cells.get(3),
+                "visitor Referer must be neutralized to spreadsheet text, not a formula: " + rowLine);
     }
 
     @Test

@@ -247,10 +247,10 @@ public class ClickStatsService {
     private static String clickCsvRow(ClickLog row) {
         return String.join(",",
                 CsvFormat.escape(row.getClickedAt() == null ? "" : row.getClickedAt().toString()),
-                CsvFormat.escape(row.getIp()),
-                CsvFormat.escape(row.getUserAgent()),
-                CsvFormat.escape(row.getReferer()),
-                CsvFormat.escape(row.getVariant())) + "\n";
+                CsvFormat.escapeSpreadsheet(row.getIp()),
+                CsvFormat.escapeSpreadsheet(row.getUserAgent()),
+                CsvFormat.escapeSpreadsheet(row.getReferer()),
+                CsvFormat.escapeSpreadsheet(row.getVariant())) + "\n";
     }
 
     public PageResponse<ClickDetail> clicks(Long linkId, int page, int size) {

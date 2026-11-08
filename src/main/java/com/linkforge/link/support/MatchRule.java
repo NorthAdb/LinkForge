@@ -272,10 +272,15 @@ public final class MatchRule {
 
     private static boolean windowMatches(TimeWindow window, Instant now) {
         ZonedDateTime local = now.atZone(window.tz());
-        // The weekday is the window's local START day: an overnight window's
-        // post-midnight tail belongs to the day it opened on. now is already the
-        // local time here, so a tail instant checks the NEXT day's weekday — a
-        // documented simplification, windows with weekdays are a daytime tool.
+        // The weekday check uses the CURRENT local day of `now` — it is NOT
+        // the day the window opened on. For an overnight window (from > to),
+        // the post-midnight tail therefore matches only when the tail's own
+        // weekday is also listed: e.g. a 23:00-02:00 window with
+        // weekdays=[MONDAY] matches Monday 23:00-24:00 but NOT Tuesday
+        // 00:00-02:00 (that tail instant is a Tuesday). Known simplification:
+        // to cover an overnight tail, list both the opening and the tail
+        // weekday. (An earlier version of this comment claimed start-day
+        // semantics; the code has always checked the current day — audit S4.)
         if (window.weekdays() != null && !window.weekdays().contains(local.getDayOfWeek())) {
             return false;
         }
