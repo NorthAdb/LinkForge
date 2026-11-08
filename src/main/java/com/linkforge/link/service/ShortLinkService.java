@@ -28,6 +28,7 @@ import com.linkforge.link.support.CodeBloomFilter;
 import com.linkforge.link.support.ClickFilter;
 import com.linkforge.link.support.CsvFormat;
 import com.linkforge.link.support.CsvImportParser;
+import com.linkforge.link.support.ImportIdempotencyLease;
 import com.linkforge.link.support.LinkAccessTokens;
 import com.linkforge.link.support.LinkTags;
 import com.linkforge.link.support.LinkValidations;
@@ -123,6 +124,7 @@ public class ShortLinkService {
     private final LinkAccessTokens linkAccessTokens;
     private final TransactionTemplate transactionTemplate;
     private final org.springframework.security.crypto.password.PasswordEncoder passwordEncoder;
+    private final ImportIdempotencyLease importLease;
 
     private final ScheduledExecutorService evictor = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "cache-evictor");
@@ -146,7 +148,7 @@ public class ShortLinkService {
             // touched — a replay no longer burns create quota (audit low item),
             // and a body mismatch is a 409 here instead of a silent replay of
             // the first link. A miss falls through to the normal path below.
-            CreateShortLinkResponse replayed = replayIdempotentCreate(idemKey, user, fingerprint);
+            CreateShortLinkResponse replayed = replayIdempotentCreate(idemKey, user, request, fingerprint);
             if (replayed != null) {
                 rejectSmuggledAttribution(request.getUnknown());
                 return replayed;
@@ -181,7 +183,7 @@ public class ShortLinkService {
             }
             for (int i = 0; i < 10; i++) {
                 sleepQuietly(200);
-                CreateShortLinkResponse resolved = replayIdempotentCreate(idemKey, user, fingerprint);
+                CreateShortLinkResponse resolved = replayIdempotentCreate(idemKey, user, request, fingerprint);
                 if (resolved != null) {
                     return resolved;
                 }
@@ -197,13 +199,19 @@ public class ShortLinkService {
      * Returns the previously created link for an idempotency key, or null when the key
      * holds no settled code. A code owned by a different user is treated as a miss.
      *
-     * <p>Batch 3b: settled values carry the request fingerprint
-     * ({@code v2:<sha256hex>:<code>}); a settled key whose fingerprint differs
-     * from this request's is a 409 IDEMPOTENCY_KEY_REUSED, never a silent replay.
-     * Pre-3b plain-code values hold no fingerprint and replay unchecked (they
-     * age out with the 24h TTL).
+     * <p>Settled value formats, oldest first: a pre-3b plain code (no
+     * fingerprint); batch 3b {@code v2:<create-v1 fingerprint>:<code>}; audit
+     * fix M4 {@code v3:<create-v2 fingerprint>:<code>}. A fingerprint mismatch
+     * is a 409 IDEMPOTENCY_KEY_REUSED, never a silent replay. The legacy
+     * formats never recorded the access password itself (3b stored only
+     * whether one was set), so they cannot prove a password-bearing retry
+     * equal: such a retry against a {@code v2:} or plain value fails closed
+     * with the same 409. A password-free retry against a {@code v2:} value is
+     * still verified against the legacy fingerprint and replays on a match.
+     * Legacy values age out with the 24h TTL.
      */
-    private CreateShortLinkResponse replayIdempotentCreate(String idemKey, AuthUser user, String fingerprint) {
+    private CreateShortLinkResponse replayIdempotentCreate(String idemKey, AuthUser user,
+                                                           CreateShortLinkRequest request, String fingerprint) {
         String settled;
         try {
             settled = stringRedisTemplate.opsForValue().get(idemKey);
@@ -216,17 +224,35 @@ public class ShortLinkService {
         if (settled == null || settled.isBlank() || "pending".equals(settled)) {
             return null;
         }
+        boolean passwordRequest = hasAccessPassword(request);
         String code = settled;
-        if (settled.startsWith("v2:")) {
+        if (settled.startsWith("v3:")) {
             int split = settled.indexOf(':', 3);
             if (split > 3) {
                 String storedFingerprint = settled.substring(3, split);
                 code = settled.substring(split + 1);
                 if (fingerprint != null && !storedFingerprint.equals(fingerprint)) {
-                    throw new BizException(409, "IDEMPOTENCY_KEY_REUSED: this Idempotency-Key "
-                            + "was already used with a different request body");
+                    throw idempotencyReused();
                 }
             }
+        } else if (settled.startsWith("v2:")) {
+            int split = settled.indexOf(':', 3);
+            if (split > 3) {
+                String storedFingerprint = settled.substring(3, split);
+                code = settled.substring(split + 1);
+                if (passwordRequest) {
+                    // M4 fail-closed: the legacy fingerprint holds no password
+                    // material, so equality of a password-bearing retry is
+                    // unprovable — the caller must pick a fresh key.
+                    throw idempotencyReused();
+                }
+                if (!storedFingerprint.equals(createLegacyFingerprint(request))) {
+                    throw idempotencyReused();
+                }
+            }
+        } else if (passwordRequest) {
+            // Plain pre-3b code: no fingerprint at all — same fail-closed rule.
+            throw idempotencyReused();
         }
         ShortLink link = shortLinkMapper.selectOne(new LambdaQueryWrapper<ShortLink>().eq(ShortLink::getCode, code));
         if (link == null || link.getCreatedBy() == null || !link.getCreatedBy().equals(user.getUserId())) {
@@ -236,14 +262,60 @@ public class ShortLinkService {
                 "/r/" + link.getCode());
     }
 
+    private static BizException idempotencyReused() {
+        return new BizException(409, "IDEMPOTENCY_KEY_REUSED: this Idempotency-Key "
+                + "was already used with a different request body");
+    }
+
+    /** The password counts as set exactly when storage would commit one
+     * ({@link #encodeAccessPassword} stores null for null/blank input). */
+    private static boolean hasAccessPassword(CreateShortLinkRequest request) {
+        return request.getAccessPassword() != null && !request.getAccessPassword().isBlank();
+    }
+
     /**
-     * Batch 3b: stable fingerprint of a create request — SHA-256 over a
-     * length-prefixed canonical form (fixed field order; variants sorted by
-     * key; tags in their normalized stored form). The access password itself
-     * never enters the fingerprint, only whether one was set.
+     * Audit fix M4: stable fingerprint of a create request, format
+     * {@code create-v2} — SHA-256 over a length-prefixed canonical form (fixed
+     * field order; variants sorted by key; tags in their normalized stored
+     * form), plus the pepper version segment {@code pv1}. Unlike create-v1,
+     * the password contributes its HMAC-SHA256 under the configured pepper
+     * ({@code linkforge.idempotency.pepper}): two requests whose passwords
+     * differ now fingerprint differently, while the plaintext — and any bare
+     * hash of a low-entropy password — never enters the fingerprint or Redis.
+     * An absent password contributes the null marker, so set-vs-unset always
+     * differs.
+     *
+     * <p>The HMAC input is the password exactly as storage commits it:
+     * {@link #encodeAccessPassword} trims before encoding, so the fingerprint
+     * HMACs the trimmed bytes (audit M4 B: the fingerprint's normalization
+     * must match the storage semantics — a request that would store the same
+     * credential must fingerprint the same).
      */
-    private static String createFingerprint(CreateShortLinkRequest request) {
+    private String createFingerprint(CreateShortLinkRequest request) {
+        StringBuilder sb = new StringBuilder("create-v2");
+        appendField(sb, "pepperVersion", "pv1");
+        appendCanonicalCreateFields(sb, request);
+        appendField(sb, "accessPasswordHmac",
+                hasAccessPassword(request) ? passwordHmacHex(request.getAccessPassword()) : null);
+        appendVariantFields(sb, request);
+        return sha256Hex(sb.toString());
+    }
+
+    /**
+     * The batch-3b {@code create-v1} fingerprint, kept verbatim: settled
+     * {@code v2:} values still in Redis (24h TTL) are verified against it for
+     * password-free retries (see {@link #replayIdempotentCreate}).
+     */
+    private static String createLegacyFingerprint(CreateShortLinkRequest request) {
         StringBuilder sb = new StringBuilder("create-v1");
+        appendCanonicalCreateFields(sb, request);
+        appendField(sb, "accessPasswordSet", hasAccessPassword(request) ? "1" : "0");
+        appendVariantFields(sb, request);
+        return sha256Hex(sb.toString());
+    }
+
+    /** Canonical fields shared by create-v1 and create-v2, in fixed order. */
+    private static void appendCanonicalCreateFields(StringBuilder sb, CreateShortLinkRequest request) {
         appendField(sb, "originalUrl", request.getOriginalUrl());
         appendField(sb, "customCode", request.getCustomCode());
         appendField(sb, "expireAt", request.getExpireAt() == null ? null : request.getExpireAt().toString());
@@ -254,8 +326,9 @@ public class ShortLinkService {
         appendField(sb, "utmTerm", request.getUtmTerm());
         appendField(sb, "utmContent", request.getUtmContent());
         appendField(sb, "tags", LinkTags.normalize(request.getTags()));
-        appendField(sb, "accessPasswordSet",
-                request.getAccessPassword() != null && !request.getAccessPassword().isBlank() ? "1" : "0");
+    }
+
+    private static void appendVariantFields(StringBuilder sb, CreateShortLinkRequest request) {
         if (request.getVariants() != null) {
             List<VariantSpec> sorted = new ArrayList<>(request.getVariants());
             sorted.sort(java.util.Comparator.comparing(VariantSpec::getKey,
@@ -267,7 +340,23 @@ public class ShortLinkService {
                 appendField(sb, "variant.matchRule", spec.getMatchRule());
             }
         }
-        return sha256Hex(sb.toString());
+    }
+
+    /** HMAC-SHA256 (hex) of the stored-form password under the configured pepper. */
+    private String passwordHmacHex(String accessPassword) {
+        String pepper = properties.getIdempotency().getPepper();
+        if (pepper == null || pepper.isBlank()) {
+            pepper = "linkforge-dev-idempotency-pepper";
+        }
+        try {
+            javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+            mac.init(new javax.crypto.spec.SecretKeySpec(
+                    pepper.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            return HexFormat.of().formatHex(
+                    mac.doFinal(accessPassword.trim().getBytes(StandardCharsets.UTF_8)));
+        } catch (java.security.GeneralSecurityException ex) {
+            throw new IllegalStateException("HmacSHA256 unavailable", ex);
+        }
     }
 
     private static void appendField(StringBuilder sb, String name, String value) {
@@ -370,11 +459,14 @@ public class ShortLinkService {
         meterRegistry.counter("linkforge.links.created").increment();
         if (idemKey != null) {
             try {
-                // Batch 3b: the settled value carries the request fingerprint so a
-                // later same-key/different-body request can be told apart from a
-                // true replay (see replayIdempotentCreate for the format).
+                // The settled value carries the request fingerprint so a later
+                // same-key/different-body request can be told apart from a true
+                // replay. Batch 3b wrote v2:<create-v1 fingerprint>:<code>;
+                // audit fix M4 writes v3:<create-v2 fingerprint>:<code> (the
+                // create-v2 fingerprint covers the password HMAC). See
+                // replayIdempotentCreate for how each format is read back.
                 String settledValue = fingerprint != null
-                        ? "v2:" + fingerprint + ":" + link.getCode() : link.getCode();
+                        ? "v3:" + fingerprint + ":" + link.getCode() : link.getCode();
                 stringRedisTemplate.opsForValue().set(idemKey, settledValue,
                         Duration.ofSeconds(properties.getRateLimit().getIdempotencyTtlSeconds()));
             } catch (Exception ex) {
@@ -494,6 +586,7 @@ public class ShortLinkService {
                 ? rl.getKeyPrefix() + "idem-import:" + user.getUserId() + ":" + idempotencyKey : null;
         byte[] fileBytes = null;
         String fileFingerprint = null;
+        ImportIdempotencyLease.Lease lease = null;
         if (keyed) {
             try {
                 fileBytes = file.getBytes();
@@ -508,56 +601,164 @@ public class ShortLinkService {
             if (replayed != null) {
                 return replayed;
             }
-        }
-        RateLimitDecision decision = rateLimiter.acquire(
-                RateLimitKeys.sw(rl.getKeyPrefix(), "import:user:" + user.getUserId()),
-                rl.getImportMax(), rl.getImportWindowSeconds());
-        if (!decision.allowed()) {
-            meterRegistry.counter("linkforge.ratelimit.rejected", "entry", "import").increment();
-            throw new RateLimitedException(decision.retryAfterSeconds());
-        }
-        if (file == null || file.isEmpty()) {
-            throw new BizException("file is required");
-        }
-        if (file.getSize() > MAX_IMPORT_BYTES) {
-            throw new BizException("file must be at most 256 KiB");
-        }
-        String text;
-        try {
-            text = new String(fileBytes != null ? fileBytes : file.getBytes(), StandardCharsets.UTF_8);
-        } catch (IOException ex) {
-            throw new BizException("failed to read uploaded file");
-        }
-
-        CsvImportParser.ParsedCsv parsed = CsvImportParser.parse(text);
-        if (!parsed.header().contains(COLUMN_ORIGINAL_URL)) {
-            throw new BizException("missing required column " + COLUMN_ORIGINAL_URL);
-        }
-        if (parsed.rows().size() > MAX_IMPORT_ROWS) {
-            throw new BizException("at most " + MAX_IMPORT_ROWS + " data rows per import");
-        }
-        Map<String, Integer> columns = new HashMap<>();
-        for (int i = 0; i < parsed.header().size(); i++) {
-            columns.putIfAbsent(parsed.header().get(i), i);
-        }
-        List<ImportResponse.RowSuccess> successes = new ArrayList<>();
-        List<ImportResponse.RowFailure> failures = new ArrayList<>();
-        for (CsvImportParser.CsvRow row : parsed.rows()) {
-            if (row.cells().stream().allMatch(c -> c == null || c.isBlank())) {
-                continue;
-            }
+            // Audit fix M5: the settled cache alone cannot stop two CONCURRENT
+            // same-key imports (both read a miss, both execute). Take the
+            // in-flight lease before any row is written; only the holder runs.
             try {
-                CreateShortLinkResponse created = doCreate(importRowRequest(row, columns), user, null, null);
-                successes.add(new ImportResponse.RowSuccess(row.fileLine(), created.getCode()));
-            } catch (BizException | DataIntegrityViolationException ex) {
-                failures.add(new ImportResponse.RowFailure(row.fileLine(), rowReason(ex)));
+                lease = acquireImportLease(idemKey, fileFingerprint);
+            } catch (LeaseAlreadySettled settled) {
+                return settled.response;
             }
         }
-        ImportResponse result = new ImportResponse(successes.size(), failures.size(), successes, failures);
-        if (idemKey != null) {
-            settleIdempotentImport(idemKey, fileFingerprint, result);
+        boolean writesStarted = false;
+        try {
+            RateLimitDecision decision = rateLimiter.acquire(
+                    RateLimitKeys.sw(rl.getKeyPrefix(), "import:user:" + user.getUserId()),
+                    rl.getImportMax(), rl.getImportWindowSeconds());
+            if (!decision.allowed()) {
+                meterRegistry.counter("linkforge.ratelimit.rejected", "entry", "import").increment();
+                throw new RateLimitedException(decision.retryAfterSeconds());
+            }
+            if (file == null || file.isEmpty()) {
+                throw new BizException("file is required");
+            }
+            if (file.getSize() > MAX_IMPORT_BYTES) {
+                throw new BizException("file must be at most 256 KiB");
+            }
+            String text;
+            try {
+                text = new String(fileBytes != null ? fileBytes : file.getBytes(), StandardCharsets.UTF_8);
+            } catch (IOException ex) {
+                throw new BizException("failed to read uploaded file");
+            }
+
+            CsvImportParser.ParsedCsv parsed = CsvImportParser.parse(text);
+            if (!parsed.header().contains(COLUMN_ORIGINAL_URL)) {
+                throw new BizException("missing required column " + COLUMN_ORIGINAL_URL);
+            }
+            if (parsed.rows().size() > MAX_IMPORT_ROWS) {
+                throw new BizException("at most " + MAX_IMPORT_ROWS + " data rows per import");
+            }
+            Map<String, Integer> columns = new HashMap<>();
+            for (int i = 0; i < parsed.header().size(); i++) {
+                columns.putIfAbsent(parsed.header().get(i), i);
+            }
+            List<ImportResponse.RowSuccess> successes = new ArrayList<>();
+            List<ImportResponse.RowFailure> failures = new ArrayList<>();
+            // From here on a failure may leave committed rows behind, so the
+            // lease is no longer released — it settles or expires (see the M5
+            // scope note on acquireImportLease).
+            writesStarted = true;
+            for (CsvImportParser.CsvRow row : parsed.rows()) {
+                if (row.cells().stream().allMatch(c -> c == null || c.isBlank())) {
+                    continue;
+                }
+                try {
+                    CreateShortLinkResponse created = doCreate(importRowRequest(row, columns), user, null, null);
+                    successes.add(new ImportResponse.RowSuccess(row.fileLine(), created.getCode()));
+                } catch (BizException | DataIntegrityViolationException ex) {
+                    failures.add(new ImportResponse.RowFailure(row.fileLine(), rowReason(ex)));
+                }
+            }
+            ImportResponse result = new ImportResponse(successes.size(), failures.size(), successes, failures);
+            if (idemKey != null) {
+                settleIdempotentImport(idemKey, fileFingerprint, result, lease);
+            }
+            return result;
+        } catch (RuntimeException ex) {
+            // Pre-write failures (bucket rejection, structural 400s) hand the
+            // lease back at once so a corrected retry is not stuck behind the
+            // TTL; post-write failures keep it until settle/TTL instead.
+            if (lease != null && !writesStarted) {
+                releaseImportLease(idemKey, lease);
+            }
+            throw ex;
         }
-        return result;
+    }
+
+    /**
+     * Audit fix M5: takes the import lease for this attempt, or classifies why
+     * not. Returns the lease when this attempt may execute, or null when Redis
+     * is unreachable and the import proceeds unleased (fail-open, D-C4-16 —
+     * the pre-M5 settled-only behavior). A key held by another attempt is a
+     * 409: IDEMPOTENCY_KEY_REUSED for a different file, IDEMPOTENCY_IN_PROGRESS
+     * for the same file still in flight.
+     *
+     * <p>Scope limit (audit §12.4 gate reading, stated plainly): the lease
+     * makes concurrent same-key imports exactly-once under a healthy Redis.
+     * It is NOT crash recovery — if the holder dies after some rows were
+     * created, the lease is left to expire (120s) and a same-key retry after
+     * the TTL may re-execute the file. No exactly-once claim is made there;
+     * a persistent import-operation record was deliberately not built.
+     */
+    private ImportIdempotencyLease.Lease acquireImportLease(String idemKey, String fileFingerprint) {
+        ImportIdempotencyLease.Lease lease;
+        try {
+            lease = importLease.tryAcquire(idemKey, fileFingerprint);
+        } catch (Exception ex) {
+            log.warn("import idempotency lease acquire failed for {}: {}", idemKey, ex.getMessage());
+            meterRegistry.counter("linkforge.cache.failopen", "op", "idem_import_lease").increment();
+            return null;
+        }
+        if (lease != null) {
+            return lease;
+        }
+        String current;
+        try {
+            current = importLease.peek(idemKey);
+        } catch (Exception ex) {
+            // Redis answered the SET NX (key held) but not the read — treat the
+            // key as in flight rather than risk a second execution.
+            log.warn("import idempotency lease peek failed for {}: {}", idemKey, ex.getMessage());
+            meterRegistry.counter("linkforge.cache.failopen", "op", "idem_import_lease_peek").increment();
+            throw new BizException(409, "IDEMPOTENCY_IN_PROGRESS");
+        }
+        if (ImportIdempotencyLease.isPending(current)) {
+            if (!fileFingerprint.equals(ImportIdempotencyLease.pendingFingerprint(current))) {
+                throw idempotencyReused();
+            }
+            throw new BizException(409, "IDEMPOTENCY_IN_PROGRESS");
+        }
+        // The holder settled between the replay check above and this acquire:
+        // answer from the settled value (replay, or 409 on a fingerprint clash).
+        ImportResponse replayed = replayIdempotentImport(idemKey, fileFingerprint);
+        if (replayed != null) {
+            // The import already ran to completion under this key; its outcome
+            // is the answer, and this attempt holds no lease to settle with.
+            throw new LeaseAlreadySettled(replayed);
+        }
+        // The previous holder's lease expired in the gap (or the value was a
+        // stale leftover): one retry of the acquire, then report in-progress.
+        try {
+            lease = importLease.tryAcquire(idemKey, fileFingerprint);
+        } catch (Exception ex) {
+            log.warn("import idempotency lease re-acquire failed for {}: {}", idemKey, ex.getMessage());
+            meterRegistry.counter("linkforge.cache.failopen", "op", "idem_import_lease").increment();
+            return null;
+        }
+        if (lease == null) {
+            throw new BizException(409, "IDEMPOTENCY_IN_PROGRESS");
+        }
+        return lease;
+    }
+
+    /** Control-flow carrier: the key settled while this attempt was acquiring
+     * its lease, so the stored outcome — not an execution — is the response. */
+    private static final class LeaseAlreadySettled extends RuntimeException {
+        private final transient ImportResponse response;
+
+        private LeaseAlreadySettled(ImportResponse response) {
+            this.response = response;
+        }
+    }
+
+    private void releaseImportLease(String idemKey, ImportIdempotencyLease.Lease lease) {
+        try {
+            importLease.release(idemKey, lease);
+        } catch (Exception ex) {
+            log.warn("import idempotency lease release failed for {}: {}", idemKey, ex.getMessage());
+            meterRegistry.counter("linkforge.cache.failopen", "op", "idem_import_lease_release").increment();
+        }
     }
 
     /**
@@ -578,6 +779,11 @@ public class ShortLinkService {
         if (stored == null || stored.isBlank()) {
             return null;
         }
+        if (ImportIdempotencyLease.isPending(stored)) {
+            // M5: an in-flight lease is not a settled outcome — the lease
+            // step classifies it (same file: in progress; different: reused).
+            return null;
+        }
         StoredImport parsed;
         try {
             parsed = IMPORT_RESULT_JSON.readValue(stored, StoredImport.class);
@@ -592,11 +798,23 @@ public class ShortLinkService {
         return parsed.result();
     }
 
-    private void settleIdempotentImport(String idemKey, String fileFingerprint, ImportResponse result) {
+    private void settleIdempotentImport(String idemKey, String fileFingerprint, ImportResponse result,
+                                        ImportIdempotencyLease.Lease lease) {
         try {
             String json = IMPORT_RESULT_JSON.writeValueAsString(new StoredImport(fileFingerprint, result));
-            stringRedisTemplate.opsForValue().set(idemKey, json,
-                    Duration.ofSeconds(properties.getRateLimit().getIdempotencyTtlSeconds()));
+            Duration ttl = Duration.ofSeconds(properties.getRateLimit().getIdempotencyTtlSeconds());
+            if (lease != null) {
+                // M5: CAS settle — only this attempt's own pending value may be
+                // replaced. Losing the CAS means the lease expired mid-import
+                // and a newer attempt owns the key now: its value wins and this
+                // outcome is simply not stored (the rows are already committed).
+                if (!importLease.settle(idemKey, lease, json, ttl)) {
+                    log.warn("import idempotency lease lost before settle for {}", idemKey);
+                    meterRegistry.counter("linkforge.cache.failopen", "op", "idem_import_lease_lost").increment();
+                }
+            } else {
+                stringRedisTemplate.opsForValue().set(idemKey, json, ttl);
+            }
         } catch (Exception ex) {
             // fail-open (D-C4-16): the import already committed; a same-key retry
             // during the outage just imports again.
