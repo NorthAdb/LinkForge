@@ -36,6 +36,20 @@ public class LinkForgeProperties {
     private LinkAccess linkAccess = new LinkAccess();
     private Metrics metrics = new Metrics();
     private Retention retention = new Retention();
+    private Idempotency idempotency = new Idempotency();
+
+    @Data
+    public static class Idempotency {
+        /**
+         * Audit M4: pepper keying the HMAC of the access password inside the
+         * create-request fingerprint (fingerprint format {@code create-v2},
+         * pepper version segment {@code pv1}). Only the HMAC hex ever enters
+         * the fingerprint or Redis — never the plaintext, never a bare hash of
+         * a low-entropy password. Rotating the pepper fails pre-rotation
+         * fingerprints closed (409 on a same-key retry), it never replays them.
+         */
+        private String pepper = "linkforge-dev-idempotency-pepper";
+    }
 
     @Data
     public static class Retention {
