@@ -7,7 +7,7 @@
 学完本课，你应该能：
 
 1. 背出消费幂等三要素：去重表主键 INSERT、确定性 eventId、回填行 event_id 标记，并分别推演出「删掉它」后的双重计数路径。
-2. 逐行解释 `ClickStatsService.consume` 的 48 行（:66-113）：手工 `TransactionTemplate` 短事务、DuplicateKey 早退、UUID 事件回填、日表与维度累加、webhook 钩子。
+2. 逐行解释 `ClickStatsService.consume`（:92-141）：手工 `TransactionTemplate` 短事务、DuplicateKey 早退、UUID 事件回填、日表与维度累加、webhook 钩子。
 3. 说清为什么去重插入和聚合必须在**同一个**短事务里（防中间崩溃）。
 4. 描述异常消息进 DLQ 的完整路径（容器配置→basic.reject→死信参数→click.dlq），以及「毒消息」在本项目的处置方式。
 5. 说出 `ClickLogReconciler` 的门禁条件、扫描 SQL 与重放构造，解释它和幂等体系互为前提。
@@ -29,7 +29,7 @@
 | `src/main/resources/db/migration/V1__baseline_schema.sql` | - | lf_consumed_event DDL :70-73 | 2 |
 | `src/main/java/com/linkforge/stats/entity/ConsumedEvent.java` | 17 | 主键映射 :14-15 | 3 |
 | `src/main/java/com/linkforge/stats/mapper/ConsumedEventMapper.java` | 9 | 空壳 BaseMapper :8 | 4 |
-| `src/main/java/com/linkforge/stats/service/ClickStatsService.java` | 154 | 构造器 :42-54、consume :66-113 | 5 |
+| `src/main/java/com/linkforge/stats/service/ClickStatsService.java` | 339 | 构造器 :54-80（dedupTx 与 snapshotTx 两个模板）、consume :92-141 | 5 |
 | `src/main/java/com/linkforge/stats/service/ClickLogReconciler.java` | 55 | 门禁 :33-35、重放 :37-47 | 6 |
 | `src/main/java/com/linkforge/stats/entity/ClickLog.java` | 28 | event_id 注释 :26-27 | 7 |
 | `src/main/java/com/linkforge/stats/mapper/ClickLogMapper.java` | 32 | selectUnconsumed :14-18 | 8 |
@@ -116,7 +116,7 @@ CREATE TABLE lf_consumed_event (
         this.dedupTx = new TransactionTemplate(transactionManager);
     }
 ```
-`ClickStatsService.java:42-54`
+`ClickStatsService.java:54-80`
 
 这个类**没用** `@Transactional`，而是注入 `PlatformTransactionManager` 自己 new 了一个 `TransactionTemplate`（:53）。为什么手工（javadoc :57-60 给了主线，补完整推演）：回调体内部要捕获 `DuplicateKeyException` 然后正常返回 false。手工模板下，捕获发生在回调内部，异常没有越过任何事务边界，事务干净提交（里面已经没有未提交的写）。若用 `@Transactional` 标注方法、在方法体内 catch，行为也能对，但事务边界就固定成「整个 consume 方法」，而手工模板把边界收在 lambda 里，强调「去重+聚合是一个不可再分的短单元」；另外 reconciler 逐行循环调用 `consume`，手工模板让每行各自成短事务，长事务风险更小（推断：边界选择的附加理由，代码注释只写了 MySQL 语句级回滚）。
 
@@ -137,7 +137,7 @@ CREATE TABLE lf_consumed_event (
                 return false;
             }
 ```
-`ClickStatsService.java:66-78`
+`ClickStatsService.java:92-104`
 
 三段结构的第一段：**占坑**。:67-69 先定聚合日期，`clickedAt` 兜底为今天（防毒消息 NPE）。:70 进事务。:72-75 向 `lf_consumed_event` 插主键。插成功=这个 eventId 归我处理；撞主键=别人处理过，`return false` 干净早退（:76-78）。MySQL 对 duplicate key 只回滚失败语句（javadoc :59-60 原话："A duplicate key inside the callback is a plain skip: MySQL rolls back only the failed statement"），此时事务里还没有其他写，事务以空操作提交。
 
@@ -160,7 +160,7 @@ CREATE TABLE lf_consumed_event (
                 clickLogMapper.insert(detail);
             }
 ```
-`ClickStatsService.java:79-93`
+`ClickStatsService.java:105-124`
 
 第二段：**回填**。条件 `!startsWith("log-")` 把事件分成两族：`log-{id}` 事件的明细行在热路径已经写好（10.2 课的 sync 分支），消费端只管聚合；UUID 事件（sync 关闭模式）没有明细行，消费端按事件字段重建一行（:80-88）。重建行的 `clickedAt` 兜底逻辑与 ：67-69 一致。
 
@@ -180,7 +180,7 @@ CREATE TABLE lf_consumed_event (
                         date, ClickDimensions.TYPE_VARIANT, event.getVariant());
             }
 ```
-`ClickStatsService.java:94-105`
+`ClickStatsService.java:125-138`
 
 第三段：**聚合**。`incrementClick` 是 `INSERT ... ON DUPLICATE KEY UPDATE clicks = clicks + 1`（`ClickDailyMapper.java:16-18`），桶不存在就建、存在就加，SQL 级原子。维度循环从 UA/Referer 解析出 device/os/browser/referer_host 桶（`ClickDimensions` 是纯函数，绝不抛异常，11.2 课逐桶讲），variant 桶只有 A/B 链接才有（:102-105）。注释 ：95-96 点明：维度桶共享去重事务，一个 eventId 不可能给同一个桶加两次。
 
@@ -194,7 +194,7 @@ CREATE TABLE lf_consumed_event (
         }));
     }
 ```
-`ClickStatsService.java:106-112`
+`ClickStatsService.java:139-141`
 
 第四段：**webhook 钩子**。注释三句话是本段全部逻辑：赢了去重插入的点击才会在同一事务里落一条 PENDING webhook 投递行；重放事件在上面的 ：76-78 早退，永远走不到这里，所以一个 eventId 不可能入队两次；入队抛出的非重复异常向上传播，整个 consume 事务回滚，消息进 DLQ。webhook 侧做了什么（签名、SSRF 防护、独立 relay）是模块 13 的内容，本课只需记住它在事务内这一点。
 
@@ -319,7 +319,7 @@ CREATE TABLE lf_consumed_event (
 
 **练习 2（概念理解）**：`DuplicateKeyException` 被 catch 后，这个事务里**已经执行过的写**会怎样？如果同样的代码跑在 PostgreSQL 上呢？
 
-答案解析：MySQL 对 duplicate key 只回滚失败语句（`ClickStatsService.java:59-60` 注释的依据），此前没有其他写（去重 INSERT 是事务第一个语句），事务正常提交空操作。PostgreSQL 上唯一约束冲突会让整个事务进入 aborted 状态，后续语句全部报错，`return false` 也提交不了，必须用 savepoint 或改为「先 SELECT 后 INSERT」的两段式。这解释了为什么这套写法是 MySQL 项目的惯用法（DB 语义差异，通用知识）。
+答案解析：MySQL 对 duplicate key 只回滚失败语句（ClickStatsService 构造器注释的依据），此前没有其他写（去重 INSERT 是事务第一个语句），事务正常提交空操作。PostgreSQL 上唯一约束冲突会让整个事务进入 aborted 状态，后续语句全部报错，`return false` 也提交不了，必须用 savepoint 或改为「先 SELECT 后 INSERT」的两段式。这解释了为什么这套写法是 MySQL 项目的惯用法（DB 语义差异，通用知识）。
 
 **练习 3（执行过程）**：`consume` 在 webhook 入队时抛异常，此时 `lf_click_daily` 已经加过 1。这条点击最终会被计几次？追着事务边界说。
 

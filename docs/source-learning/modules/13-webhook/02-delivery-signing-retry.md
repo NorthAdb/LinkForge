@@ -33,7 +33,7 @@
 | `src/test/java/com/linkforge/webhook/WebhookRetryClockIT.java` | 199 | 时区 fork 回归测试 | 9 |
 | `src/test/java/com/linkforge/webhook/support/WebhookSignerTest.java` | 41 | 签名单测 | 10 |
 | `src/main/java/com/linkforge/webhook/support/AggregateWindows.java` | 54 | AGGREGATE 窗口网格（5.9） | 11 |
-| `src/main/java/com/linkforge/webhook/service/WebhookAggregateFlusher.java` | 237 | 封窗与 digest 生成（5.9） | 12 |
+| `src/main/java/com/linkforge/webhook/service/WebhookAggregateFlusher.java` | 278 | 封窗与 digest 生成（5.9，M3 drain 契约） | 12 |
 | `src/main/java/com/linkforge/webhook/mapper/WebhookAggregateBufferMapper.java` | 71 | 聚合桶 SQL（5.9） | 13 |
 
 配置在 `application.yml:159-167`（relay 开关、节奏、批量、重试上限、退避、超时）与 `LinkForgeProperties.java:180-200`。
@@ -119,7 +119,7 @@ deliveryMapper.insert(delivery);
 ```
 （`WebhookService.java:280-303`，节选）
 
-eventId 规则是 `"evt_" + 原事件 eventId`（`:282`）。原 eventId 要么是 `log-{id}`（同步双写开着），要么是 UUID。加前缀有两个目的：一是命名空间隔离，digest 事件用 `digest-{endpointId}-{windowStart}`（见 5.9），同一个 endpoint 的投递表里两类事件不撞车；二是实体注释（`WebhookDelivery.java:23-24`）写的「跨重试与重放稳定」（决策号 D-Bw2-12），接收方拿它去重，重试发的必须是同一个 id。
+eventId 规则是 `"evt_" + 原事件 eventId`。原 eventId 要么是 `log-{id}`（同步双写开着），要么是 UUID。加前缀有两个目的：一是命名空间隔离，digest 事件用 `digest-{endpointId}-{windowStart}-{flushSeq}`（见 5.9），同一个 endpoint 的投递表里两类事件不撞车；二是实体注释写的「跨重试与重放稳定」（决策号 D-Bw2-12），接收方拿它去重，重试发的必须是同一个 id。
 
 payload 字段表：
 
@@ -390,9 +390,16 @@ epoch 秒对窗口长度做向下取整（`Math.floorDiv`，`:29`），得到窗
 
 UNIX_TIMESTAMP() 是 DB 时钟，mapper 的时钟注释（`:14-19`）把 window_start 归为调度列。一个窗口冲刷失败不拖累别的窗口，逐窗 try/catch 只 warn（`WebhookAggregateFlusher.java:91-96`）。
 
-第四段是 digest 行的生成。doFlush（`:135-145`）读全窗桶（`selectWindow` 按 link_id 排序，`:46-50`，注释说「digest parts are deterministic slices」），调 emitParts 生成投递行，然后删桶（`deleteWindow`，`:69-70`），全部在一个事务里。emitParts（`:152-195`）的分片规则：每片最多 500 个 link 桶（`:44`）；eventId 第一片是 `digest-{endpointId}-{windowStart}`，续片加 `-partN`（`:165-166`），跨重试稳定所以接收方照样能去重；窗口总点击数、partIndex/partCount 进 payload（`:214-220`）。分片数超过 `aggregate-max-parts`（默认 10，yml `:173`）时只发前 N 片，最后一片 payload 带 `truncated: true`（`:170` 的 `truncated && partIndex == emitted`、`:222-224`），同时打 warn 日志（`:190-193`）。数据可以少发，但不能无声地少发。并发收敛靠唯一索引：DuplicateKey 说明另一个触发源已经冲刷过同一片，置 existed 标记后继续（`:183-185`），meter 记 `aggregate.flush{result=partial}`（`:142-144`）。
+第四段是 digest 行的生成——这一段在修复波被整体重写（M3），类 javadoc 的标题就叫 "the drain contract"。旧机制是「快照全窗 → 插投递行（撞唯一索引就吞 DuplicateKey 置 existed）→ 按窗口删全部桶」，审计证明它在两个竞态下丢点击：快照之后、删桶之前落进已快照桶的增量被连带删掉；已冲窗之后才到的迟到点击建的新桶会被下一次冲刷以**同一个 eventId** 再发一遍，撞唯一索引被吞、桶又被删，点击无声消失。现行 drain 是一个事务内四步：
 
-第五段是两种特殊冲刷，都回指 13.1 的管理面。模式切换 AGGREGATE→PER_CLICK：`flushAllOpenWindows`（`:116-120`）按窗口起点从老到新逐窗冲刷，每窗独立事务，中途崩溃的窗口留给下次（幂等重冲）。删除 endpoint：`discardBufferedOnDelete`（`:128-133`）走同一个 doFlush，但状态直接写 FAILED、lastError 写常量 `endpoint deleted with pending aggregate buffer`（`:46`）。FAILED 行 relay 不捞，所以不会真的发送，投递意图留在表里可审计。
+1. **锁行读桶**：`selectByEndpointWindowForUpdate` 用 `FOR UPDATE` 锁住本窗全部桶行。drain 期间新点击对这些桶的 upsert 会阻塞到事务结束，然后落在**新桶行**上（旧行已删）——增量不再被连带删除。
+2. **分配序号**：`nextFlushSeq` 在 `lf_webhook_flush_state`（V15）里为 endpoint 取下一个 `flush_seq`（ensureRow + 锁行读 + 自增，与 drain 同一事务）。序号是持久的、单调的、按 endpoint 独立的。
+3. **生成投递行**：emitParts 按每片 ≤500 桶分片，eventId = `digest-{endpointId}-{windowStart}-{seq}`，分片数 >1 时片尾加 `-partN`。序号进 eventId 是关键一招：同一窗口的第二次 drain（迟到桶）拿到**新序号**、生成**新 eventId**，不再撞唯一索引被吞。分片超过 `aggregate-max-parts`（默认 10）时只发前 N 片，末片 payload 带 `truncated: true` 并打 warn——数据可以少发，但不能无声地少发。
+4. **只删锁定的行**：`deleteSnapshotRows` 按 id 集合删，恰好是第 1 步锁住的那批，一行不多。
+
+失败语义随之反转：**任何异常（含 DuplicateKey）都让整个 drain 回滚**——序号不消耗、桶不删、下轮重试生成同一批 eventId，接收方去重照常成立。meter 也简化为 `linkforge.webhook.aggregate.flush{result=ok|error}`（旧的 partial 结果消失，因为「部分成功」的状态已经不存在）。对照 5.6 的 mark 守卫与 10.2 的 outbox CAS：M3 是同一主题的第三个实例——**把「检查与写入之间的窗口」关进事务/行锁里**，而不是用吞异常去假装它不存在。
+
+第五段是两种特殊冲刷，都回指 13.1 的管理面。模式切换 AGGREGATE→PER_CLICK：`flushAllOpenWindows` 按窗口起点从老到新逐窗 drain，每窗独立事务。删除 endpoint：`discardBufferedOnDelete` 走同一个 drain，但状态直接写 FAILED、lastError 写常量 `endpoint deleted with pending aggregate buffer`。FAILED 行 relay 不捞，所以不会真的发送，投递意图留在表里可审计。
 
 ## 6. 技术原理补充
 
@@ -472,7 +479,7 @@ stateDiagram-v2
 
 **练习 6（执行过程）。** AGGREGATE 窗口 15 秒、阈值 100 万（永远不会到）。t=1000 与 t=1005 各有一次链接 7 的点击，t=1020 时 sweep 到来。说出两次 upsert 的 window_start 与 late 值、digest 的 eventId 与 payload 里的 clicks。
 
-参考答案：t=1000 的点击落窗 floorDiv(1000,15)*15=990，late=false；t=1005 正好踩在网格上，floorDiv(1005,15)*15=1005，落新窗 1005（窗口 990 的最后一秒是 1004），此刻 open 窗也是 1005，own=open，late 同样为 false。于是产生（endpoint，990，链接 7）与（endpoint，1005，链接 7）两个桶，各 insert 建桶、clicks=1，谁也走不到 ON DUPLICATE 分支（`WebhookAggregateBufferMapper.java:31`），sample_* 各记本窗首击。t=1020 时 `selectExpiredWindows` 的条件 window_start <= UNIX_TIMESTAMP()-15 是闭边界：990 <= 1005 与 1005 <= 1005 同时成立（`WebhookAggregateBufferMapper.java:65`），窗口 1005 覆盖 1005..1019，t=1020 恰好到期，两个窗口在同一次 sweep 里各冲刷一次，产出两条 digest，eventId 分别为 `digest-{endpointId}-990` 与 `digest-{endpointId}-1005`（各单桶单片，无 -partN，`WebhookAggregateFlusher.java:165-166`），payload 的 links 数组各一条记录 clicks=1、late=false、sample 带各自首击的设备与主机名（`WebhookAggregateFlusher.java:200-212`）。
+参考答案：t=1000 的点击落窗 floorDiv(1000,15)*15=990，late=false；t=1005 正好踩在网格上，floorDiv(1005,15)*15=1005，落新窗 1005（窗口 990 的最后一秒是 1004），此刻 open 窗也是 1005，own=open，late 同样为 false。于是产生（endpoint，990，链接 7）与（endpoint，1005，链接 7）两个桶，各 insert 建桶、clicks=1，谁也走不到 ON DUPLICATE 分支，sample_* 各记本窗首击。t=1020 时 `selectExpiredWindows` 的条件 window_start <= UNIX_TIMESTAMP()-15 是闭边界：990 <= 1005 与 1005 <= 1005 同时成立，窗口 1005 覆盖 1005..1019，t=1020 恰好到期，两个窗口在同一次 sweep 里各 drain 一次，产出两条 digest，eventId 分别为 `digest-{endpointId}-990-{seq1}` 与 `digest-{endpointId}-1005-{seq2}`（seq 是该 endpoint 的 flush_seq 分配值，两窗各取一个新序号；各单桶单片，无 -partN），payload 的 links 数组各一条记录 clicks=1、late=false、sample 带各自首击的设备与主机名。
 
 ## 12. 与后续课程的联系
 

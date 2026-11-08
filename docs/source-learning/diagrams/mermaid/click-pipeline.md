@@ -2,6 +2,7 @@
 
 > 交互版见 [../archify/html/14-click-pipeline-dataflow.html](../archify/html/14-click-pipeline-dataflow.html)。
 > 口径来源：README「点击统计管道（A7）」「维度分析（A8）」「开放能力 B5」；实现类 `stats/service/ClickRecordService.java`、`stats/service/ClickOutboxRelay.java`、`stats/mq/ClickEventConsumer.java`、`webhook/service/*`。
+> 3.0.0 修订：AGGREGATE 分支已按修复波 M3 补入事务化 drain（快照删行已废弃）。
 
 ```mermaid
 flowchart LR
@@ -27,6 +28,8 @@ flowchart LR
         BACK --> DAY[("lf_click_daily<br/>按天累加")]
         BACK --> DIM[("lf_click_dim_daily<br/>device/referer_host/os/browser/variant")]
         BACK --> WHQ["Webhook 投递意图<br/>lf_webhook_delivery(PENDING)"]
+        BACK --> BUF[("lf_webhook_agg_buffer<br/>AGGREGATE 模式入桶")]
+        BUF -- "事务化 drain (M3): 锁行读桶 → 分配 flush_seq →<br/>digest-{ep}-{ws}-{seq} 投递行 → 只删锁行" --> WHQ
         CONSUME_ERR["消费异常"] -- "default-requeue-rejected=false" --> DLQ{{"linkforge.click.dlq"}}
     end
 
@@ -56,4 +59,5 @@ flowchart LR
 | 回填明细 | sync 关闭后明细由消费者补写，event_id 标记防对账重放 | `ClickEventConsumer` |
 | 维度聚合 | 只在消费路径解析 UA/Referer，热路径零新增计算 | `ClickDimensions` |
 | Webhook 意图 | 在幂等事务内落 PENDING；断 MQ 期间停在 outbox，恢复自动补出 | `WebhookService` |
+| 聚合 drain（M3） | 一次 (endpoint, 窗口) drain 是单事务：锁行、序号、投递行、删行同生共死；回滚不耗 flush_seq，重试复现同批 eventId | `WebhookAggregateFlusher`、`WebhookFlushStateMapper` |
 | 两个时钟 | outbox 用 DB 时钟退避；webhook 投递退避也在 DB 时钟，SENT 清理时 webhook 用 JVM 时钟 | `SentRowCleanup` |

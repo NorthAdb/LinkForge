@@ -11,6 +11,7 @@
 3. 逐步还原签名 cookie 的结构 `exp.HMAC(linkId|code|exp|pwdVer)`，解释改密即失效的实现，并说出恒时比较防的是什么攻击。
 4. 描述 B9 的判定规则：标签边界后缀匹配、IDN 归一化、BLOCK 优先于 WARN、userinfo 建链拒/存量 WARN 差异，并说明名单热载失败时为什么保留旧快照。
 5. 说明 `GatePages` 三张页面的转义与 CSP 设计。
+6. 描述恶意 feed 的摄入→落表→快照→判定管道，说清为什么判定侧必须纯本地、以及 S3 的「先落库后刷快照」顺序。
 
 ## 2. 前置知识
 
@@ -129,28 +130,32 @@ controller 侧把签发结果装进 `ResponseCookie`（`RedirectController.java:
 ### 5.5 B9：TargetPolicy 纯判定
 
 ```java
-public static Verdict evaluate(String url, Config config, boolean forCreate) {
-    URI uri = parse(url);
-    String host = hostOf(uri);
-    if (host != null) {
-        if (matchesAny(host, config.blockDomains())) {
-            return new Verdict(Action.BLOCK, Reason.BLOCK_LIST);
+    public static Verdict evaluate(String url, Config config, boolean forCreate) {
+        URI uri = parse(url);
+        String host = hostOf(uri);
+        if (host != null) {
+            if (matchesAny(host, config.blockDomains())) {
+                return new Verdict(Action.BLOCK, Reason.BLOCK_LIST);
+            }
+            // Batch 3b: the feed BLOCKs too, and beats WARN — but a host on the
+            // local block list keeps the block_list attribution (checked first).
+            if (matchesAny(host, config.feedDomains())) {
+                return new Verdict(Action.BLOCK, Reason.MALICIOUS_FEED);
+            }
+            if (matchesAny(host, config.warnDomains())) {
+                return new Verdict(Action.WARN, Reason.WARN_LIST);
+            }
         }
-        if (matchesAny(host, config.warnDomains())) {
-            return new Verdict(Action.WARN, Reason.WARN_LIST);
+        if (uri != null && uri.getUserInfo() != null && !uri.getUserInfo().isBlank()) {
+            return forCreate
+                    ? new Verdict(Action.BLOCK, Reason.USERINFO) : new Verdict(Action.WARN, Reason.USERINFO);
         }
+        return Verdict.ALLOW;
     }
-    if (uri != null && uri.getUserInfo() != null && !uri.getUserInfo().isBlank()) {
-        return forCreate
-                ? new Verdict(Action.BLOCK, Reason.USERINFO)
-                : new Verdict(Action.WARN, Reason.USERINFO);
-    }
-    return Verdict.ALLOW;
-}
 ```
-`TargetPolicy.java:52-69`
+（`TargetPolicy.java` 的 evaluate）
 
-四条规则一次看清。规则一与规则二：先查黑名单再查警示名单，BLOCK 永远压过 WARN（:56-61）——一个域名同时出现在两个名单里时按重的算。规则三 userinfo：`https://user@evil.com` 这种带用户信息的 URL 在创建/更新时直接拒（400），已存在的行只 WARN（`forCreate` 参数，:63-67；javadoc :48-51 点名 D-Bw345-25）。建链拒是因为创建入口能给出明确错误；存量 WARN 是因为已有链可能是历史误配，拦截页给用户选择权。规则四兜底 ALLOW。
+五条规则一次看清。规则一本地黑名单（BLOCK_LIST）；规则二**恶意 feed 名单**（批次 3b 新增，Reason.MALICIOUS_FEED）：同样是 BLOCK，且压过 WARN，但排在本地名单之后——同一主机两边都命中时归因记本地名单（注释写明），因为本地名单是运维的显式决定，feed 是外部数据，排障时先认哪个要分清；规则三警示名单（WARN_LIST）；规则四 userinfo：`https://user@evil.com` 这种带用户信息的 URL 在创建/更新时直接拒（400），已存在的行只 WARN（`forCreate` 参数；javadoc 点名 D-Bw345-25）。建链拒是因为创建入口能给出明确错误；存量 WARN 是因为已有链可能是历史误配，拦截页给用户选择权。规则五兜底 ALLOW。feed 名单的形状与静态名单完全一致（Config 的第三个集合 feedDomains，同一套 matchesAny 标签边界匹配），数据来源完全不同（5.8）。
 
 标签边界匹配在 `matchesAny`（:121-128）：一行判定 `host.equals(entry) || host.endsWith("." + entry)`（:123）说了全部。`evil.com` 命中 `a.evil.com`（子域），不命中 `notevil.com`（`.entry` 前缀挡住），也不命中 `evil.com.cn`（那是另一个完整标签序列）。类注释 :11-15 举的就是这三个例子。
 
@@ -158,7 +163,7 @@ IDN 归一化在 `hostOf`（:85-103）：小写化（:93）、剥尾部点（:94
 
 ### 5.6 PhishingPolicy：快照与热载
 
-名单状态只有一个字段：`private volatile TargetPolicy.Config snapshot = TargetPolicy.Config.EMPTY;`（:34），是不可变 record。读侧 `evaluate`（:52-57）直接拿快照判定，开关关了返回 ALLOW。热载在 `reload`（:69-92）：每 30 秒（`reload-interval-ms`，`application.yml:219`）比一次文件 mtime，变了才重解析。坏文件的处理在 `parseFile`（:101-125）：任何读写或解析异常都打点 `reload{result=failed}` 并返回 null，调用方保留旧快照（:84-87），类注释 :22-23 给出方向：陈旧规则好过没有规则（fail-safe 保安全侧）。文件格式一行一个域名，`#` 注释，`!warn ` 前缀标记警示级（:110-113）；javadoc :24-25 写明刻意不提供 HTTP 管理接口：租户不得修改全局名单。配置与文件合并取并集（`merge`，:142-147），配置项默认为空列表（`LinkForgeProperties.java:77-78`；`application.yml:216-217` 留空，避免影响现有 IT 用例）。
+名单状态只有一个字段：`private volatile TargetPolicy.Config snapshot = TargetPolicy.Config.EMPTY;`，是不可变 record。读侧 `evaluate` 直接拿快照判定，开关关了返回 ALLOW。热载在 `reload`：每 30 秒比一次文件 mtime，变了才重解析。坏文件的处理：任何读写或解析异常都打点 `reload{result=failed}` 并保留旧快照——类注释给出方向：陈旧规则好过没有规则（fail-safe 保安全侧）。文件格式一行一个域名，`#` 注释，`!warn ` 前缀标记警示级；javadoc 写明刻意不提供 HTTP 管理接口：租户不得修改全局名单。配置与文件合并取并集，配置项默认为空列表。批次 3b 后快照的构造多了一路输入：`reload()` 在合并静态名单后，再经 `withFeedDomains(maliciousHosts.currentHosts())` 把恶意 feed 的内存快照并进来——判定侧仍只面对一个不可变 Config，feed 的存在对判定链完全透明（5.8）。
 
 ### 5.7 GatePages：三张页面、一律转义、CSP 锁死
 
@@ -174,6 +179,16 @@ public static final String CSP = "default-src 'none'; style-src 'unsafe-inline';
 - `block` 页（:19-34）：纯静态文案，没有任何目标回显。
 
 controller 给每个 HTML 响应补 `Cache-Control: no-store`、CSP、`X-Content-Type-Options: nosniff`（`RedirectController.java:92-111`），并由 `html()` 辅助方法（:120-122）显式设 `text/html;charset=UTF-8`，注释 :119 说明：否则 `StringHttpMessageConverter` 会按默认 `text/plain` 输出。
+
+### 5.8 恶意主机 feed：URLhaus 摄入与纯本地判定（批次 3b + S/N 波 S3）
+
+静态名单靠人维护，恶意域名靠 feed 订阅。整条管道分两侧，中间隔着一张表：
+
+**摄入侧**（`MaliciousHostSyncService`，link/service）。定时任务（默认关：`linkforge.malicious-feed.enabled=false`；开后初始延迟 60 秒、间隔 6 小时）拉 URLhaus 的 hostfile 文本，逐行解析出主机名（注释行与空行跳过、坏行计数丢弃），在一个事务里把整批 upsert 进 `lf_malicious_host`（insert 撞唯一键只更新 last_seen，**从不删行**——feed 里消失不等于洗白，V14 注释写明要除名走人工）。S/N 波 S3 把提交顺序定死：**先落库提交，再刷新内存快照，刷新成功才推进 last_success**；刷新失败打 `linkforge.malicious.feed.sync{result=apply_failed}` 且 last_success 不动，下轮重试。旧顺序（先刷快照后落库）会在落库失败时留下「内存里拦着、库里没有」的幽灵名单，重启即失且无从审计。
+
+**判定侧**（`MaliciousHostSnapshot`，link/support）。一个 `volatile Set<String>` 的不可变快照：`refresh()` 从库里 `selectAllHosts` 全量重读、归一化、整体换引用，并把条数写进 gauge `linkforge.malicious.feed.hosts`；构造时若 feed 关闭则钉死为空集。判定路径（创建校验与跳转第 9 步）只读这个内存集合——**点击时刻零外呼、零查库**，feed 站挂了、网络断了都不影响跳转判定，代价是名单新鲜度以同步间隔为界（6 小时）。这与 PhishingPolicy 的文件快照是同一设计语言：判定读不可变快照，更新整体换引用，失败保旧值。
+
+**生效面**：同一份快照喂两个入口——建链/改链时 `rejectBlockedTarget` 命中即 400（不让恶意目标入库），跳转时第 9 步 BLOCK 403（存量链的目标后来上榜也拦得住）。默认关的原因也写在配置注释里：feed 是外部数据源，开不开是部署方的信任决定，不是代码的默认冒险。
 
 ## 6. 技术原理补充
 
@@ -216,6 +231,7 @@ controller 给每个 HTML 响应补 `Cache-Control: no-store`、CSP、`X-Content
 - 解锁协议：Bloom/行状态镜像 → IP 级限流（5/300s）→ 码级限流（50/300s）→ BCrypt → 签发 cookie。
 - cookie：`exp.HMAC-SHA256(key, linkId|code|exp|pwdVer)`，密钥由 JWT 密钥派生，恒时比较，改密即失效。
 - B9：纯函数判定，标签边界后缀匹配，IDN 双侧归一，BLOCK > WARN，userinfo 建链拒/存量 WARN；名单 volatile 快照加 mtime 热载，坏文件保旧，无管理接口。
+- 恶意 feed：URLhaus 摄入（默认关）→ lf_malicious_host 只增不删 → 内存快照 → 并入 B9 的 MALICIOUS_FEED BLOCK；判定纯本地，先落库后刷快照（S3）。
 - 页面：三张 Java 字符串模板，动态值全转义，CSP `default-src 'none'`。
 
 ## 11. 课后练习

@@ -56,6 +56,18 @@
 1. **均为自动化门禁通过，未经人工感知审查**：颜色审美、观感交叉（advisory 级）未做主观评审；如需发版级视觉，可对单图跑 `visual-check` 流程补齐。
 2. **三处结构性偏差**（11 图 standard 档、16 图 4 类出口合并、10 图参与者降卡片）与两处 advisory 交叉（08/15/16 自环 stretch）已在 manifest 逐条备案，语义无损失。
 3. **汇总性数字的出处**：09 图的 151/166/2 与 02 图的功能行数来自 README 与 .audit 盘点，属文档口径；151 与静态推演 150 的 1 例差见 issues §2.1。
-4. **快照时效**：全部图冻结在 01f0b5a 口径；仓库后续演化（如 FE 波落地）不影响后端口径，但包地图若在新增类后需重新生成（find 全等 diff 会立即暴露差异）。
+4. **快照时效**：全部图冻结在 01f0b5a（v2.0.0）口径；项目已演化并冻结于 3.0.0，逐图时效见下节——过期图只作历史口径阅读，现状以专题 15/16/17 与已更新的 mermaid 备用图为准。
 
 > 维护约定：新增图表时同步更新本表、manifest.md 与 tools/check_docs.py 的 DIAGRAMS 清单；三者不一致时以校验器失败形式暴露。
+
+## 3.0.0 时效复核（2026-11-08）
+
+复核口径与逐图证据见 [manifest.md](../diagrams/archify/manifest.md) 文末专表（本轮未重新生成任何图，HTML/JSON/回执未动）。结论汇总：
+
+| 时效 | 图 |
+|------|----|
+| 仍准确（3） | 01-runtime-deployment、07-rabbitmq-topology、13-cache-hit-miss-sequence |
+| 部分过期（10） | 00、04、06、08、09、11、12、14、15、16——主干仍准，局部细节被新机制取代，读图时对照 manifest 注记与对应专题的 3.0.0 修订段 |
+| 过期（4） | 02-function-map（能力面缺批次 2/3）、03-package-map（120→150 类、缺 auth 包）、05-database-erd（缺 V11–V15 四表四列）、10-auth-sequence（认证已被批次 2 重写） |
+
+三条核心链路的 mermaid 备用图已在本轮同步更新到 3.0.0 口径（create-flow 的指纹/信封、redirect-decision-chain 的 match_rule 与 feed 名单、click-pipeline 的事务化 drain），无浏览器环境下优先读 mermaid 版。

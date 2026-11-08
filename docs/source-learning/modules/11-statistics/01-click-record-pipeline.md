@@ -39,7 +39,7 @@
 
 ## 4. 类的定位
 
-- `ClickRecordService` 是点击数据的**唯一写手**。类注释自称 "the only writers are this transaction"（`ClickRecordService.java:34`）。它只被 `ShortLinkService.resolveForGet` 调用（`ShortLinkService.java:574`），每次成功判定要 302 的 GET 跳转调一次。
+- `ClickRecordService` 是点击数据的**唯一写手**。类注释自称 "the only writers are this transaction"（`ClickRecordService.java:34`）。它只被 `ShortLinkService.resolveForGet` 调用，每次成功判定要 302 的 GET 跳转调一次。
 - 它与 RabbitMQ **零接触**。注释写明 "the hot path never touches RabbitMQ, delivery is ClickOutboxRelay's job"（`ClickRecordService.java:35-36`）。热路径里没有网络调用，只有两条 INSERT。
 - 它与 `ClickOutboxRelay` 之间**没有类级调用关系**，只通过 `lf_outbox` 表行解耦。`04-core-class-relations` 图纠正过这个口径：不是 record 通知 relay，是 relay 自己轮询表。
 - 在 stats 包内部，它属于「写半边」；「读半边」在 11.3 课，聚合写入（`consume`）的幂等机制在 10.3 课、聚合内容在 11.2 课。与模块 10 的分工界线：模块 10 讲「行写出去之后」的运输与消费；本课讲「行怎么产生」，包括开关矩阵和 eventId 出生规则。
@@ -122,7 +122,7 @@ Jackson 序列化一个十个字段的简单 POJO 几乎不可能失败，真失
 
 ### 5.4 fail-open catch 在事务外的原理
 
-调用侧代码（`ShortLinkService.java:565-585`，:566 与 :583-584 略）：
+调用侧代码（resolveForGet 的记账段）：
 
 ```java
     public RedirectOutcome resolveForGet(String code, HttpServletRequest request) {
@@ -156,7 +156,7 @@ Jackson 序列化一个十个字段的简单 POJO 几乎不可能失败，真失
 
 ### 5.5 B2 过滤在调用侧的位置
 
-B2 过滤发生在 `recordClick` **之前**（`ShortLinkService.java:568-571`）：`clickFilter.classify(request)` 返回非空 `Optional` 就直接 `return redirect`，根本不进 try 块。这个位置有三个含义：
+B2 过滤发生在 `recordClick` **之前**：`clickFilter.classify(request)` 返回非空 `Optional` 就直接 `return redirect`，根本不进 try 块。这个位置有三个含义：
 
 - **被跳过的跳转拿到一模一样的 302**。`ClickFilter` 的 javadoc（`ClickFilter.java:12-16`）写明：prefetch 和预览机器人拿到与普通 GET 完全相同的 302，只是不记点击，对爬虫不暴露「我被识别了」。**跳过发生在事务外**，不进事务、不写任何表；过滤若放在 recordClick 里面，每次跳转都要先开事务再判断，白付一次事务开销。
 - **跳过的口径很窄**。`ClickFilter.java:51-69`：开关关了全放行；prefetch 头识别（`Sec-Purpose`/`X-Moz`/`Purpose`/`X-Purpose`，`:74-88`）；配置清单里的预览爬虫 UA 词匹配。curl、App WebView、空 UA、未知爬虫**都算点击**，消费侧落进 `device=bot` 桶（11.2 课）。识别为 bot 不等于不计数，这是 B2 过滤与 ClickDimensions bot 桶的分界。
@@ -204,8 +204,8 @@ B2 过滤发生在 `recordClick` **之前**（`ShortLinkService.java:568-571`）
 场景：一个匿名访客点了 `https://short.example.com/r/Aa1Bb2`（链接带 A/B 分流，抽中了 `red` 桶）。
 
 1. `RedirectController.redirect` 调 `resolveForGet`（`RedirectController.java:40`）。判定链走完（7.1 课），返回 `RedirectOutcome.Redirect`，variantKey 为 `red`。
-2. B2 分类（`:568`）：UA 是普通浏览器，prefetch 头没有，命中不了任何跳过规则，返回空 Optional。
-3. 进入 try，`recordClick`（`:574`）开始，Spring 代理开事务：UA/Referer 截断进 `ClickLog`，sync 开着，插 `lf_click_log` 得到自增 id（比如 4821）。
+2. B2 分类：UA 是普通浏览器，prefetch 头没有，命中不了任何跳过规则，返回空 Optional。
+3. 进入 try，`recordClick` 开始，Spring 代理开事务：UA/Referer 截断进 `ClickLog`，sync 开着，插 `lf_click_log` 得到自增 id（比如 4821）。
 4. async 也开着，eventId 算出 `log-4821`，userId 为 null（匿名），`ClickEvent` 十字段装满，序列化成 JSON，插 `lf_outbox` 一行 PENDING。方法正常返回，代理提交，两行同落库。
 5. 回到 `resolveForGet`，catch 没触发，`linkforge.redirects` 加一，302 返回。
 6. 2 秒内 `ClickOutboxRelay` 把这行抽走发进 RabbitMQ（10.2），`ClickEventConsumer` 消费、`lf_click_daily` 加一（11.2）。若第 3 步 MySQL 恰好挂了：DataAccessException 冒泡出 recordClick，事务已回滚，catch 打 failopen 指标，302 照常。

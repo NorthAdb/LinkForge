@@ -1,19 +1,21 @@
-# 11.3 统计 API 与对账：StatsController 三端点、缺日补零与 ClickLogReconciler
+# 11.3 统计 API 与对账：StatsController 五端点、口径统一、A/B 诊断与 ClickLogReconciler
 
-> 本课回答两个问题：看板上的每个数字是从哪张表读出来的？MQ 丢过的事件靠什么补回来？前半段拆 `StatsController` 的 66 行（三端点、days 钳制、dim 白名单、404 归属语义），后半段拆 `ClickLogReconciler` 的 55 行（扫描 SQL 的两个排除条件、确定性 eventId 的配合、行级 catch），最后把 `mq-drill.sh` 的三幕剧本对到代码上。
+> 本课回答三个问题：看板上的每个数字是从哪张表、哪个快照读出来的？A/B 报告凭什么有时拒绝出数？MQ 丢过的事件靠什么补回来？前半段拆 `StatsController` 的五端点（days 钳制、dim 白名单、404 归属语义、同窗同源同快照的 stats、带适用性门的 ab-report、原始点击导出），后半段拆 `ClickLogReconciler`（扫描 SQL 的两个排除条件、确定性 eventId 的配合、行级 catch），最后把 `mq-drill.sh` 的三幕剧本对到代码上。
 
 ## 1. 本节学习目标
 
 学完本课，你应该能：
 
-1. 画出三端点各自「Controller → Service → Mapper SQL」的完整分层，指出每个数字的来源表。
+1. 画出五端点各自「Controller → Service → Mapper SQL」的完整分层，指出每个数字的来源表。
 2. 解释 UV 为什么依赖 sync 双写开着、async-only 模式下如何退化；说清 days/size 钳制（回退默认值）与 dim 白名单（400）两种参数策略的分界。
-3. 逐条件拆 `selectUnconsumed` 的 SQL，说出两个排除条件各挡住什么。
-4. 描述对账器与 Relay 的双通道汇合点，并把 `mq-drill.sh` 的恢复幕对到代码。
+3. 说清 stats 的口径三统一（同窗、同源、同快照）各防什么不一致，以及 breakdown 为什么故意留在最终一致口径外。
+4. 复述 A/B 适用性门的四种不适用理由与优先级，并解释 NOT_APPLICABLE 时哪些字段是 null、哪个数字仍然给出。
+5. 逐条件拆 `selectUnconsumed` 的 SQL，说出两个排除条件各挡住什么。
+6. 描述对账器与 Relay 的双通道汇合点，并把 `mq-drill.sh` 的恢复幕对到代码。
 
 ## 2. 前置知识
 
-- **REST 参数绑定与默认值**（3.1 课）。`@RequestParam(defaultValue = "7")` 在参数缺席时取默认；类型转换失败（days=abc）由框架返回 400。业务报错走 **BizException 的全局映射**（2.1 课）：`BizException(404, ...)` 被 `GlobalExceptionHandler`（`GlobalExceptionHandler.java:27-30`）转成对应状态码的统一 JSON 信封。
+- **REST 参数绑定与默认值**（3.1 课）。`@RequestParam(defaultValue = "7")` 在参数缺席时取默认；类型转换失败（days=abc）由框架返回 400。业务报错走 **BizException 的全局映射**（2.1 课）：`BizException(404, ...)` 被 `GlobalExceptionHandler.handleBiz` 转成对应状态码的统一 JSON 信封。
 - **MyBatis-Plus 分页**（4.1 课）。`Page<T>` 传给 `selectPage`，插件拼 LIMIT 并回填 total。
 - **COUNT(DISTINCT col)**（SQL 聚合）。按列去重计数，本项目的 UV 就是「窗口内不同 IP 数」，不是 PV 除以什么系数，也不是 cookie 口径。**反连接（anti-join）**（SQL 惯用法）：`LEFT JOIN b ON ... WHERE b.key IS NULL` 找出「在 a 里但没有对应 b 行」的行，对账扫描用它找「明细有、消费记录没有」的点击。**@Scheduled 的 fixedDelayString**（10.2 课讲过 Relay 的同款）上一轮结束后再计时，值写成 `${...}` 属性引用，可从配置覆盖。
 
@@ -21,32 +23,28 @@
 
 | 文件 | 行数 | 本课关注点 | 阅读顺序 |
 |----|----|----|----|
-| `src/main/java/com/linkforge/stats/controller/StatsController.java` | 66 | 三端点 :33-65、白名单 :26-28 | 1 |
-| `src/main/java/com/linkforge/stats/service/ClickStatsService.java` | 154 | 查询半边 :115-153 | 2 |
-| `src/main/java/com/linkforge/stats/mapper/ClickLogMapper.java` | 32 | 扫描 :14-18、UV :20-24、按日 UV :26-31 | 3 |
-| `src/main/java/com/linkforge/stats/mapper/ClickDailyMapper.java` | 32 | sumClicks :24-25、selectRange :27-31 | 4 |
-| `src/main/java/com/linkforge/stats/mapper/ClickDimDailyMapper.java` | 40 | selectBreakdown :32-39 | 5 |
+| `src/main/java/com/linkforge/stats/controller/StatsController.java` | 95 | 五端点、白名单 | 1 |
+| `src/main/java/com/linkforge/stats/service/ClickStatsService.java` | 339 | 查询半边（stats/breakdown/clicks/abReport/exportClicks） | 2 |
+| `src/main/java/com/linkforge/stats/support/AbReport.java` | — | A/B 纯函数：适用性门 + 卡方诊断 | 3 |
+| `src/main/java/com/linkforge/stats/mapper/ClickLogMapper.java` | 60 | 扫描、UV、按日 UV、按日点击、导出批次 | 4 |
+| `src/main/java/com/linkforge/stats/mapper/ClickDimDailyMapper.java` | 40 | selectBreakdown | 5 |
 | `src/main/java/com/linkforge/stats/service/ClickLogReconciler.java` | 55 | 全文 | 6 |
-| `src/main/java/com/linkforge/stats/dto/` 全部 5 文件 | 12-15 | 三个响应形状（LinkStatsResponse/DailyClicks/ClickDetail）+ 两个 SQL 投影行（DailyUv/DimBreakdown） | 7 |
-| `src/main/java/com/linkforge/stats/mapper/OutboxMapper.java` | 36 | 状态 SQL 的守卫对照 | 8 |
-| `src/test/java/com/linkforge/stats/StatsApiIT.java` | 164 | 两个验收用例 | 9 |
-| `scripts/mq-drill.sh` | 75 | 三幕剧本 | 10 |
+| `src/main/java/com/linkforge/stats/dto/` | — | 响应形状与 SQL 投影行（新增 AbReportResponse/DailyClickCount） | 7 |
+| `scripts/mq-drill.sh` | 75 | 三幕剧本 | 8 |
 
-注：OutboxMapper 属于模块 10 的主课，本课借它做一处口径对照。
-
-阅读顺序的理由：先自顶向下走读三端点（请求到 SQL），再横向对照 DTO 投影，然后掉头看写侧漏斗的另一端（对账器），最后用 IT 与 drill 脚本验收。
+阅读顺序的理由：先自顶向下走读五端点（请求到 SQL），再横向对照 DTO 投影，然后掉头看写侧漏斗的另一端（对账器），最后用 IT 与 drill 脚本验收。
 
 ## 4. 类的定位
 
-- `StatsController` 是统计读面的**唯一入口**，三端点全挂 `/api/links/{code}` 前缀下，鉴权口径复用短链管理侧：先 `shortLinkService.detail(code)` 拿链接（`StatsController.java:36,:52,:61`），不存在的或不属于当前用户的 code 直接 404。
-- `ClickStatsService` 一身两职：10.3 课的写半边（consume）与本课的读半边（stats/breakdown/clicks，`:115-153`），读半边无事务、无状态，方法即 SQL 编排。五个 DTO 里 `DailyUv`/`DimBreakdown` 被 MyBatis 当作 SQL 投影目标（列别名对字段名），其余三个是纯响应形状。
+- `StatsController` 是统计读面的**唯一入口**，五端点全挂 `/api/links/{code}` 前缀下，鉴权口径复用短链管理侧：先 `shortLinkService.detail(code)` 拿链接，不存在的或不属于当前用户的 code 直接 404。
+- `ClickStatsService` 一身两职：10.3 课的写半边（consume）与本课的读半边（stats/breakdown/clicks/abReport/exportClicks）。读半边并非全无事务：stats 的三读被一个只读 RR 事务包住（snapshotTx，见 5.1），其余方法即 SQL 编排。DTO 里 `DailyUv`/`DimBreakdown`/`DailyClickCount` 被 MyBatis 当作 SQL 投影目标（列别名对字段名），其余是纯响应形状。
 - `ClickLogReconciler` 是同步明细行的**安全网**，也是 MQ 故障期的第二聚合通道。类注释（`ClickLogReconciler.java:15-19`）自述分工："live delivery belongs to ClickOutboxRelay; this loop is skipped entirely while the sync write is off"。与模块 10 的分工界线：Relay 抽 outbox 行是「主通道」，对账器是「备通道」，两者汇合在 `consume` 的 dedup 锁上。
 
 ## 5. 核心源码详解
 
-### 5.1 三端点分层
+### 5.1 五端点分层（其一：stats）
 
-**GET /api/links/{code}/stats**（`StatsController.java:33-39`）：
+**GET /api/links/{code}/stats**：
 
 ```java
     @GetMapping("/api/links/{code}/stats")
@@ -58,32 +56,40 @@
     }
 ```
 
-Service 侧 `stats`（`ClickStatsService.java:126-142`）：
+Service 侧 `stats` 在批次 1 与 S/N 波被改过两轮，现行实现是本课最值得逐行读的方法：
 
 ```java
     public LinkStatsResponse stats(Long linkId, String code, int days) {
-        long total = clickDailyMapper.sumClicks(linkId);
         LocalDate today = LocalDate.now();
         LocalDate fromDate = today.minusDays(days - 1L);
         LocalDateTime from = fromDate.atStartOfDay();
         LocalDateTime toExclusive = today.plusDays(1).atStartOfDay();
-        long totalUv = clickLogMapper.countDistinctIps(linkId, from, toExclusive);
-        ... // byDate/uvByDate 两个 Map：selectRange :81-82 与 selectDailyUv :83-84 各转一个
+        // S/N wave (audit S4-1): the three reads run inside ONE read-only RR
+        // transaction, so they share a single consistent snapshot — a click
+        // landing between two of the reads can no longer make one response
+        // describe two different click sets (UV > clicks within a response).
+        StatsReads reads = snapshotTx.execute(status -> new StatsReads(
+                readTotalUv(linkId, from, toExclusive),
+                readDailyClicks(linkId, from, toExclusive),
+                readDailyUv(linkId, from, toExclusive)));
         List<DailyClicks> daily = new ArrayList<>();
+        long total = 0;
         for (LocalDate d = fromDate; !d.isAfter(today); d = d.plusDays(1)) {
-            daily.add(new DailyClicks(d, byDate.getOrDefault(d, 0L), uvByDate.getOrDefault(d, 0L)));
+            long clicks = reads.clicksByDate().getOrDefault(d, 0L);
+            total += clicks;
+            daily.add(new DailyClicks(d, clicks, reads.uvByDate().getOrDefault(d, 0L)));
         }
-        return new LinkStatsResponse(code, total, totalUv, daily);
+        return new LinkStatsResponse(code, total, reads.totalUv(), daily);
     }
 ```
+（`ClickStatsService.java` 的 stats 方法）
 
-（`ClickStatsService.java:126-142`，两个 Map 的流式转换收进省略号。）
+两个波次各修了一种不一致，合称口径三统一：
 
-- **totalClicks**：`sumClicks` = `SELECT IFNULL(SUM(clicks), 0) FROM lf_click_daily WHERE link_id = ?`（`ClickDailyMapper.java:24-25`）。来自聚合表，MQ 链路的最终一致值，窗口无关（全历史）。
-- **totalUv**：`countDistinctIps` = `SELECT COUNT(DISTINCT ip) FROM lf_click_log WHERE link_id = ? AND clicked_at >= ? AND clicked_at < ?`（`ClickLogMapper.java:20-24`）。窗口是 `[from 当日 0 点, 明日 0 点)`（`:130-131`），左闭右开。来自明细表。
-- **按日两个 Map**：clicks 来自 `selectRange`（`ClickDailyMapper.java:27-31`），uv 来自 `selectDailyUv` = `SELECT DATE(clicked_at) stat_date, COUNT(DISTINCT ip) uv ... GROUP BY DATE(clicked_at)`（`ClickLogMapper.java:26-31`）。
+- **同窗 + 同源（批次 1，T-M1）**：旧版 totalClicks 读 `lf_click_daily` 的全历史 SUM（窗口无关、最终一致），按日 clicks 也读聚合表，而 UV 读 `lf_click_log` 的窗口值——同一响应里三个数字来自两张表、两个窗口、两种一致性，UV 大于 clicks 的响应真实出现过。现行版三读全部落在 `lf_click_log` 与同一窗口 `[from, toExclusive)`：totalUv 是 COUNT(DISTINCT ip)，按日 clicks 是新增的 `selectDailyClicks`（`SELECT DATE(clicked_at), COUNT(*) ... GROUP BY DATE`，ClickLogMapper 注释写明「so the clicks and UV columns of a day always describe the same set of clicks」），total 是按日 clicks 的窗口内求和（不再是全历史）。注意取舍：stats 从此是窗口口径，全历史总量要另查——响应的**内部自洽**优先于「顺手多给一个数」。
+- **同快照（S/N 波 S4-1）**：三读就算是同窗同源，顺序执行仍可能被中途落库的点击切开（第一读没赶上、第三读赶上了）。三读被包进构造器专设的 `snapshotTx`（readOnly + REPEATABLE_READ，与写侧 dedupTx 分开，4.3 提过）——一个事务一个快照，响应只描述一个时刻的世界。
 
-`:137-140` 的循环是**缺日补零**：SQL 只回有数据的日子，循环从 from 逐日走到 today，`getOrDefault(d, 0L)` 把没数据的日子填 0。返回的 daily 长度恒等于窗口天数（`StatsApiIT.java:117` 断言 days=7 时 daily.size()==7）。两个 Map 先行的写法避免了「每天两次 SQL」的 N+1。
+循环部分仍是**缺日补零**：SQL 只回有数据的日子，循环从 from 逐日走到 today，`getOrDefault(d, 0L)` 把没数据的日子填 0，顺带累加出 total。返回的 daily 长度恒等于窗口天数。两个 Map 先行的写法避免了「每天两次 SQL」的 N+1。
 
 **GET /api/links/{code}/stats/breakdown**（`StatsController.java:45-55`）：
 
@@ -100,8 +106,9 @@ Service 侧 `stats`（`ClickStatsService.java:126-142`）：
     }
 ```
 
-- 白名单 `DIM_TYPES`（`:26-28`）是 11.2 课五个 TYPE 常量的 Set：device、referer_host、os、browser、variant。dim 缺失、空白、不在白名单都抛 `BizException(DIM_REQUIRED)`（`:41-42`），映射为 400。javadoc（`:44`）顺带划清口径："Dimension clicks are not UV"——device 桶之和可以大于 UV，因为一个 UV 可以既点又换设备。
-- Service 的 `breakdown`（`ClickStatsService.java:116-120`）一行：窗口起点是 `today.minusDays(days - 1)`（含今天共 days 天），SQL 在 `ClickDimDailyMapper.java:32-39`：`SELECT dim_value AS dimValue, SUM(clicks) AS clicks ... WHERE link_id=? AND dim_type=? AND stat_date BETWEEN ... GROUP BY dim_value ORDER BY clicks DESC, dim_value ASC`。排序双键：点击数降序，同数按字典序，结果稳定可测。
+- 白名单 `DIM_TYPES` 是 11.2 课五个 TYPE 常量的 Set：device、referer_host、os、browser、variant。dim 缺失、空白、不在白名单都抛 `BizException(DIM_REQUIRED)`，映射为 400。javadoc 顺带划清口径："Dimension clicks are not UV"——device 桶之和可以大于 UV，因为一个 UV 可以既点又换设备。
+- Service 的 `breakdown` 一行编排：窗口起点是 `today.minusDays(days - 1)`（含今天共 days 天），SQL 在 ClickDimDailyMapper：`SELECT dim_value AS dimValue, SUM(clicks) AS clicks ... WHERE link_id=? AND dim_type=? AND stat_date BETWEEN ... GROUP BY dim_value ORDER BY clicks DESC, dim_value ASC`。排序双键：点击数降序，同数按字典序，结果稳定可测。
+- **口径例外（刻意）**：breakdown 读的是维度桶表 `lf_click_dim_daily`，不在 stats 的同源同快照收口范围内——它仍是最终一致口径（桶由 consume 事务增量维护，乱序/重放下与明细的对账靠 11.2 的孤儿桶与对账器兜底）。S4-1 的范围声明只包 stats 三读：维度拆分是分析型读面，秒级新鲜度的价值低于 stats 这种「同一响应必须自洽」的门面数字。读代码时不要把这个例外当疏漏——它和 M5 的崩溃恢复一样，是写明了的范围取舍。
 
 **GET /api/links/{code}/clicks**（`StatsController.java:57-65`）与 stats 同构：先 detail，再钳制 `p = Math.max(1, page)`、`s = size < 1 || size > 100 ? 20 : size`（`:62-63`）。Service 的 `clicks`（`ClickStatsService.java:144-153`）用 MyBatis-Plus 的 `Page` + `LambdaQueryWrapper`：`eq(linkId)` + `orderByDesc(clickedAt)`。明细行只投影 4 个字段（clickedAt、ip、userAgent、referer，`:150`），tenant/link/code 等不外泄。
 
@@ -111,9 +118,32 @@ Service 侧 `stats`（`ClickStatsService.java:126-142`）：
 
 ### 5.3 归属校验复用 detail 的 404 语义
 
-三个端点的第一步都是 `shortLinkService.detail(code)`。`detail`（`ShortLinkService.java:446-448`）内部走 `getOwnedLink`（`:890-901`）：链接不存在、或 tenant 不符、或非 tenant 级用户的创建人不符，一律抛 `BizException(404, "short link not found")`。用 404 而不是 403 是整个管理 API 的既定语义（5.3 课）：不向越权者确认资源存在。统计端点直接继承这层校验，自己不写一行权限代码。`StatsApiIT` 两个用例各断言了一次：另一个用户查 stats 得 404（`:126-127`）、查 clicks 得 404（`:161-162`）。
+五个端点的第一步都是 `shortLinkService.detail(code)`。`detail` 内部走 `getOwnedLink`：链接不存在、或 tenant 不符、或非 tenant 级用户的创建人不符，一律抛 `BizException(404, "short link not found")`。用 404 而不是 403 是整个管理 API 的既定语义（5.3 课）：不向越权者确认资源存在。统计端点直接继承这层校验，自己不写一行权限代码。`StatsApiIT` 的用例断言过：另一个用户查 stats 得 404、查 clicks 得 404。
 
-### 5.4 ClickLogReconciler 逐行
+### 5.4 A/B 报告与适用性门：先判能不能算，再算（批次 3a + S/N 波 S1）
+
+**GET /api/links/{code}/stats/ab-report** 回答的问题不是「哪个变体赢了」，而是「实际份额与权重份额是否一致」——卡方拟合优度**诊断**，不是选优器。计算本体是纯函数 `AbReport`（stats/support）：输入每变体的权重与窗口内点击，输出每变体的 expected/share、卡方统计量、p 值与结论 CONSISTENT / SKEWED。份额显著偏离的含义是「抽签或收窄环节有问题值得查」，不是「把流量都给份额高的那个」。
+
+S/N 波 S1 在计算前加了**适用性门** `checkApplicability`（仍是纯函数）：有些链的份额天然不可用权重解释，硬算出的 p 值只会误导。门按固定优先级给出第一个不适用理由：
+
+| 优先级 | 理由码 | 判定依据 |
+|---|---|---|
+| 1 | CONDITIONAL_ROUTING | 任一**现存**变体带约束性 matchRule（`isConstraining()`）——份额被条件收窄塑造，与权重无关 |
+| 2 | CONFIG_CHANGED_IN_WINDOW | 窗口内变体集合变过：变体行是整集 delete+insert、一集共享同一 created_at，所以「现存变体的安装时刻晚于窗口起点」即证明窗口内换过配置（稳定性可证伪的依据正在这里） |
+| 3 | CONFIG_HISTORY_UNKNOWN | 连安装时刻都落在窗口外无从证明时保守判不适用（如最早一集的 created_at 不可考） |
+| — | TOO_FEW_VARIANTS | 结构性理由，在 compute 内判定：变体不足 2 个，无所谓份额 |
+
+门不过时响应是 `NOT_APPLICABLE` + 理由码：expected/share/CI/pValue/chiSquare **全为 null**、df=0，唯独 `totalClicks` 照实给出（只统计当前配置变体的点击）——「不能诊断」与「没有数据」是两回事，门把前者诚实标出来，而不是编一个 p 值。回想 7.3：条件路由让份额不再等于权重比，正是理由 1 的来源；整集替换的存储形状（4.1）则给了理由 2 一个可证明的判据。这条门是本项目「诊断工具先声明自己的适用范围」的样本。
+
+### 5.5 原始点击导出：游标分批、硬顶与截断标记（批次 3a + M8）
+
+**GET /api/links/{code}/stats/clicks/export** 把窗口内的 `lf_click_log` 明细行导成 CSV（clicked_at、ip、user_agent、referer、variant 五列）。三个工程点：
+
+- **游标分批，永不全量**：`selectExportBatch` 按 `id > lastId ORDER BY id LIMIT 1000` 一批批取（ClickLogMapper 注释：no unbounded select ever runs for an export），内存里只有当前批与拼好的字符串。
+- **硬顶**：行数上限由 `linkforge.stats.clicks-export-max-rows` 控制，默认 100000。到达上限即停，截断要**明示**两处：CSV 末尾追加一行注释 `# truncated at N rows`，控制器再置响应头 `X-Export-Truncated: true`——下载方（人或程序）都有机会发现自己拿到的是半份数据，静默截断是这个功能最坏的失败方式。
+- **公式中和**：每行 ip/ua/referer/variant 都过 `CsvFormat.escapeSpreadsheet`（M8，与 6.3 链接导出共用）——UA 字符串是访问者可控的，`=...` 开头的 UA 不经中和就是给下载者的表格注入。
+
+### 5.6 ClickLogReconciler 逐行
 
 ```java
     @Scheduled(fixedDelayString = "${linkforge.mq.reconcile-fixed-delay-ms:30000}",
@@ -166,7 +196,7 @@ Service 侧 `stats`（`ClickStatsService.java:126-142`）：
 - **确定性 eventId 与消费端去重的配合（:40-43）**：重放构造的 ClickEvent 用 `"log-" + row.getId()`，与热路径 outbox 事件用的 eventId **算法相同**。于是四种情形都收敛到恰好计一次：live 已消费则 dedup 撞主键早退；live 未消费则本轮正常计；本轮计失败行留在扫描结果里下轮再来；重放与 live 并发赛跑则两者只会有一个插进 `lf_consumed_event`（主键即锁）。唯一不可复原的字段是 userId（明细表没存），重放置 null，代价只是 webhook payload 里少一个字段。
 - **行级 catch（:44-46）与外层 catch（:51-53）**：单行消费失败（比如这条触发了一个 webhook 侧异常）只 warn 不中断，后面的行继续，下一轮 30 秒后失败的行还在扫描结果里自然重试；外层兜扫描 SQL 本身的失败（比如 MySQL 抖动），整轮放弃等下轮。双层 catch 的含义：对账循环自己永远不该死，也不该把一批坏行变成死循环。
 
-### 5.5 双通道汇合与对账在 fault-drill 中的角色
+### 5.7 双通道汇合与对账在 fault-drill 中的角色
 
 同一次点击（双开关全开）有两张「存根」：明细行（`lf_click_log`）和 outbox 行（`lf_outbox`）。从存根到聚合表有两条通道：主通道是 Relay 每 2 秒抽 outbox 行 → RabbitMQ → consume（10.2/10.3）；备通道是对账器每 30 秒扫未消费明细行 → 直接 consume。两条通道汇合在 `consume` 的 dedup 锁，谁先到谁计数，后到的早退。这个结构正是 `scripts/mq-drill.sh` 三幕剧本的依据（脚本头注释 `mq-drill.sh:2-6`）：
 
@@ -174,16 +204,9 @@ Service 侧 `stats`（`ClickStatsService.java:126-142`）：
 2. **故障幕（:48-56）**：`docker compose stop rabbitmq` 后再跳 M 次，断言全部仍然 302（11.1 课的 fail-open 与同事务双写保证了这一点），outbox 行留在表里退避，明细行也在。
 3. **恢复幕（:58-74）**：重启 MQ 等健康后，断言 stats 收敛到 N+M。收尾日志的措辞是 "reconcile caught up"——恢复期 Relay 抽走积压 outbox 行、对账器补掉任何 Relay 最终没送成的行，两条通道共同把账追平。
 
-### 5.6 一处口径对照：OutboxMapper 的 mark 语句没有 status 守卫
+### 5.8 一处口径对照的结局：mark 守卫已对齐（批次 1，T-M3）
 
-| | OutboxMapper（outbox 抽水，`stats/mapper/`） | WebhookDeliveryMapper（webhook 投递，`webhook/mapper/`） |
-|----|----|---|
-| 读侧扫描 | `WHERE status='PENDING' AND (next_attempt_at IS NULL OR <= NOW())`（:14-17） | 同款守卫（:23-25） |
-| markSent | `... WHERE id = #{id}`（:19-20） | `... WHERE id = #{id} AND status = 'PENDING'`（:27-29） |
-| markRetry | `... WHERE id = #{id}`（:25-27） | 同款带守卫（:31-35） |
-| markFailed | `... WHERE id = #{id}`（:22-23） | 同款带守卫（:37-39） |
-
-事实（实测源码）：OutboxMapper 的三条 mark **都没有** `WHERE status='PENDING'` 守卫，状态过滤只存在于读侧扫描；WebhookDeliveryMapper 的三条 mark 全带。后果评估（推断）：mark 只被 Relay 的单轮循环调用，行刚被读侧过滤为 PENDING，正常单实例下守卫不改变行为；双实例竞争时两条通道可能各 publish 一次（重复消息），但那靠消费端幂等消化，status 守卫本来也挡不住「都读到了 PENDING 才 mark」的窗口。webhook 侧带守卫是多一层防御（deliberate，`WebhookDeliveryMapper.java:27-29` 的 markSent 还顺带把 attempts+1 收进同一原子语句）。教材口径按实测记录，模块 10 的简报曾在这一点上写反，已由 10.2 课交付时纠正。
+旧版教材在这里记录过一处两侧不一致：OutboxMapper 的三条 mark 没有 `AND status='PENDING'` 守卫，WebhookDeliveryMapper 的三条全带，当时的评估是「单实例下无害」。批次 1 的 T-M3 把 outbox 侧补齐（mapper 注释写明威胁模型：第二个 relay 实例的迟到失败 mark 能把已 SENT 的行拖回 FAILED 重发），两侧现行标准一致：**凡是状态迁移的 mark，一律以当前状态为 CAS 条件**。完整的事故模型与对照在 10.2 课；这里只留一句结论：教材初版的「无害」评估错在只建模了单写者——凡是「暂时无害」的不一致，补齐成本又低，就该在被审计点名之前对齐。本节保留这段历史，是因为它本身就是一课。
 
 ## 6. 技术原理补充
 

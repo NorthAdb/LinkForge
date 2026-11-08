@@ -1,7 +1,8 @@
-# 类覆盖矩阵：120 个主源码类 → 教材去向
+# 类覆盖矩阵：150 个主源码类 → 教材去向
 
 > 口径：2026-11-03 以 `find src/main/java -name '*.java'` 实测 120 个类为准，与五份调查报告（`D:\LinkForge\.audit\inventory\` 下 link.md、security-user-apikey.md、stats-webhook.md、common-config.md、schema-tests.md）逐类核对后填写。基线 911640c（docs 侧 01f0b5a）。
 > 结论先行：120 类全部有明确去向，**无任何去向的类为 0**（见文末统计）。
+> **3.0.0 更新（2026-11-08）**：基线升至 tag `3.0.0`（`f27b9cb`），主源码 150 类。批次 1–3 与修复波/S-N 波新增 30 类已逐类补入下表（新增 auth 包整节，其余按包并入原小表），去向以模块课 05/06/07 与专题 15/16/17 为落点；存量 120 类的去向与档位未动。
 
 ## 怎么读这张表
 
@@ -33,13 +34,21 @@
 | com.linkforge.apikey.mapper.ApiKeyMapper | apikey.mapper | BaseMapper + touchLastUsed UPDATE | 12.1 合并讲 | 合并讲 |
 | com.linkforge.apikey.dto.ApiKeyDtos | apikey.dto | CreateRequest/Created/View 三件套，明文只在 Created | 12.1 合并讲 | 合并讲 |
 
+## com.linkforge.auth（3 类，批次 2 新增包）
+
+| 类名 | 所属包 | 一句话职责 | 教材去向 | 讲解方式 |
+|---|---|---|---|---|
+| com.linkforge.auth.SessionService | auth | 会话族全生命周期：签发/轮换（重用侦测）/登出/改密，M1 锁序宿主 | advanced/15 深讲（5.2 复用） | 独立深讲 |
+| com.linkforge.auth.RefreshToken | auth | lf_refresh_token 行：family_id/token_hash/revoke_cause/replaced_by_id | advanced/15 合并讲 | 合并讲 |
+| com.linkforge.auth.mapper.RefreshTokenMapper | auth.mapper | 轮换 CAS、整族/整用户撤销、FOR UPDATE 重读 | advanced/15 合并讲 | 合并讲 |
+
 ## com.linkforge.bootstrap（1 类）
 
 | 类名 | 所属包 | 一句话职责 | 教材去向 | 讲解方式 |
 |---|---|---|---|---|
 | com.linkforge.bootstrap.BootstrapDataLoader | bootstrap | ApplicationRunner，启动建 demo 租户与 admin | 1.2 合并讲 | 合并讲 |
 
-## com.linkforge.common（9 类）
+## com.linkforge.common（10 类）
 
 | 类名 | 所属包 | 一句话职责 | 教材去向 | 讲解方式 |
 |---|---|---|---|---|
@@ -52,6 +61,7 @@
 | com.linkforge.common.ratelimit.RateLimitKeys | common.ratelimit | 限流键命名空间 {prefix}sw:{logical} | 9.1 合并讲 | 合并讲 |
 | com.linkforge.common.ratelimit.RedisRateLimiter | common.ratelimit | 滑动窗口日志(Lua)+固定窗口+fail-open 打点 | 9.1 深讲（advanced/12 故障语义） | 独立深讲 |
 | com.linkforge.common.util.ClientIps | common.util | trustXff 门控下的客户端 IP 解析 | 2.2 深讲 | 独立深讲 |
+| com.linkforge.common.web.CorrelationIdFilter | common.web | S/N 波 N1：链首铸 correlation id（MDC cid + 请求属性 + 响应头） | advanced/17 合并讲（2.2 链路位置） | 合并讲 |
 
 ## com.linkforge.config（6 类）
 
@@ -64,7 +74,7 @@
 | com.linkforge.config.RabbitMqConfig | config | Exchange/Queue/DLX/binding/Jackson converter 六 Bean | 10.1 深讲 | 独立深讲 |
 | com.linkforge.config.SchedulingConfig | config | 仅 @EnableScheduling（容量在 yml） | 14.3 带过 | 带过 |
 
-## com.linkforge.link（37 类）
+## com.linkforge.link（45 类）
 
 ### link.controller（4 类）
 
@@ -88,29 +98,32 @@
 | com.linkforge.link.dto.QrShareRequest | link.dto | 分享链接入参 | 6.4 带过 | 带过 |
 | com.linkforge.link.dto.QrShareResponse | link.dto | 分享链接出参 | 6.4 带过 | 带过 |
 
-### link.entity（2 类）
+### link.entity（3 类）
 
 | 类名 | 所属包 | 一句话职责 | 教材去向 | 讲解方式 |
 |---|---|---|---|---|
-| com.linkforge.link.entity.ShortLink | link.entity | lf_short_link 行：@TableLogic、BCrypt hash、code bin collation | 6.1 合并讲（4.1 逻辑删与唯一索引复讲） | 合并讲 |
-| com.linkforge.link.entity.LinkVariant | link.entity | lf_link_variant 行：硬删、variantKey bin 排序 | 6.1 合并讲（7.3 分流复讲） | 合并讲 |
+| com.linkforge.link.entity.ShortLink | link.entity | lf_short_link 行：@TableLogic、BCrypt hash、code bin collation（V13 起加 tags 列） | 6.1 合并讲（4.1 逻辑删与唯一索引复讲） | 合并讲 |
+| com.linkforge.link.entity.LinkVariant | link.entity | lf_link_variant 行：硬删、variantKey bin 排序（V13 起加 match_rule 列） | 6.1 合并讲（7.3 分流复讲） | 合并讲 |
+| com.linkforge.link.entity.MaliciousHost | link.entity | lf_malicious_host 行：归一 host + source + first/last_seen（V14） | 7.2 合并讲（advanced/16） | 合并讲 |
 
-### link.mapper（2 类）
+### link.mapper（3 类）
 
 | 类名 | 所属包 | 一句话职责 | 教材去向 | 讲解方式 |
 |---|---|---|---|---|
 | com.linkforge.link.mapper.ShortLinkMapper | link.mapper | BaseMapper + selectAllCodes 故意绕过 @TableLogic（Bloom 播种） | 8.3 合并讲 | 合并讲 |
 | com.linkforge.link.mapper.LinkVariantMapper | link.mapper | BaseMapper + selectByLinkId（ORDER BY id） | 7.3 带过（6.1 顺带） | 带过 |
+| com.linkforge.link.mapper.MaliciousHostMapper | link.mapper | feed upsertBatch（批 500）+ selectAllHosts 全表读 | advanced/16 合并讲 | 合并讲 |
 
-### link.service（3 类）
+### link.service（4 类）
 
 | 类名 | 所属包 | 一句话职责 | 教材去向 | 讲解方式 |
 |---|---|---|---|---|
-| com.linkforge.link.service.ShortLinkService | link.service | 域服务核心（1025 行，17 个依赖），创建/管理/跳转/解锁全在这 | 6.2 深讲主线（6.3/7.1/8.2/8.3/8.4/9.2 分课复讲；advanced/02/03/04/05/06/12） | 独立深讲 |
+| com.linkforge.link.service.ShortLinkService | link.service | 域服务核心（3.0.0 为 1505 行，初版 1025 行），创建/管理/跳转/解锁全在这 | 6.2 深讲主线（6.3/7.1/8.2/8.3/8.4/9.2 分课复讲；advanced/02/03/04/05/06/12/16） | 独立深讲 |
+| com.linkforge.link.service.MaliciousHostSyncService | link.service | feed 定时导入：fetch/ingest 分离，S3 的「先应用后声称」顺序 | advanced/16 合并讲 | 合并讲 |
 | com.linkforge.link.service.RedirectOutcome | link.service | sealed interface：Redirect/Blocked/Locked/Warn | 7.1 合并讲 | 合并讲 |
 | com.linkforge.link.service.QrMaterialService | link.service | QR PNG（内容恒 {base}/r/{code}）+ 签名分享 URL | 6.4 合并讲 | 合并讲 |
 
-### link.support（18 类）
+### link.support（23 类）
 
 | 类名 | 所属包 | 一句话职责 | 教材去向 | 讲解方式 |
 |---|---|---|---|---|
@@ -132,6 +145,11 @@
 | com.linkforge.link.support.UrlLocalCache | link.support | Caffeine L1（仅 URL 字符串）+ 订阅失效 | 8.2 深讲（advanced/05） | 独立深讲 |
 | com.linkforge.link.support.UtmMerger | link.support | 写时 UTM 合并：不覆盖、fragment 保留、超 2048 返 null | 6.2 合并讲（6.4 复讲） | 合并讲 |
 | com.linkforge.link.support.VariantPicker | link.support | 权重抽签：threshold=r·total 半开区间 | 7.3 合并讲 | 合并讲 |
+| com.linkforge.link.support.MatchRule | link.support | 批次 3 动态路由：写时严校验/读时宽容解析、候选收窄、开窗日时间窗语义 | 7.3 深讲（advanced/16） | 独立深讲 |
+| com.linkforge.link.support.LinkTags | link.support | 标签归一化纯函数：小写去重、单标签正则、至多 10 个 | 6.3 合并讲（advanced/16） | 合并讲 |
+| com.linkforge.link.support.ImportIdempotencyLease | link.support | M5 导入在途租约：SET NX 占位 + Lua CAS settle/release | advanced/16 合并讲（9.2 复用） | 合并讲 |
+| com.linkforge.link.support.MaliciousHostSnapshot | link.support | lf_malicious_host 的内存快照：refresh 返回应用成败（S3） | advanced/16 合并讲 | 合并讲 |
+| com.linkforge.link.support.MaliciousFeedParser | link.support | URLhaus hostfile 解析纯函数 | advanced/16 合并讲 | 合并讲 |
 
 ## com.linkforge.observability（2 类）
 
@@ -160,9 +178,9 @@
 | com.linkforge.security.AuthUser | security | 认证主体：userId/tenantId/username/apiKeyScope | 5.3 合并讲 | 合并讲 |
 | com.linkforge.security.UserContext | security | 静态 ThreadLocal<AuthUser> 载体，两 set 两 clear | 5.3 深讲 | 独立深讲 |
 
-## com.linkforge.stats（25 类）
+## com.linkforge.stats（28 类）
 
-### stats.controller / stats.dto（6 类）
+### stats.controller / stats.dto（8 类）
 
 | 类名 | 所属包 | 一句话职责 | 教材去向 | 讲解方式 |
 |---|---|---|---|---|
@@ -172,6 +190,8 @@
 | com.linkforge.stats.dto.DailyUv | stats.dto | 按日 UV 出参〔推断：由 stats 端点日序列定〕 | 11.3 带过 | 带过 |
 | com.linkforge.stats.dto.DimBreakdown | stats.dto | 维度分布出参（dim_value+clicks）〔推断：由 breakdown 端点定〕 | 11.3 带过 | 带过 |
 | com.linkforge.stats.dto.ClickDetail | stats.dto | 明细分页行，只回 4 字段〔推断：由 clicks 端点定〕 | 11.3 带过 | 带过 |
+| com.linkforge.stats.dto.AbReportResponse | stats.dto | A/B 报告出参：verdict + reason + 逐 variant 行（NA 时拟合字段为 null） | 11.3 合并讲（advanced/16） | 合并讲 |
+| com.linkforge.stats.dto.DailyClickCount | stats.dto | stats 按日 clicks 的 mapper 投影行（批次 1 口径统一后新增） | 11.3 带过 | 带过 |
 
 ### stats.entity（5 类）
 
@@ -202,7 +222,7 @@
 | com.linkforge.stats.mq.RabbitClickEventPublisher | stats.mq | correlated confirm + mandatory returns 同步发布 | 10.1 深讲 | 独立深讲 |
 | com.linkforge.stats.mq.ClickEventConsumer | stats.mq | @RabbitListener 入口，抛异常不重排进 DLQ | 10.3 合并讲（advanced/08） | 合并讲 |
 
-### stats.service / stats.support（6 类）
+### stats.service / stats.support（7 类）
 
 | 类名 | 所属包 | 一句话职责 | 教材去向 | 讲解方式 |
 |---|---|---|---|---|
@@ -211,22 +231,37 @@
 | com.linkforge.stats.service.ClickStatsService | stats.service | 幂等消费 consume + 三类统计查询（手工 TransactionTemplate） | 10.3 深讲（11.2/11.3 查询复讲；advanced/08/09） | 独立深讲 |
 | com.linkforge.stats.service.ClickLogReconciler | stats.service | 双写全开时重放未消费明细（30s 定时） | 11.3 合并讲（advanced/09） | 合并讲 |
 | com.linkforge.stats.support.ClickDimensions | stats.support | 纯字符串 UA/Referer 分桶，绝不抛 | 11.2 合并讲（13.2 复用） | 合并讲 |
+| com.linkforge.stats.support.AbReport | stats.support | A/B 拟合优度纯函数 + S1 适用性门（checkApplicability 理由码） | advanced/16 深讲（11.3 复用） | 独立深讲 |
 
-## com.linkforge.user（9 类）
+## com.linkforge.user（23 类）
 
 | 类名 | 所属包 | 一句话职责 | 教材去向 | 讲解方式 |
 |---|---|---|---|---|
-| com.linkforge.user.controller.AuthController | user.controller | /api/auth/register、/login 入口 | 5.2 合并讲（advanced/01） | 合并讲 |
-| com.linkforge.user.service.AuthService | user.service | 注册（事务建租户+首用户 ADMIN+限流）与登录 | 5.2 深讲（advanced/01） | 独立深讲 |
+| com.linkforge.user.controller.AuthController | user.controller | /api/auth/register、/login 入口（3.0.0 为七端点：含 refresh/logout/change-password/accept-invitation） | 5.2 合并讲（advanced/01、advanced/15） | 合并讲 |
+| com.linkforge.user.controller.TeamController | user.controller | /api/tenant 邀请 3 端点 + 成员 3 端点（批次 2b） | 5.3 合并讲（advanced/15） | 合并讲 |
+| com.linkforge.user.service.AuthService | user.service | 注册（事务建租户+首用户 ADMIN+限流）与登录（批次 1 起双桶限流+哑哈希） | 5.2 深讲（advanced/01） | 独立深讲 |
+| com.linkforge.user.service.TeamService | user.service | 邀请与成员管理：M2 锁序护栏与 M7 重置连坐的宿主（450 行） | advanced/15 深讲 | 独立深讲 |
 | com.linkforge.user.dto.RegisterRequest | user.dto | 注册入参（用户名 3-64、密码 8-64 正则） | 5.2 带过 | 带过 |
 | com.linkforge.user.dto.LoginRequest | user.dto | 登录入参 | 5.2 带过 | 带过 |
-| com.linkforge.user.dto.LoginResponse | user.dto | 登录出参（token） | 5.2 带过 | 带过 |
+| com.linkforge.user.dto.LoginResponse | user.dto | 登录出参（3.0.0 含 refreshToken 与 mustChangePassword） | 5.2 带过（advanced/15） | 带过 |
+| com.linkforge.user.dto.RefreshRequest | user.dto | refresh 入参（原始 refresh token 本身即凭据） | advanced/15 带过 | 带过 |
+| com.linkforge.user.dto.LogoutRequest | user.dto | logout 入参 | advanced/15 带过 | 带过 |
+| com.linkforge.user.dto.ChangePasswordRequest | user.dto | 改密入参（当前密码 + 新密码） | advanced/15 带过 | 带过 |
+| com.linkforge.user.dto.CreateInvitationRequest | user.dto | 建邀请入参（invited_role + note_name） | advanced/15 带过 | 带过 |
+| com.linkforge.user.dto.InvitationCreatedResponse | user.dto | 建邀请出参：原始 token 与 /?invite= 链接的唯一出口 | advanced/15 带过 | 带过 |
+| com.linkforge.user.dto.InvitationView | user.dto | 未决邀请列表行（无 token 材料） | advanced/15 带过 | 带过 |
+| com.linkforge.user.dto.AcceptInvitationRequest | user.dto | 接受邀请入参（token + 用户名 + 密码） | advanced/15 带过 | 带过 |
+| com.linkforge.user.dto.MemberView | user.dto | 成员列表行 | advanced/15 带过 | 带过 |
+| com.linkforge.user.dto.UpdateMemberRequest | user.dto | 成员变更入参（role/status 可选） | advanced/15 带过 | 带过 |
+| com.linkforge.user.dto.ResetPasswordResponse | user.dto | 重置出参：临时密码的唯一出口 | advanced/15 带过 | 带过 |
 | com.linkforge.user.entity.Tenant | user.entity | lf_tenant 行（@TableLogic、uk_tenant_name） | 4.1 合并讲（5.2 复用） | 合并讲 |
-| com.linkforge.user.entity.UserAccount | user.entity | lf_user 行（tenant_role MEMBER/ADMIN） | 4.1 合并讲（5.2/5.3 复用） | 合并讲 |
-| com.linkforge.user.mapper.TenantMapper | user.mapper | BaseMapper | 4.1 带过 | 带过 |
-| com.linkforge.user.mapper.UserAccountMapper | user.mapper | BaseMapper | 4.1 带过 | 带过 |
+| com.linkforge.user.entity.UserAccount | user.entity | lf_user 行（tenant_role MEMBER/ADMIN；V11 起加 token_version、must_change_password） | 4.1 合并讲（5.2/5.3 复用） | 合并讲 |
+| com.linkforge.user.entity.TenantInvitation | user.entity | lf_tenant_invitation 行：只存 token 哈希、单次认领字段（V12） | 5.3 合并讲（advanced/15） | 合并讲 |
+| com.linkforge.user.mapper.TenantMapper | user.mapper | BaseMapper + selectForUpdate（M2 租户行锁入口） | 4.1 带过（advanced/15 复用） | 带过 |
+| com.linkforge.user.mapper.UserAccountMapper | user.mapper | BaseMapper + selectForUpdate / incrementTokenVersion / selectActiveAdminIdsForUpdate（M1/M2） | 4.1 带过（advanced/15 复用） | 带过 |
+| com.linkforge.user.mapper.TenantInvitationMapper | user.mapper | 邀请 BaseMapper + accept 条件 UPDATE（单次认领） | advanced/15 合并讲 | 合并讲 |
 
-## com.linkforge.webhook（15 类）
+## com.linkforge.webhook（16 类）
 
 ### webhook.controller / webhook.entity（4 类）
 
@@ -237,13 +272,14 @@
 | com.linkforge.webhook.entity.WebhookDelivery | webhook.entity | lf_webhook_delivery 行：PENDING/SENT/FAILED 重试状态机 | 4.1 合并讲（13.2 复讲） | 合并讲 |
 | com.linkforge.webhook.entity.WebhookAggregateBuffer | webhook.entity | lf_webhook_agg_buffer 行：窗口桶（sample 保留首击） | 4.1 合并讲（13.2 复讲） | 合并讲 |
 
-### webhook.mapper（3 类）
+### webhook.mapper（4 类）
 
 | 类名 | 所属包 | 一句话职责 | 教材去向 | 讲解方式 |
 |---|---|---|---|---|
 | com.linkforge.webhook.mapper.WebhookEndpointMapper | webhook.mapper | BaseMapper | 13.1 带过 | 带过 |
 | com.linkforge.webhook.mapper.WebhookDeliveryMapper | webhook.mapper | 三个 mark 均带 WHERE status='PENDING' 状态守卫 | 13.2 合并讲 | 合并讲 |
-| com.linkforge.webhook.mapper.WebhookAggregateBufferMapper | webhook.mapper | 窗口 upsert（只加 clicks，sample 保持首击）+ 过期窗扫描 | 13.2 合并讲 | 合并讲 |
+| com.linkforge.webhook.mapper.WebhookAggregateBufferMapper | webhook.mapper | 窗口 upsert（只加 clicks，sample 保持首击）+ 过期窗扫描 + M3 的 selectByEndpointWindowForUpdate/deleteSnapshotRows | 13.2 合并讲（advanced/17） | 合并讲 |
+| com.linkforge.webhook.mapper.WebhookFlushStateMapper | webhook.mapper | lf_webhook_flush_state（V15）：ensureRow + selectSeqForUpdate + updateSeq（M3 序号分配） | advanced/17 合并讲 | 合并讲 |
 
 ### webhook.service（3 类）
 
@@ -271,13 +307,15 @@
 
 | 讲解方式 | 类数 | 占比 |
 |---|---|---|
-| 独立深讲 | 29 | 24.2% |
-| 合并讲 | 68 | 56.7% |
-| 带过 | 23 | 19.1% |
+| 独立深讲 | 33 | 22.0% |
+| 合并讲 | 83 | 55.3% |
+| 带过 | 34 | 22.7% |
 | 索引（未单讲-仅索引） | 0 | 0% |
-| **合计** | **120** | 100% |
+| **合计** | **150** | 100% |
 
 分档计数已与各包小表逐行相加核对：apikey 1+4、bootstrap 0+1、common 3+6、config 2+3+1、link 6+23+8、observability 0+2、retention 0+1、security 5+3+1、stats 5+13+7、user 1+3+5、webhook 5+9+1、根包 1+0，深讲/合并/带过分别为 29/68/23，与 120 吻合。
+
+**3.0.0 增补核对（+30 类）**：auth 3（深讲 1/合并 2）、common 1（合并 1）、link 8（深讲 1/合并 7）、stats 3（深讲 1/合并 1/带过 1）、user 14（深讲 1/合并 3/带过 10）、webhook 1（合并 1），合计深讲 +4、合并 +15、带过 +11，与上表 150 口径吻合（33/83/34）。新增 30 类与 `git diff --name-status e77c8e5 3.0.0 -- src/main/java` 的 A 记录逐条对齐，无删除类。
 
 ### 去向为零的类
 

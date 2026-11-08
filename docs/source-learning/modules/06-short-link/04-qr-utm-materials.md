@@ -132,7 +132,7 @@ public ResponseEntity<byte[]> qrPng(@PathVariable String code,
 
 登录用户自己看物料，允许浏览器缓存 60 秒。签名分享打开的物料不缓存（no-store），因为分享链接是短时的，缓存的图可能比授权更长寿。`openedByShare`（:123-127）判断依据是 SecurityContext 里的 principal 是否为 `QrSharePrincipal` 且码一致。
 
-归属判定在 `resolveForMaterial`（`QrMaterialService.java:41-43`）：登录路径走 `getOwnedLink`（只见自己的行），分享路径走 `requireExisting`（`ShortLinkService.java:882-888`，只要码存在即可，因为「签名本身就是所有者的授权」）。越权分享在铸链接那一侧已经拦住（:119，qrShare 端点先走 getOwnedLink）。
+归属判定在 `resolveForMaterial`（`QrMaterialService.java:41-43`）：登录路径走 `getOwnedLink`（只见自己的行），分享路径走 `requireExisting`（ShortLinkService 的行加载段，只要码存在即可，因为「签名本身就是所有者的授权」）。越权分享在铸链接那一侧已经拦住（:119，qrShare 端点先走 getOwnedLink）。
 
 ### 5.4 ShareTokenSigner：HMAC-SHA256(code|exp)
 
@@ -249,7 +249,7 @@ public static String merge(String url, Map<String, String> utm) {
 
 规则二，**fragment 保留**（:50-52 与 :76）：先把 `#` 后的部分摘下来暂存，追加完查询再原样挂回。没有这步，`?` 会插到 fragment 后面，URL 直接作废。
 
-规则三，**2048 上限返 null**（:77）：合并结果超长返回 null，调用方 `mergeUtm`（`ShortLinkService.java:863-869`）把它翻译成 400「merged originalUrl exceeds 2048」。数据库列就是 2048，在应用层先挡，错误信息可读。
+规则三，**2048 上限返 null**（:77）：合并结果超长返回 null，调用方 `mergeUtm`（ShortLinkService 的 UTM 合并段）把它翻译成 400「merged originalUrl exceeds 2048」。数据库列就是 2048，在应用层先挡，错误信息可读。
 
 规则四，**键序固定**（:16-17）：五个键按 canonical 顺序追加，同一输入永远产出同一输出。类注释 :9-10 写明这个顺序是 IT 钉死的契约。
 
@@ -265,7 +265,7 @@ private static void rejectSmuggledAttribution(Map<String, Object> unknown) {
     }
 }
 ```
-（`src/main/java/com/linkforge/link/service/ShortLinkService.java:871-878`）
+（ShortLinkService 的 rejectSmuggledAttribution）
 
 9 个归因 id 在常量区（:91-92）：`gclid`（Google Ads）、`fbclid`（Meta）、`msclkid`（Microsoft）、`ttclid`（TikTok）、`yclid`（Yandex）、`dclid`（DoubleClick）、`igshid`（Instagram）、`wbraid`、`gbraid`（Google web/iOS 转化）。这些参数与 utm 一样是归因参数，但不在五件套白名单里，项目不代管它们。调用方把它们塞进请求顶层会撞上 6.1 课的 `@JsonAnySetter` 捕获，然后在这里 400。错误信息回显参数名（这是调用方自己发来的内容，回显安全），正确用法是拼进目标 URL 自己管理。
 
@@ -275,7 +275,7 @@ private static void rejectSmuggledAttribution(Map<String, Object> unknown) {
 
 密码短链（accessPasswordHash 非空）的物料导出有一个必须想清楚的问题：扫海报的人没输过密码，凭什么能到目标页？
 
-答案是不绕过。物料编码的是 `/r/{code}`，不是目标 URL。跳转路径上密码门（`ShortLinkService.java:691-694`）照常生效：无解锁 cookie 的扫描者拿到的是密码输入页（Locked 结果，200 HTML），不是 302。物料的用途是「让用户到达密码门」，不是「替用户解锁」。解锁仍走 POST unlock 加两级限流（模块 7.2 讲）。
+答案是不绕过。物料编码的是 `/r/{code}`，不是目标 URL。跳转路径上密码门（resolveTarget 的 Locked 步）照常生效：无解锁 cookie 的扫描者拿到的是密码输入页（Locked 结果，200 HTML），不是 302。物料的用途是「让用户到达密码门」，不是「替用户解锁」。解锁仍走 POST unlock 加两级限流（模块 7.2 讲）。
 
 同理，B9 域名门禁对扫码流量照常生效（BLOCK 返回 403 拦截页）。物料永远只是入口的图形化，不携带任何特权。
 
@@ -317,7 +317,7 @@ private static void rejectSmuggledAttribution(Map<String, Object> unknown) {
 
 **TTL 上限 1 小时**（:33-34）：分享是「给人看一眼物料」的场景，不是长期授权。短 TTL 让泄漏的链接价值快速衰减，也无状态可吊销的缺陷被时间窗兜住。
 
-**UTM 拒夹带而不是静默忽略**（:871-878 的上游 D-C1-8）：utm 参数从请求顶层混入时，调用方显然以为归因会生效。静默忽略会让错误的营销数据无声丢失，400 逼调用方拼进 URL 或删掉字段。其余未知属性维持静默忽略的兼容契约，两类参数区别对待。
+**UTM 拒夹带而不是静默忽略**（rejectSmuggledAttribution 的上游 D-C1-8）：utm 参数从请求顶层混入时，调用方显然以为归因会生效。静默忽略会让错误的营销数据无声丢失，400 逼调用方拼进 URL 或删掉字段。其余未知属性维持静默忽略的兼容契约，两类参数区别对待。
 
 **验证先行于密码学计算**（verify :50）：过期检查是纯数字比较，放在 HMAC 前，过期链接的拒绝成本接近零。这也是防御性编程的通用形态：便宜的检查在前，昂贵的检查在后。
 

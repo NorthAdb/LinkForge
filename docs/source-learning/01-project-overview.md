@@ -16,6 +16,10 @@ LinkForge 是一个**多租户短链 + 访问分析后端服务**：用户把一
 | 长链接不好传播、不好统计 | 短码 + 302 跳转 + 点击记录 |
 | 多个团队/用户共用一个短链服务，数据要隔离 | 多租户模型：`lf_tenant` + `lf_user`，所有业务行按租户/创建者隔离（跨用户越权统一 404） |
 | 营销活动想知道「哪来的点击、什么设备」 | 点击明细 + 按天聚合 + 设备/来源/variant 维度 |
+| 一个团队多人共用同一租户，要分工又不能共享账号 | 团队协作：ADMIN/MEMBER 角色、邀请链接（单次、7 天、只存哈希）加成员管理、最后 ADMIN 护栏 |
+| 链接攒多了找不到 | 链接标签（单列规范化字符串）+ 列表 keyword/tag 筛选 |
+| 不同设备/语言/时段的访客想落到不同页面 | 变体动态路由：`match_rule` JSON 按设备/系统/语言/时间窗先收窄候选集再加权抽签 |
+| 目标站本身是恶意站，短链不能成为跳板 | 恶意主机 feed（URLhaus，默认关）：导入本地表后纯本地判定，命中即拦截跳转 |
 | 外部系统（如 CI 机器人）不能拿着人用的 JWT 调接口 | API Key（哈希存储、配额、双 scope） |
 | 点击发生时第三方系统要实时知道 | 点击 Webhook（HMAC 签名、重试、聚合模式） |
 | 运维要知道「服务现在健康吗、积压了多少」 | Actuator + Micrometer + Prometheus + Grafana 看板 |
@@ -24,14 +28,14 @@ LinkForge 是一个**多租户短链 + 访问分析后端服务**：用户把一
 
 ## 3. 一个完整用户故事（先有体感，再进代码）
 
-1. **注册**：`POST /api/auth/register` 自助创建全新租户和首个用户（首个用户即租户 ADMIN），成功直接返回 JWT。按 IP 限流默认 5 次/10 分钟（README「认证与多租户」）。
-2. **建链**：`POST /api/links` 带 `originalUrl`，可选 `customCode`、`expireAt`、`accessPassword`、`variants`、UTM 参数。服务端校验 URL、查保留字、做域名门禁 BLOCK 检查，随机生成 7 位短码（`AbC123` 与 `abc123` 是两个码，V4 迁移把列改成大小写敏感排序），撞码靠 `uk_code` 唯一索引兜底自动重试。
+1. **注册/登录**：`POST /api/auth/register` 自助创建全新租户和首个用户（首个用户即租户 ADMIN）。登录成功返回的是**一对凭据**：access token（JWT，1 小时）+ refresh token（30 天，只存哈希，按 family 轮换）。登录按 IP 与按账号双桶限流（默认各 5 次/10 分钟），账号不存在时也跑一次 dummy BCrypt 比对抹平时间差。团队场景下 ADMIN 还可以发**邀请链接**（`POST /api/tenant/invitations`），被邀请人点链接设密码即入租户（`POST /api/auth/accept-invitation`），无需邮件系统。
+2. **建链**：`POST /api/links` 带 `originalUrl`，可选 `customCode`、`expireAt`、`accessPassword`、`tags`、`variants`（变体可带 `matchRule` 动态路由规则）、UTM 参数。服务端校验 URL、查保留字、做域名门禁 BLOCK 检查（含恶意 feed 命中），随机生成 7 位短码（`AbC123` 与 `abc123` 是两个码，V4 迁移把列改成大小写敏感排序），撞码靠 `uk_code` 唯一索引兜底自动重试。
 3. **分享**：把 `http://localhost:8080/r/{code}` 发出去；也可以 `GET /api/links/{code}/qr.png` 出二维码物料。
-4. **访问**：访客 GET `/r/{code}`，服务端走一条 12 步判定链（限流 → Bloom → 空值缓存 → L1/L2 → 行读 → 状态/过期 → URL 校验 → B9 BLOCK → 密码门 → B9 WARN → bot 分类 → variants 抽签）后 302。
+4. **访问**：访客 GET `/r/{code}`，服务端走一条判定链（限流 → Bloom → 空值缓存 → L1/L2 → 行读 → 状态/过期 → URL 校验 → B9 BLOCK（含恶意 feed）→ 密码门 → B9 WARN → bot 分类 → match_rule 收窄候选集 → variants 抽签）后 302。
 5. **记录**：302 的同一个数据库事务里写点击明细 `lf_click_log` 和 Outbox 行 `lf_outbox`（PENDING）。
 6. **投递**：`ClickOutboxRelay` 每 2 秒把 Outbox 批量投到 RabbitMQ，消费端用 `lf_consumed_event` 唯一索引做幂等，聚合成 `lf_click_daily`（按天）和 `lf_click_dim_daily`（设备/来源/variant 维度），并为配置了 Webhook 的租户落一条投递意图。
-7. **查看**：链主调 `GET /api/links/{code}/stats`（总量 + 精确 UV + 按天序列）、`.../stats/breakdown?dim=device`、`.../clicks`（明细分页）。
-8. **推送**：`WebhookDeliveryRelay` 轮询投递行，HMAC 签名后 HTTP POST 到租户配置的 endpoint；失败按指数退避重试，上限 8 次。
+7. **查看**：链主调 `GET /api/links/{code}/stats`（总量 + 精确 UV + 按天序列，三读同窗同源同快照）、`.../stats/breakdown?dim=device`、`.../clicks`（明细分页）、`.../stats/ab-report`（A/B 分布拟合诊断，配置不稳定时回 NOT_APPLICABLE + 理由码）、`.../clicks/export`（原始点击 CSV，硬上限 10 万行）。
+8. **推送**：`WebhookDeliveryRelay` 轮询投递行，HMAC 签名后 HTTP POST 到租户配置的 endpoint；失败按指数退避重试，上限 8 次。聚合模式的 digest 由单事务 drain 生成（带每 endpoint 单调递增的 flush 序号）。
 
 这套故事里出现的每一个类（`ShortLinkService`、`ClickRecordService`、`ClickOutboxRelay`、`ClickEventConsumer`、`WebhookDeliveryRelay`……）都会在后面的课程里逐个拆开。
 
@@ -41,12 +45,13 @@ LinkForge 是一个**多租户短链 + 访问分析后端服务**：用户把一
 
 | 域 | 能力 | HTTP 入口 | 核心类（`src/main/java/com/linkforge/` 下） |
 |----|------|-----------|---------------------------------------------|
-| 认证 | 注册/登录、JWT、bootstrap 演示租户 | `/api/auth/register` `/api/auth/login` | `user.service.AuthService`、`user.controller.AuthController`、`security.JwtService`、`bootstrap.BootstrapDataLoader` |
-| 短链管理 | CRUD、自定义码、过期/禁用、幂等创建、CSV 导入导出、A/B 变体 | `/api/links/**` | `link.controller.ShortLinkController`、`link.service.ShortLinkService`、`link.support.CsvImportParser`、`link.support.VariantPicker` |
-| 跳转 | 302、HEAD 探测、密码解锁 | `/r/{code}`、`/r/{code}/unlock` | `link.controller.RedirectController`、`link.support.GatePages`、`link.support.LinkAccessTokens` |
+| 认证 | 注册/登录、JWT（1h）+ refresh 轮换会话、强制改密、bootstrap 演示租户 | `/api/auth/register` `/api/auth/login` `/api/auth/refresh` `/api/auth/logout(-all)` `/api/auth/change-password` | `user.service.AuthService`、`auth.SessionService`、`user.controller.AuthController`、`security.JwtService`、`security.JwtAuthFilter`、`bootstrap.BootstrapDataLoader` |
+| 团队协作 | 邀请链接、成员列表/改角色/禁用/移除、管理员重置密码、最后 ADMIN 护栏 | `/api/tenant/invitations` `/api/tenant/members/**` `/api/auth/accept-invitation` | `user.service.TeamService`、`user.controller.TeamController`、`user.entity.TenantInvitation` |
+| 短链管理 | CRUD、自定义码、过期/禁用、标签与搜索、幂等创建、CSV 导入导出、A/B 变体 + 动态路由 | `/api/links/**` | `link.controller.ShortLinkController`、`link.service.ShortLinkService`、`link.support.CsvImportParser`、`link.support.VariantPicker`、`link.support.LinkTags`、`link.support.MatchRule` |
+| 跳转 | 302、HEAD 探测、密码解锁、动态路由抽签 | `/r/{code}`、`/r/{code}/unlock` | `link.controller.RedirectController`、`link.support.GatePages`、`link.support.LinkAccessTokens`、`link.support.MatchRule` |
 | 缓存/防护 | L1/L2 缓存、空值缓存、Bloom、singleflight、广播失效 | （内部） | `link.support.UrlLocalCache`、`link.support.CodeBloomFilter`、`link.support.SingleFlight`、`link.support.CacheBus`、`link.support.ShortLinkRowLoader` |
 | 限流 | 滑动窗口日志（Lua）+ 日固定配额 | （横切） | `common.ratelimit.RedisRateLimiter`、`common.ratelimit.RateLimitKeys` |
-| 统计 | 明细/UV/按天/维度 | `/api/links/{code}/stats**` | `stats.controller.StatsController`、`stats.service.ClickStatsService`、`stats.service.ClickRecordService` |
+| 统计 | 明细/UV/按天/维度、A/B 拟合诊断、原始点击导出 | `/api/links/{code}/stats**` `.../clicks/export` | `stats.controller.StatsController`、`stats.service.ClickStatsService`、`stats.service.ClickRecordService`、`stats.support.AbReport` |
 | 异步管道 | Outbox、Relay、MQ、幂等消费、对账 | （内部） | `stats.service.ClickOutboxRelay`、`stats.mq.ClickEventConsumer`、`stats.mq.RabbitClickEventPublisher`、`stats.service.ClickLogReconciler` |
 | 开放能力 | API Key + 配额 | `/api/keys/**` + `X-API-Key` | `apikey.service.ApiKeyService`、`security.ApiKeyAuthFilter` |
 | Webhook | 端点管理、签名投递、聚合 digest | `/api/webhooks/**` | `webhook.service.WebhookService`、`webhook.service.WebhookDeliveryRelay`、`webhook.support.WebhookSigner`、`webhook.support.PinnedHttpSender` |
@@ -58,13 +63,14 @@ LinkForge 是一个**多租户短链 + 访问分析后端服务**：用户把一
 |------|----|--------|
 | B2 非人点击 | `link.support.ClickFilter` | 预取头/具名预览 bot 照常 302 但不计点击 |
 | B9 域名门禁 | `link.support.TargetPolicy` / `link.support.PhishingPolicy` | 本地域名名单 BLOCK/WARN，label 边界后缀匹配 |
+| 恶意主机 feed（3b） | `link.service.MaliciousHostSyncService` / `link.support.MaliciousHostSnapshot` / `link.support.MaliciousFeedParser` | URLhaus 名单定时导入 `lf_malicious_host`（默认关），判定只读内存快照、纯本地，命中并入 B9 的 BLOCK |
 | B3 密码短链 | `link.support.LinkAccessTokens` | BCrypt 哈希存储 + HMAC 签名 cookie |
 | 页面渲染 | `link.support.GatePages` | 解锁页/拦截页/警示页，全部 `HtmlUtils.htmlEscape` 转义 |
 | SSRF 守卫 | `webhook.support.WebhookTargetGuard` + `webhook.support.PinnedHttpSender` | 一次解析全 IP 校验后只向已校验地址建连 |
 
 ### 4.3 运维/支撑功能
 
-- **Flyway 迁移**（V1–V10，`src/main/resources/db/migration/`）：schema 版本化，存量库 baseline。
+- **Flyway 迁移**（V1–V15，`src/main/resources/db/migration/`）：schema 版本化，存量库 baseline。V11 起依次是 refresh 会话、租户邀请、标签/路由规则、恶意主机表、webhook 冲刷序号表。
 - **保留清理**：`retention.SentRowCleanup` 定时删除过期的 SENT 行（outbox 用 DB 时钟、webhook 用 JVM 时钟，两个时钟口径不同，这是真实源码里的细节）。
 - **CI**：GitHub Actions `mvn -B verify`（单测 surefire + Testcontainers IT failsafe）。
 - **故障演练脚本**：`scripts/smoke.sh`、`mq-drill.sh`、`outbox-drill.sh`、`fault-drill.sh`。
@@ -73,7 +79,7 @@ LinkForge 是一个**多租户短链 + 访问分析后端服务**：用户把一
 
 1. **五层读取防护**（跳转热路径）：限流 → Bloom 防穿透 → 空值缓存 → Caffeine L1 → Redis L2，再叠加 singleflight 合并并发行读。诚实口径：每请求仍读一次 DB 行判禁用/过期，缓存只省 URL 字段（README「跳转读取路径」）。
 2. **同事务 Outbox**：点击写入与消息意图在同一个 DB 事务，Relay 异步投递，断 MQ 期间点击停在 outbox、恢复自动追平（`scripts/outbox-drill.sh` 演练）。
-3. **幂等三件套**：创建幂等（Redis `pending→code` 两段式）、消费幂等（`lf_consumed_event` 唯一索引 + 捕获 `DuplicateKeyException`）、投递幂等（Webhook 按 event id 去重）。
+3. **幂等三件套**：创建幂等（Redis `pending→code` 两段式 + 请求指纹，同 key 异体 409；CSV 导入另有在途租约防并发同 key 双跑）、消费幂等（`lf_consumed_event` 唯一索引 + 捕获 `DuplicateKeyException`）、投递幂等（Webhook 按 event id 去重）。
 4. **fail-open 与可观测的降级**：限流器、缓存、Bloom 广播、点击记账在依赖故障时都选择放行/跳过，但全部打指标（`linkforge.ratelimit.failopen`、`linkforge.cache.failopen`、`linkforge.click.record.failopen` 等），「降级」从不静默。
 5. **滑动窗口限流**：Redis ZSET + Lua（`src/main/resources/redis/sliding_window.lua`），时钟取 Redis TIME，只有被放行的请求占名额，精确计算 Retry-After。
 6. **多实例协调**：没有分布式 L1，用 Redis pub/sub 广播 Bloom put 与 L1 失效（`CacheBus`），定时 rebuild + 短 TTL 兜底。
@@ -100,7 +106,7 @@ LinkForge 是一个**多租户短链 + 访问分析后端服务**：用户把一
 - 独立前端 SPA：只有单文件静态控制台（`src/main/resources/static/`）。
 - 云公网部署：本地 Docker Compose（prod profile 备好了收紧开关但不上云）。
 - Geo 维度、RedisBloom、端口白名单/出口代理、Linux bench 复跑（B10）：登记在 `docs/backlog.md`，无运营者指令不开工。
-- **功能冻结**：C5 审计通过后项目冻结，不再开产品能力轮（backlog 2026-11-01 备注）。
+- **功能冻结**：C5 后曾冻结，其后按运营者指令解冻做了批次 1–3、外部审计修复波与 S/N 波；2026-11-08 外部复审通过后以 v3.0.0 **重新冻结**，无新的明确指令不开任何产品波次（backlog 与 README 版本表）。
 
 ## 8. 版本演进（从哪里来，现在在哪）
 
@@ -109,17 +115,21 @@ LinkForge 是一个**多租户短链 + 访问分析后端服务**：用户把一
 | v1.0.0（P0–P5） | 2026-10-24 | 认证、短链 CRUD、缓存跳转、MQ 异步聚合、限流、CI 全链路 |
 | v2.0.0（A2–A10 + B 档 1–5 波） | 2026-10-25 | HEAD 探测、Flyway、Outbox、维度、Bloom、singleflight、空值缓存、L1、API Key、Webhook、滑动窗口、密码短链、域名门禁、Prometheus |
 | C1–C5 | 2026-10-31 ~ 11-01 | QR/UTM、API Key 双 scope、Webhook 聚合、Bloom 广播/rebuild、L1 失效广播、A/B 分流、CSV 导入、SSRF rebinding 钉死、点击记账 fail-open |
-| 现在 | 功能冻结 | main @ 911640c，319 例测试 |
+| 批次 1–3 | 2026-11-07 ~ 11-08 | 登录双桶限流与时序抹平、统计口径统一；认证改造（access 1h + refresh 轮换、强制改密）与团队协作（V11/V12）；标签/搜索、动态路由、原始导出、A/B 诊断、幂等深化、恶意主机 feed（V13/V14）。测试 319 → 440 |
+| 外部审计修复波（M1–M8） | 2026-11-08 | 会话撤销原子化、最后 ADMIN 锁内复核、聚合冲刷单事务 drain + flush 序号（V15）、指纹含口令 HMAC、导入在途租约、控制台不再清 matchRule、改密墙覆盖 API Key、CSV 公式中和。测试 440 → 472 |
+| S/N 波 | 2026-11-08 | A/B 适用性门、跨午夜开窗日语义、stats 只读 RR 快照、CorrelationId 贯穿、认证存储故障稳定 503、feed 成功口径修正、控制台 S2 收尾。测试 472 → 508 |
+| v3.0.0 | 2026-11-08 | 外部复审 **PASS_WITH_NITS**（M1–M8 改判通过，余为注记级事项），**功能冻结**：tag `3.0.0` @ `f27b9cbfec4f`，main tip `3f545ccf`，508 例测试，Flyway V1–V15 |
 
 ## 9. 关键数字速查（引用时带口径）
 
 | 数字 | 值 | 口径 |
 |------|-----|------|
-| 主源码文件 | 120 个 Java 文件 | 2026-11-02 `find` 实测 |
-| 测试 | README 口径 319 = 151 单测（144 `@Test` + 1 个参数化方法展开 7 例）+ 166 IT + 2 时区 fork | 按执行实例计数；`@Test` 注解合计 312 不含参数化方法，两口径完全可平 |
-| 数据表 | 13 张业务表 + flyway_schema_history | V1–V10 迁移实测 |
-| Redis 键族 | 正缓存 / 空值缓存 / 限流滑窗 / 幂等键 + 2 个 pub/sub 频道 | application.yml 与 CacheBus 实测 |
-| 默认限流 | 注册 5/600s·IP、创建 30/60s·用户、导入 5/60s·用户、跳转 300/60s·IP、API Key 120/分钟+10000/日 | application.yml 默认值（env 可覆盖） |
+| 主源码文件 | 150 个 Java 文件（主代码 12,060 行） | tag 3.0.0 实测（v2.0.0 时点为 120 个 / 8,052 行） |
+| 测试代码 | 115 个 Java 文件（15,377 行） | tag 3.0.0 实测（v2.0.0 时点为 70 个 / 8,783 行） |
+| 测试 | README 口径 508 = 226 单测（204 `@Test` + 2 个参数化方法展开 22 例）+ 280 IT + 2 时区 fork | 按执行实例计数；`@Test` 注解合计 486（单测 204 + IT 282）不含参数化方法，两口径完全可平 |
+| 数据表 | 17 张业务表 + flyway_schema_history | V1–V15 迁移实测（V10 时点 13 张，V11–V15 新增 refresh_token、tenant_invitation、malicious_host、webhook_flush_state 4 张） |
+| Redis 键族 | 正缓存 / 空值缓存 / 限流滑窗 / 幂等键（含导入在途租约） + 2 个 pub/sub 频道 | application.yml 与 CacheBus 实测 |
+| 默认限流 | 注册 5/600s·IP、登录 5/600s·IP + 5/600s·账号、refresh/logout/接受邀请 5/600s·IP、创建 30/60s·用户、导入 5/60s·用户、跳转 300/60s·IP、API Key 120/分钟+10000/日 | application.yml 默认值（env 可覆盖） |
 | 性能 | 现存数字是 Windows 历史实测（2026-10-24，固定窗口时期），不代表当前 tip，Linux bench 未跑 | README 页头声明 |
 
 ## 10. 性能数字的正确姿势
@@ -139,9 +149,9 @@ LinkForge 是一个**多租户短链 + 访问分析后端服务**：用户把一
 
 ## 11. 为什么这个项目适合当教材载体
 
-- **规模合适**：主源码 120 个文件、单模块最大 1025 行（ShortLinkService），一周内可以通读，又不至于简单到没有工程问题。
-- **问题真实**：缓存一致性、并发撞码、消息可靠性、限流、幂等、SSRF，都是后端面试与生产里的高频真题，且项目里都有「为什么这么做」的注释与决策记录可查（progress.md 的决策表）。
-- **有红绿史**：319 例测试、CI 恒绿的纪律、「先提交测试再提交实现」的红先流程，让每条结论都能被复核——教材里引用行为时都能给出测试名。
+- **规模合适**：主源码 150 个文件、单类最大 1,503 行（ShortLinkService），一周内可以通读，又不至于简单到没有工程问题。
+- **问题真实**：缓存一致性、并发撞码、消息可靠性、限流、幂等、SSRF、会话撤销的原子性，都是后端面试与生产里的高频真题，且项目里都有「为什么这么做」的注释与决策记录可查（progress.md 的决策表）。
+- **有红绿史**：508 例测试、CI 恒绿的纪律、「先提交测试再提交实现」的红先流程，让每条结论都能被复核——教材里引用行为时都能给出测试名。
 - **诚实文化**：文档与注释不掩饰缺口（fail-open 的残余不一致、Bloom 不可删除等都有原文注释），适合练习「读代码不相信注释、用测试验证行为」。
 
 ## 12. 下一步

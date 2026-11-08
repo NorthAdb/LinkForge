@@ -132,32 +132,32 @@ sealed 关键字保证分支穷尽：编译器知道实现类只有四个，`ren
 
 ### 5.4 resolveTarget：12 步判定总顺序
 
-`resolveTarget`（`ShortLinkService.java:601-712`）是 GET 和 HEAD 共用的判定链。下表是 12 步的完整展开，行号都出自这个文件，每步只列「失败出口」：
+`resolveTarget`（`ShortLinkService.java:1061` 起）是 GET 和 HEAD 共用的判定链。下表是 12 步的完整展开，行号为 3.0.0 时点位置，每步只列「失败出口」：
 
 | 步 | 判定 | 代码位置 | 失败出口 |
 |----|----|----|----|
-| 1 | 按 IP 滑动窗口限流 | :604-610 | 429 + Retry-After（`RateLimitedException`） |
-| 2 | Bloom filter 负答（码从未创建） | :615-618 | 404（`BizException`），不碰 MySQL |
-| 3 | 空值缓存命中（DB 近期确认不存在） | :623-626 | 404 |
-| 4 | L1 进程内缓存查 URL | :631-632 | 无失败出口，只影响 URL 来源 |
-| 5 | L2 Redis 查 URL | :633-644 | Redis 异常 fail-open 继续（:636-640） |
-| 6 | singleflight 合并并发后读 DB 行 | :649-654 | 行不存在 → 写空值缓存 + 404 |
-| 7 | 状态与过期判定 | :656-661 | 禁用 404；过期 410 |
-| 8 | URL 可渲染校验 | :663-671 | 行脏 410；缓存值脏 410 |
-| 9 | B9 域名门禁 BLOCK | :684-688 | 403 拦截页（`Blocked`） |
-| 10 | 密码门 | :691-695 | 解锁页（`Locked`，GET 200 / HEAD 401） |
-| 11 | B9 域名门禁 WARN | :696-704 | 警示页（`Warn`，200；`lf_continue=1` 可继续） |
-| 12 | 抽签（:708）→ 返回后 resolveForGet 才做 B2 分类（:568-572）→ 记账 | :705-711 与 :568-582 | 无失败；可能不记点击 |
+| 1 | 按 IP 滑动窗口限流 | :1064-1070 | 429 + Retry-After（`RateLimitedException`） |
+| 2 | Bloom filter 负答（码从未创建） | :1075-1078 | 404（`BizException`），不碰 MySQL |
+| 3 | 空值缓存命中（DB 近期确认不存在） | :1083-1086 | 404 |
+| 4 | L1 进程内缓存查 URL | :1091 | 无失败出口，只影响 URL 来源 |
+| 5 | L2 Redis 查 URL | :1095-1104 | Redis 异常 fail-open 继续 |
+| 6 | singleflight 合并并发后读 DB 行 | :1109-1114 | 行不存在 → 写空值缓存 + 404 |
+| 7 | 状态与过期判定 | :1116-1121 | 禁用 404；过期 410 |
+| 8 | URL 可渲染校验 | :1123-1131 | 行脏 410；缓存值脏 410 |
+| 9 | B9 域名门禁 BLOCK（含恶意 feed 判定，批次 3b） | :1144-1148 | 403 拦截页（`Blocked`） |
+| 10 | 密码门 | :1150-1155 | 解锁页（`Locked`，GET 200 / HEAD 401） |
+| 11 | B9 域名门禁 WARN | :1156-1166 | 警示页（`Warn`，200；`lf_continue=1` 可继续） |
+| 12 | 条件收窄 + 抽签 → 返回后 resolveForGet 才做 B2 分类 → 记账 | :1168-1171 与 :1029-1050 | 无失败；可能不记点击 |
 
-逐步看关键片段。第 1 步限流（:604-610）在方法最前面，超限直接抛 `RateLimitedException`，算法在 9.1 课专讲。第 2 步的注释（:612-614）讲清了 Bloom 的地位：负答案是权威的（这个码从未被创建），直接 404，省掉一次数据库往返；正答案可能是误报，落到后面的缓存和 DB 路径兜底。第 3 步空值缓存（B7）只存「DB 确认过不存在」的码，注释 :620-622 特意强调：禁用（404）和过期（410）的行还在库里，绝不能进这个缓存，否则状态变化要等 TTL 才生效。
+逐步看关键片段。第 1 步限流在方法最前面，超限直接抛 `RateLimitedException`，算法在 9.1 课专讲。第 2 步的注释讲清了 Bloom 的地位：负答案是权威的（这个码从未被创建），直接 404，省掉一次数据库往返；正答案可能是误报，落到后面的缓存和 DB 路径兜底。第 3 步空值缓存（B7）只存「DB 确认过不存在」的码，注释特意强调：禁用（404）和过期（410）的行还在库里，绝不能进这个缓存，否则状态变化要等 TTL 才生效。
 
-第 4、5 步是两级缓存。L1 是本进程的 Caffeine 缓存（`UrlLocalCache`），L2 是 Redis。注意 :629-630 的注释：L1 命中省的只是 Redis 往返，下面的 DB 行照样读。第 5 步 L2 读取失败时打点 `cache.failopen{op=l2_get}` 然后继续，注释 :637 写明降级到 singleflight 行读，绝不 500。
+第 4、5 步是两级缓存。L1 是本进程的 Caffeine 缓存（`UrlLocalCache`），L2 是 Redis。注意 L1 命中省的只是 Redis 往返，下面的 DB 行照样读。第 5 步 L2 读取失败时打点 `cache.failopen{op=l2_get}` 然后继续，降级到 singleflight 行读，绝不 500。
 
-第 6 步是唯一的 DB 读：`ShortLink link = singleFlight.run(code, () -> rowLoader.load(code))`（:649），行不存在时 `markAbsent` 写空值缓存再抛 404（:650-654）。`SingleFlight`（A10）让 N 个并发请求同一个码只打一次数据库。它不是缓存：飞行结束条目即删，没有 TTL，没有「上次结果」；超时或禁用时各读各的，只多打点不报错。
+第 6 步是唯一的 DB 读：`ShortLink link = singleFlight.run(code, () -> rowLoader.load(code))`，行不存在时 `markAbsent` 写空值缓存再抛 404。`SingleFlight`（A10）让 N 个并发请求同一个码只打一次数据库。它不是缓存：飞行结束条目即删，没有 TTL，没有「上次结果」；超时或禁用时各读各的，只多打点不报错。
 
-第 7、8 步都在行上做文章。禁用 404（:656-658）、过期 410（:659-661），两个状态码语义不同。URL 校验做两次：先验行的 `originalUrl`（:665-667），再验准备使用的缓存值（:668-671），脏行 410 与缓存无关。第 9 到 11 步是三道门：第 9 步 B9 BLOCK 直接返回 `Blocked`，且发生在密码门之前（D-Bw345-51：BLOCK 先于一切）；第 10 步密码门读行的 `accessPasswordHash`，注释 :689-690 写明「设置、清除、修改密码在下一个请求立即生效，与缓存 TTL 无关」；第 11 步 WARN 只在 GET 且没带 `lf_continue=1` 时拦，带了就直接放行并打点 `phishing.continue`。
+第 7、8 步都在行上做文章。禁用 404、过期 410，两个状态码语义不同。URL 校验做两次：先验行的 `originalUrl`，再验准备使用的缓存值，脏行 410 与缓存无关。第 9 到 11 步是三道门：第 9 步 B9 BLOCK 直接返回 `Blocked`，且发生在密码门之前（D-Bw345-51：BLOCK 先于一切）——批次 3b 后这一步的判定输入合并了恶意主机 feed 的本地快照：命中 feed 与命中静态名单走同一个 BLOCK 出口（来源经 `Source.MALICIOUS_FEED` 区分，7.2 详讲）；第 10 步密码门读行的 `accessPasswordHash`，注释写明「设置、清除、修改密码在下一个请求立即生效，与缓存 TTL 无关」；第 11 步 WARN 只在 GET 且没带 `lf_continue=1` 时拦，带了就直接放行并打点 `phishing.continue`。
 
-第 12 步散在两处。`resolveTarget` 的收尾按「有变体抽签、无变体用主 URL」返回 `Redirect`：`picked != null ? picked.getTargetUrl() : originalUrl`（:708-711，抽签细节在 7.3 课）。回到 `resolveForGet` 后的 B2 分类与点击记录：
+第 12 步散在两处。`resolveTarget` 的收尾按「有变体先 MatchRule 收窄再抽签、无变体用主 URL」返回 `Redirect`：`picked != null ? picked.getTargetUrl() : originalUrl`（收窄与抽签细节在 7.3 课）。回到 `resolveForGet` 后的 B2 分类与点击记录：
 
 ```java
 Optional<ClickFilter.SkipReason> skip = clickFilter.classify(request);
@@ -176,9 +176,9 @@ try {
 }
 meterRegistry.counter("linkforge.redirects").increment();
 ```
-`ShortLinkService.java:568-582`
+（`ShortLinkService.java` 的 resolveForGet 段）
 
-预取和预览 bot 拿到一模一样的 302 但什么都不记（:569-572）。点击写库失败时 catch 打点继续：:576-578 的注释讲明 catch 在事务外的原因，302 不能依赖点击写成功。
+预取和预览 bot 拿到一模一样的 302 但什么都不记。点击写库失败时 catch 打点继续：注释讲明 catch 在事务外的原因，302 不能依赖点击写成功。
 
 ## 6. 技术原理补充
 

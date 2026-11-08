@@ -29,7 +29,7 @@ flowchart LR
 
 要点（`README` + `docker-compose.yml`）：
 
-- **应用在宿主机上跑**（`java -jar target/linkforge-2.0.0.jar`），Compose 只管三个依赖 + 可选观测栈；Prometheus 抓宿主机应用靠 `host.docker.internal:host-gateway`（compose :68-69）。
+- **应用在宿主机上跑**（`java -jar target/linkforge-3.0.0.jar`），Compose 只管三个依赖 + 可选观测栈；Prometheus 抓宿主机应用靠 `host.docker.internal:host-gateway`（compose :68-69）。
 - 三个依赖都有 healthcheck；MySQL 首次初始化约 5 分钟，等到 healthy 再启动应用。
 - 应用进程内还有第四种「运行单位」：**调度线程池**（`spring.task.scheduling.pool.size=6`），跑 outbox relay、webhook relay、对账器、Bloom rebuild、积压采样、清理任务（`application.yml:6-12`）。
 - 进程间通信只有三条标准协议：JDBC（MySQL）、RESP（Redis/Lettuce + pub/sub）、AMQP（RabbitMQ）。没有服务间 RPC，这是单体的干净之处。
@@ -44,19 +44,24 @@ com.linkforge
 │   ├── exception/                BizException、RateLimitedException、GlobalExceptionHandler
 │   ├── ratelimit/                RedisRateLimiter、RateLimitKeys、RateLimitDecision
 │   ├── result/                   ApiResponse、PageResponse
-│   └── util/                     ClientIps
+│   ├── util/                     ClientIps
+│   └── web/                      CorrelationIdFilter（请求关联 id，S/N 波）
 ├── config/                       LinkForgeProperties、MybatisPlusConfig、RedisConfig、
 │                                 SchedulingConfig、OpenApiConfig、RabbitMqConfig
 ├── security/                     SecurityConfig、JwtService、JwtAuthFilter、ApiKeyAuthFilter、
 │                                 UserContext、AuthUser、MetricsScrapeTokenFilter、
 │                                 QrShareAuthFilter、QrSharePrincipal
-├── user/                         认证域：controller / service / mapper / entity / dto
+├── auth/                         会话域（批次 2a）：RefreshToken、SessionService（轮换/撤销/改密）、mapper/
+├── user/                         认证与团队域：controller（Auth/Team）/ service（AuthService、
+│                                 TeamService）/ mapper / entity（含 TenantInvitation）/ dto
 ├── apikey/                       API Key 域：controller / service / mapper / entity / dto
 ├── link/                         短链核心域（最大的包）
 │   ├── controller/               ShortLinkController、RedirectController、
 │   │                             BloomAdminController、HealthController
-│   ├── service/                  ShortLinkService、RedirectOutcome、QrMaterialService
-│   ├── support/                  16 个支撑类（缓存、Bloom、singleflight、门禁、CSV、QR…）
+│   ├── service/                  ShortLinkService、RedirectOutcome、QrMaterialService、
+│   │                             MaliciousHostSyncService（feed 同步，批次 3b）
+│   ├── support/                  23 个支撑类（缓存、Bloom、singleflight、门禁、CSV、QR、
+│   │                             LinkTags、MatchRule、ImportIdempotencyLease、恶意名单快照…）
 │   ├── mapper/ entity/ dto/
 ├── stats/                        点击统计域
 │   ├── controller/ dto/ entity/ mapper/
@@ -64,7 +69,7 @@ com.linkforge
 │   │                             ClickEventConsumer
 │   ├── service/                  ClickRecordService、ClickOutboxRelay、ClickStatsService、
 │   │                             ClickLogReconciler
-│   └── support/                  ClickDimensions
+│   └── support/                  ClickDimensions、AbReport（A/B 拟合诊断 + 适用性门，批次 3b/S1）
 ├── webhook/                      Webhook 域：controller / service / mapper / entity /
 │                                 support(Signer、SecretCipher、TargetGuard、PinnedHttpSender、
 │                                 AggregateWindows)
@@ -74,17 +79,21 @@ com.linkforge
 
 分层归属：`controller`（HTTP 边界）→ `service`（业务编排）→ `mapper`（数据访问）→ `entity/dto`（数据形状）；`support`/`common`/`config` 是被复用的机制层；`mq`、`retention`、`observability` 是基础设施触角。每个域（user/apikey/link/stats/webhook）自带完整三层 + 自己的 support，域之间通过少数 service 互调（如跳转链调 `ClickRecordService`，消费链调 `WebhookService`，详见第 4 节）。
 
-主源码共 **120 个 Java 文件**（2026-11-02 实测），测试 70 个文件。完整「类 → 课程」映射见 [reference/class-coverage-matrix.md](reference/class-coverage-matrix.md)。
+主源码共 **150 个 Java 文件**（tag 3.0.0 实测；v2.0.0 时点 120 个），测试 115 个文件。完整「类 → 课程」映射见 [reference/class-coverage-matrix.md](reference/class-coverage-matrix.md)。
 
 ## 3. 数据地图
 
-### 3.1 MySQL（13 张业务表 + flyway_schema_history）
+### 3.1 MySQL（17 张业务表 + flyway_schema_history）
 
 | 表 | 用途 | 版本来源 |
 |----|------|----------|
-| `lf_tenant` / `lf_user` | 租户与用户（BCrypt 口令、tenant_role） | V1 |
-| `lf_short_link` | 短链主表（`uk_code` 唯一索引、逻辑删除、大小写敏感短码） | V1 + V4（列排序规则）+ V7（access_password_hash） |
-| `lf_link_variant` | A/B 变体（`uk_link_variant`，variant_key 内联 bin 排序） | V10 |
+| `lf_tenant` / `lf_user` | 租户与用户（BCrypt 口令、tenant_role；V11 起加 token_version、must_change_password 两列） | V1（+ V11 两列、V12 角色回填） |
+| `lf_refresh_token` | refresh 会话行：只存 SHA-256 哈希、family 轮换链、撤销原因 | V11 |
+| `lf_tenant_invitation` | 租户邀请：只存令牌哈希、单次接受、7 天过期 | V12 |
+| `lf_short_link` | 短链主表（`uk_code` 唯一索引、逻辑删除、大小写敏感短码；V13 加 tags 单列） | V1 + V4（列排序规则）+ V7（access_password_hash）+ V13（tags） |
+| `lf_link_variant` | A/B 变体（`uk_link_variant`，variant_key 内联 bin 排序；V13 加 match_rule JSON 列） | V10（+ V13 match_rule） |
+| `lf_malicious_host` | 恶意主机 feed 落表（host 唯一；判定走内存快照，不逐请求查表） | V14 |
+| `lf_webhook_flush_state` | 每 endpoint 一行：聚合冲刷序号 flush_seq（M3） | V15 |
 | `lf_click_log` | 点击明细（含 event_id 标记、variant 列） | V1 + V2（event_id）+ V10（variant） |
 | `lf_click_daily` | 按天聚合（UV 按 IP 去重） | V3 |
 | `lf_click_dim_daily` | 维度聚合（device/referer_host/os/browser/variant） | V3 + V10 |
@@ -102,7 +111,8 @@ com.linkforge
 | `linkforge:code:{code}` | STRING | 正缓存：短码 → URL，TTL 3600+抖动300 | `README`、application.yml:112-114 |
 | `linkforge:absent:{code}` | STRING("1") | 空值缓存：DB 确认不存在，TTL 60+抖动30 | `README`、application.yml:117-118 |
 | `linkforge:rl:sw:{logical}` | ZSET | 滑动窗口日志（限流） | `RateLimitKeys.java`（代码） |
-| 幂等键 `pending→code` | STRING | 创建幂等两段式（5s/24h） | `README`（键名前缀待课程 9.2 逐字核实） |
+| 幂等键 `linkforge:rl:idem:{userId}:{key}` | STRING | 创建幂等两段式（pending 5s → `v3:<指纹>:<code>` 终值 24h） | `ShortLinkService`（代码） |
+| 导入幂等键 `linkforge:rl:idem-import:{userId}:{key}` | STRING | CSV 导入：在途租约 `pending:{owner}:{fileSha256}`（TTL 120s）→ 结算 JSON（M5） | `ShortLinkService`、`ImportIdempotencyLease`（代码） |
 | `linkforge:bloom:put` | pub/sub 频道 | 创建后广播 Bloom put | `README`、`CacheBus` |
 | `linkforge:l1:invalidate` | pub/sub 频道 | 写路径广播 L1 失效 | `README`、`CacheBus` |
 
@@ -121,13 +131,15 @@ com.linkforge
 
 | 链路 | 主角（按调用顺序） | 协作 |
 |---|---|---|
-| 注册/登录 | `AuthController` → `AuthService` → `UserAccountMapper`/`TenantMapper`；`JwtService` 签发 | `RedisRateLimiter`（注册限流） |
-| 管理面认证 | `JwtAuthFilter`（Bearer）或 `ApiKeyAuthFilter`（X-API-Key） → `UserContext` | `ApiKeyService`（hash 点查） |
-| 创建短链 | `ShortLinkController` → `ShortLinkService.create` → 校验族（`LinkValidations`/`TargetPolicy`/`UtmMerger`/variants 校验）→ `ShortLinkMapper` + `LinkVariantMapper` | `RedisRateLimiter`、幂等键、`CodeBloomFilter`、`CacheBus` |
-| 跳转 | `RedirectController` → `ShortLinkService.resolveTarget/resolveForProbe/resolveAndRecord`：`CodeBloomFilter` → absent → `UrlLocalCache`(L1) → Redis(L2) → `ShortLinkRowLoader`+`SingleFlight` → 状态/过期 → `TargetPolicy` → `LinkAccessTokens` → `ClickFilter` → `VariantPicker` → `ClickRecordService.recordClick` | `GatePages`（三种页面） |
+| 注册/登录 | `AuthController` → `AuthService`（双桶限流 + dummy BCrypt）→ `UserAccountMapper`/`TenantMapper`；`JwtService` 签发 access、`SessionService.startSession` 新开 refresh family | `RedisRateLimiter`（注册限流、登录双桶） |
+| 会话续期/撤销 | `AuthController.refresh/logout/logout-all/change-password` → `SessionService`（用户行锁内轮换/撤销，锁序 租户→用户→refresh 行） | `RefreshTokenMapper`、`UserAccountMapper.incrementTokenVersion` |
+| 团队协作 | `TeamController` → `TeamService`（租户行锁先行、锁内复核 ADMIN 与最后 ADMIN 护栏）→ `TenantInvitationMapper`/`UserAccountMapper`；接受邀请回 `SessionService.issueLoginResponse` | `ApiKeyMapper.revokeAllForUser`（重置时永久撤销成员全部 Key） |
+| 管理面认证 | `CorrelationIdFilter`（链首，mint cid）→ `JwtAuthFilter`（Bearer，每请求回查用户行）或 `ApiKeyAuthFilter`（X-API-Key，回查 Key 与属主） → `UserContext`；认证存储故障两过滤器同回稳定 503 | `ApiKeyService`（hash 点查） |
+| 创建短链 | `ShortLinkController` → `ShortLinkService.create` → 校验族（`LinkValidations`/`TargetPolicy`（含恶意 feed 快照）/`UtmMerger`/`LinkTags`/`MatchRule` 写时校验/variants 校验）→ `ShortLinkMapper` + `LinkVariantMapper` | `RedisRateLimiter`、幂等键（指纹信封 v3）、`CodeBloomFilter`、`CacheBus` |
+| 跳转 | `RedirectController` → `ShortLinkService.resolveTarget/resolveForProbe/resolveAndRecord`：`CodeBloomFilter` → absent → `UrlLocalCache`(L1) → Redis(L2) → `ShortLinkRowLoader`+`SingleFlight` → 状态/过期 → `TargetPolicy`（本地名单 + 恶意 feed）→ `LinkAccessTokens` → `ClickFilter` → `MatchRule.filterCandidates` 收窄 → `VariantPicker` → `ClickRecordService.recordClick` | `GatePages`（三种页面） |
 | 点击管道 | `ClickRecordService`（同事务明细+outbox） → `ClickOutboxRelay` → `RabbitClickEventPublisher` → `ClickEventConsumer` → `ClickStatsService`（幂等+聚合）+ `ClickDimensions` + `WebhookService`（投递意图） | `OutboxMapper`、`ClickLogMapper`… |
 | Webhook 投递 | `WebhookDeliveryRelay` → `WebhookTargetGuard` + `PinnedHttpSender` → `WebhookSigner` 签名 HTTP POST | `WebhookDeliveryMapper` |
-| 定时任务族 | `ClickOutboxRelay`、`WebhookDeliveryRelay`、`WebhookAggregateFlusher`、`ClickLogReconciler`、`SentRowCleanup`、`BacklogGauges`（采样）、`CodeBloomFilter` rebuild、`PhishingPolicy` 名单热加载 | 共享 6 线程调度池 |
+| 定时任务族 | `ClickOutboxRelay`、`WebhookDeliveryRelay`、`WebhookAggregateFlusher`、`ClickLogReconciler`、`SentRowCleanup`、`BacklogGauges`（采样）、`CodeBloomFilter` rebuild、`PhishingPolicy` 名单热加载、`MaliciousHostSyncService` feed 同步（默认关） | 共享 6 线程调度池 |
 
 以上归属以 README 文档证据 + 文件清单为底；**方法级调用与行号在对应课程里以源码为准**，差异（若有）登记到 [reference/issues-and-discrepancies.md](reference/issues-and-discrepancies.md)。
 
@@ -137,7 +149,7 @@ com.linkforge
 
 ```mermaid
 flowchart TD
-    A["Tomcat 接收 HTTP 请求"] --> B["Servlet Filter 链（SecurityConfig 装配）<br/>MetricsScrapeToken → JwtAuth → ApiKeyAuth → QrShare"]
+    A["Tomcat 接收 HTTP 请求"] --> B["Servlet Filter 链<br/>CorrelationIdFilter（最高优先级，mint cid）→ SecurityConfig 装配：<br/>MetricsScrapeToken → JwtAuth → ApiKeyAuth → QrShare"]
     B --> C["DispatcherServlet 路由<br/>ShortLinkController.create"]
     C --> D["参数绑定与校验<br/>CreateShortLinkRequest（jakarta validation）"]
     D --> E["业务编排 ShortLinkService.create<br/>限流 → 校验链 → 幂等 → 事务写库"]
@@ -171,7 +183,7 @@ flowchart TD
 
 ## 6. Spring 容器视角的几个关键事实
 
-- Bean 装配以**构造器注入**为主；`@ConfigurationProperties(prefix="linkforge")` 把 14 组业务配置绑进 `LinkForgeProperties`（config 报告，代码证据）。
+- Bean 装配以**构造器注入**为主；`@ConfigurationProperties(prefix="linkforge")` 把 19 组业务配置绑进 `LinkForgeProperties`（3.0.0 新增 auth、maliciousFeed、idempotency 三组，代码证据）。
 - `@MapperScan` 只扫 mapper 包——历史教训：扫太宽会把 `ClickEventPublisher` 接口误注册成 MyBatis mapper（progress 决策 #13）。
 - MyBatis-Plus 只有分页插件一个拦截器；逻辑删除字段 `deleted`（application.yml:91-96）。
 - 调度开关在代码（`@EnableScheduling`），线程容量在配置（yml）——「开关与容量分离」的实例。
@@ -181,9 +193,13 @@ flowchart TD
 
 | 表 | 主要写入者 | 主要读取者 | 时点特征 |
 |----|-----------|-----------|----------|
-| lf_tenant / lf_user | 注册、bootstrap | 登录、认证过滤器、API Key 代身份 | 低频写、每次请求读 |
+| lf_tenant / lf_user | 注册、bootstrap、团队管理（角色/状态/重置） | 登录、认证过滤器（每请求回查状态/角色/token_version）、API Key 代身份 | 低频写、每次请求读 |
+| lf_refresh_token | 登录开 family、refresh 轮换、各类撤销 | refresh 时按哈希锁读 | 会话真相源；撤销与轮换同锁串行 |
+| lf_tenant_invitation | ADMIN 创建/撤销 | 接受时按哈希读 + 条件 UPDATE 抢占 | 单次消费，接受即写 accepted_* |
+| lf_malicious_host | feed 同步 upsert（默认关） | 启动/同步后整表装入内存快照 | 表只是落盘，判定不读它 |
+| lf_webhook_flush_state | Flusher drain 事务内递增 | 同事务锁读 | 每 endpoint 一行，序号随事务回滚 |
 | lf_short_link | 创建/更新/删除 | 跳转行读（singleflight 包裹）、管理面 | 写少读多（跳转热路径） |
-| lf_link_variant | 创建/更新整表替换 | 跳转抽签、详情视图 | 与主链同事务写 |
+| lf_link_variant | 创建/更新整表替换（整集同刻 created_at） | 跳转抽签、详情视图、A/B 报告读当前配置 | 与主链同事务写 |
 | lf_click_log | 跳转同事务（sync 开）+ 消费者回填（sync 关） | 明细分页、UV 统计、对账扫描 | 高频写 |
 | lf_outbox | 跳转同事务 | Outbox Relay 轮询（批量） | 只增改状态，SENT 定期清理 |
 | lf_click_daily / lf_click_dim_daily | 消费者 upsert | stats/breakdown 查询 | 只增计数 |

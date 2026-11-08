@@ -2,7 +2,7 @@
 
 ## 1. 本节学习目标
 
-1. 认全项目的 13 个实体类与 13 张表，说出每个注解（`@TableName`、`@TableId`、`@TableLogic`）的作用。
+1. 认全项目的 16 个实体类与 17 张表（有一张表故意没有实体），说出每个注解（`@TableName`、`@TableId`、`@TableLogic`）的作用。
 2. 掌握 `BaseMapper` 的用法边界：什么时候空壳够用，什么时候必须写自定义 SQL。
 3. 读懂 `LambdaQueryWrapper` 的六个真实实例与 `LambdaUpdateWrapper` 的一个关键例外。
 4. 理解逻辑删除在本项目的两个后果：唯一索引占位与 Bloom 播种语义。
@@ -26,24 +26,30 @@
 | `user/entity/Tenant.java`、`UserAccount.java`（23/26 行） | 租户与用户 | 第 5 | 逻辑删 + 唯一索引交互 |
 | `stats/entity/ClickLog.java` 等 4 个、`webhook/entity/` 3 个 | 统计与投递行 | 第 6 | 快照列与状态机列 |
 | `link/mapper/ShortLinkMapper.java`（24 行） | 自定义 SQL 典型 | 第 7 | 绕过逻辑删的注释全文 |
-| `stats/mapper/OutboxMapper.java`（36 行） | 状态机 SQL | 第 8 | 无 @Mapper 注解的对照 |
-| `stats/mapper/ClickDailyMapper.java`（32 行） | 计数 upsert | 第 9 | ON DUPLICATE KEY 实例 |
+| `stats/mapper/OutboxMapper.java`（40 行） | 状态机 SQL（mark 带 status 守卫） | 第 8 | 无 @Mapper 注解的对照 |
+| `auth/mapper/RefreshTokenMapper.java`（44 行）、`user/mapper/UserAccountMapper.java`（45 行） | 锁读与原子自增 | 第 9 | FOR UPDATE / incrementTokenVersion（5.4 的地基） |
+| `webhook/mapper/WebhookFlushStateMapper.java`（32 行） | 无实体表的 Mapper | 第 10 | ensureRow/selectSeqForUpdate/updateSeq 三件套 |
+| `stats/mapper/ClickDailyMapper.java`（32 行） | 计数 upsert | 第 11 | ON DUPLICATE KEY 实例 |
 | `config/MybatisPlusConfig.java`（18 行） | 分页插件 | 第 10 | 三行配置 |
 
 ## 4. 类的定位
 
-Entity 是数据库行在 Java 里的像，Mapper 是对这张像做增删改查的接口。本项目 13 个实体全部用 Lombok `@Data`（自动 getter/setter），13 个 Mapper 全部继承 `BaseMapper<T>` 拿到几十个通用方法，自定义 SQL 只在通用方法表达不了时才写。位置见[包结构图](../../diagrams/archify/html/03-package-map.html)：entity/mapper 子包在五个业务包里成对出现。表间关系见[数据库 ERD](../../diagrams/archify/html/05-database-erd.html)（13 表 121 列，逐列录自迁移文件）。
+Entity 是数据库行在 Java 里的像，Mapper 是对这张像做增删改查的接口。本项目 16 个实体全部用 Lombok `@Data`（自动 getter/setter），17 个 Mapper 全部继承 `BaseMapper<T>` 拿到几十个通用方法，自定义 SQL 只在通用方法表达不了时才写。唯一的例外是 `lf_webhook_flush_state`：它只有 endpoint_id 与一个长整型序号，没有实体类，`WebhookFlushStateMapper` 直接读写标量——形状简单到不值得建模，这本身是个判断样本。位置见[包结构图](../../diagrams/archify/html/03-package-map.html)：entity/mapper 子包在六个业务包里成对出现（批次 2 新增 auth 包）。表间关系见[数据库 ERD](../../diagrams/archify/html/05-database-erd.html)（17 表，逐列录自迁移文件）。
 
 ## 5. 核心源码详解
 
-### 5.1 十三个实体一张表
+### 5.1 实体全表（16 实体 / 17 表）
 
 | 实体 | 表 | 主键策略 | @TableLogic | 特别之处 |
 |------|----|----------|-------------|----------|
-| ShortLink | lf_short_link | AUTO | 有 | accessPasswordHash 永不出库 |
-| LinkVariant | lf_link_variant | AUTO | 无（硬删） | variantKey 大小写敏感（V10） |
+| ShortLink | lf_short_link | AUTO | 有 | accessPasswordHash 永不出库；tags 单列（V13） |
+| LinkVariant | lf_link_variant | AUTO | 无（硬删） | variantKey 大小写敏感（V10）；matchRule JSON 列（V13） |
 | Tenant | lf_tenant | AUTO | 有 | uk_tenant_name 唯一 |
-| UserAccount | lf_user | AUTO | 有 | tenantRole（V8） |
+| UserAccount | lf_user | AUTO | 有 | tenantRole（V8）；tokenVersion、mustChangePassword（V11） |
+| RefreshToken | lf_refresh_token | AUTO | 无 | 只存哈希；family 轮换链（V11）；实体在 auth 包根而非 entity 子包 |
+| TenantInvitation | lf_tenant_invitation | AUTO | 无 | 只存哈希；accepted/revoked 标记定单次语义（V12） |
+| MaliciousHost | lf_malicious_host | AUTO | 无 | feed 落表，判定不读它（V14） |
+| （无实体） | lf_webhook_flush_state | endpoint_id 即主键 | — | 只有 flush_seq 一列状态，Mapper 直读写（V15） |
 | ApiKey | lf_api_key | AUTO | 无 | key_hash 唯一索引承重 |
 | ClickLog | lf_click_log | AUTO | 无 | code 是快照列，eventId 回填标记 |
 | ClickDaily | lf_click_daily | AUTO | 无 | uk(link_id,stat_date) 幂等落桶 |
@@ -104,11 +110,13 @@ public class ShortLink {
 
 ```java
 @Mapper
-public interface TenantMapper extends BaseMapper<Tenant> {
+public interface ConsumedEventMapper extends BaseMapper<ConsumedEvent> {
 }
 ```
 
-（user/mapper/TenantMapper.java:7-9，全文）
+（stats/mapper/ConsumedEventMapper.java，全文 9 行）
+
+对照组是 TenantMapper：它曾经也是这样的空壳，批次 2b 给它加了一条 `selectForUpdate`（租户行锁，5.4 的锁序起点）后就不再是空壳了——**空壳与否取决于这张表有没有「通用 CRUD 表达不了」的动作**，租户表在团队协作落地后有了。
 
 Mapper 接口的代理由 `@MapperScan` 生成（LinkForgeApplication.java:8-10）：
 
@@ -116,16 +124,16 @@ Mapper 接口的代理由 `@MapperScan` 生成（LinkForgeApplication.java:8-10�
 @SpringBootApplication
 // Explicit mapper packages: a broad "com.linkforge" scan also proxied plain
 // interfaces like ClickEventPublisher into mapper beans.
-@MapperScan({"com.linkforge.user.mapper", "com.linkforge.link.mapper", "com.linkforge.stats.mapper", "com.linkforge.apikey.mapper", "com.linkforge.webhook.mapper"})
+@MapperScan({"com.linkforge.user.mapper", "com.linkforge.link.mapper", "com.linkforge.stats.mapper", "com.linkforge.apikey.mapper", "com.linkforge.webhook.mapper", "com.linkforge.auth.mapper"})
 ```
 
-（本项目实现）注释记录了踩坑：宽扫描会把非 Mapper 接口（如 ClickEventPublisher）也代理成 Bean。显式列五个包是修复。（对照）多数 Mapper 同时标了 `@Mapper`，OutboxMapper 没有（stats/mapper/OutboxMapper.java:12）也不缺代理——`@MapperScan` 已覆盖，`@Mapper` 是冗余保险。两套机制并存，读懂任意一个即可。
+（本项目实现）注释记录了踩坑：宽扫描会把非 Mapper 接口（如 ClickEventPublisher）也代理成 Bean。显式列包是修复；新包进来要手动登记——批次 2 新增的 `auth.mapper` 就是这样加进清单的（这也是「新 mapper 放已登记包可免登记、放新包必须改启动类」的由来）。（对照）多数 Mapper 同时标了 `@Mapper`，OutboxMapper 没有（stats/mapper/OutboxMapper.java）也不缺代理——`@MapperScan` 已覆盖，`@Mapper` 是冗余保险。两套机制并存，读懂任意一个即可。
 
 ### 5.3 LambdaQueryWrapper 六实例
 
 （框架行为）`LambdaQueryWrapper<T>` 用方法引用声明列，编译期校验字段存在，重构改名不会静默断链。等价于手写 `WHERE` 子句。
 
-**实例 1：唯一索引点查**（ApiKeyService.java:119-122）：
+**实例 1：唯一索引点查**（ApiKeyService.java:149-152）：
 
 ```java
     public ApiKey authenticate(String plaintextKey) {
@@ -136,7 +144,7 @@ Mapper 接口的代理由 `@MapperScan` 生成（LinkForgeApplication.java:8-10�
 
 明文 key 先做 SHA-256 再查 `uk_api_key_hash` 唯一索引。`selectOne` 查到多行会抛异常，唯一索引保证这里不会。
 
-**实例 2：双条件组合**（AuthService.java:42-49）：
+**实例 2：双条件组合**（AuthService.java:72-77，login 段）：
 
 ```java
         Tenant tenant = tenantMapper.selectOne(new LambdaQueryWrapper<Tenant>()
@@ -149,10 +157,11 @@ Mapper 接口的代理由 `@MapperScan` 生成（LinkForgeApplication.java:8-10�
 
 两个 `.eq` 默认 AND 连接，对应唯一索引 `uk_tenant_username(tenant_id, username)`。
 
-**实例 3：条件分支 + 分页**（ShortLinkService.java:290-301）：
+**实例 3：条件分支 + 分页**（ShortLinkService.java:487-501）：
 
 ```java
-    private PageResponse<ShortLinkDetail> pageOwn(AuthUser user, long current, long pageSize) {
+    private PageResponse<ShortLinkDetail> pageOwn(AuthUser user, long current, long pageSize,
+                                                  String keyword, String tag) {
         LambdaQueryWrapper<ShortLink> query = new LambdaQueryWrapper<ShortLink>()
                 .orderByDesc(ShortLink::getId);
         if (isTenantWide(user)) {
@@ -166,11 +175,11 @@ Mapper 接口的代理由 `@MapperScan` 生成（LinkForgeApplication.java:8-10�
     }
 ```
 
-（本项目实现）归属分支决定 WHERE 条件：TENANT scope 按 `tenant_id`，其余按 `created_by`。`selectPage` 返回的 `Page` 带总行数与页数，转换成 2.1 课的 `PageResponse` 五字段。排序写进 wrapper 而不是 SQL 字符串。
+（本项目实现）归属分支决定 WHERE 条件：TENANT scope 按 `tenant_id`，其余按 `created_by`。其后 `applyFilters`（`:510-528`）把批次 3a 的筛选叠进来：keyword 对 code/original_url/title 三列做转义后的 LIKE 子串匹配（`%`、`_`、`\` 先转义，搜 "50%" 就是字面 50%），tag 走 `query.apply("FIND_IN_SET({0}, tags)", normalized)` 整词匹配——参数占位 `{0}` 而不是字符串拼接，防注入的姿势与 wrapper 一脉。`selectPage` 返回的 `Page` 带总行数与页数，转换成 2.1 课的 `PageResponse` 五字段。排序写进 wrapper 而不是 SQL 字符串。
 
-**实例 4：明细表同款**（ClickStatsService.java:144-148）：`eq(ClickLog::getLinkId, linkId)` 加 `orderByDesc(ClickLog::getClickedAt)` 再 selectPage，同一套 API 换一张表，明细页固定 1..100 条（StatsController.java:63）防止拖库。
+**实例 4：明细表同款**（ClickStatsService.java:330-338）：`eq(ClickLog::getLinkId, linkId)` 加 `orderByDesc(ClickLog::getClickedAt)` 再 selectPage，同一套 API 换一张表，明细页分页防止拖库。
 
-**实例 5：更新定位**（ShortLinkService.java:499-501）用到了 Update 变体：
+**实例 5：更新定位**（ShortLinkService.java update 段的事务内）用到了 Update 变体：
 
 ```java
             shortLinkMapper.update(null, new LambdaUpdateWrapper<ShortLink>()
@@ -178,7 +187,7 @@ Mapper 接口的代理由 `@MapperScan` 生成（LinkForgeApplication.java:8-10�
                     .set(ShortLink::getAccessPasswordHash, null));
 ```
 
-注释（:497-498）是本课最重要的警告：
+旁边的注释是本课最重要的警告：
 
 ```java
             // MyBatis-Plus's default NOT_NULL update strategy skips null fields in
@@ -229,15 +238,29 @@ WebhookAggregateBufferMapper.upsertClick（WebhookAggregateBufferMapper.java:27-
 
 撞键时 late 取「原值按位或新值」，样本三列不更新，javadoc（:24-26）写明保留首击语义。
 
-**状态机条件更新**（OutboxMapper.java:25-27）：
+**状态机条件更新**（OutboxMapper.java）：
 
 ```java
     @Update("UPDATE lf_outbox SET attempts = attempts + 1, next_attempt_at = "
-            + "DATE_ADD(NOW(), INTERVAL #{backoffSeconds} SECOND) WHERE id = #{id}")
+            + "DATE_ADD(NOW(), INTERVAL #{backoffSeconds} SECOND) WHERE id = #{id} AND status = 'PENDING'")
     int markRetry(@Param("id") long id, @Param("backoffSeconds") long backoffSeconds);
 ```
 
-`attempts = attempts + 1` 是数据库侧自增，两个 relay 线程同时跑到也不会丢计数。`DATE_ADD(NOW(), ...)` 用数据库时钟排重试时间，为什么不信任 JVM 时钟，4.3 课与 [4.2 Flyway](02-flyway-migrations.md) 的 V 系列注释会给出完整论证。
+`attempts = attempts + 1` 是数据库侧自增，两个 relay 线程同时跑到也不会丢计数。`DATE_ADD(NOW(), ...)` 用数据库时钟排重试时间，为什么不信任 JVM 时钟，4.3 课与 [4.2 Flyway](02-flyway-migrations.md) 的 V 系列注释会给出完整论证。`WHERE` 里的 `AND status = 'PENDING'` 是批次 1（T-M3）给三条 mark 统一加的 **CAS 守卫**：另一个 relay 实例（或陈旧批次）已经把行标成 SENT 后，本次 mark 更新 0 行、无声作废，绝不把 SENT 翻回 FAILED 再重放一次——与 WebhookDeliveryMapper 一直以来的标准对齐（10.2 对照讲）。
+
+**锁读与原子自增**（批次 2/修复波新增的一类 SQL）：
+
+```java
+    @Select("SELECT * FROM lf_user WHERE id = #{id} FOR UPDATE")
+    UserAccount selectForUpdate(@Param("id") Long id);
+
+    @Update("UPDATE lf_user SET token_version = token_version + 1 WHERE id = #{id}")
+    int incrementTokenVersion(@Param("id") Long id);
+```
+
+（`UserAccountMapper.java:24-34` 一带）
+
+两个要点。其一，`FOR UPDATE` 是**锁定当前读**：绕过 MyBatis-Plus 逻辑删除（所以调用方必须自己判 deleted 标记），读到的是最新已提交的行并持有行锁到事务结束——5.4 全部锁序合同的地基。其二，`token_version` 的自增是**列内表达式**而不是「读出来 +1 再写回」：后者在并发下会丢更新，前者由数据库单语句原子完成。同类还有 `RefreshTokenMapper.rotate`（条件 UPDATE 当 CAS 用）与 `WebhookFlushStateMapper` 的 ensureRow/selectSeqForUpdate/updateSeq（序号的锁读-递增-写回必须在同一事务里，13.2）。**判据升级**：当一个字段的写语义是「基于当前值的状态迁移」而不是「赋一个新值」时，BaseMapper 就不够了，写注解 SQL。
 
 **join 与聚合**（ClickLogMapper.java:20-24）：
 
@@ -264,13 +287,13 @@ UV 是 `COUNT(DISTINCT ip)`，wrapper 表达不了，原生 SQL 一行解决。�
 
 ### 5.6 逻辑删除与唯一索引的交互
 
-删除短链走逻辑删（ShortLinkService.java:543-558，4.3 课逐行讲），javadoc 第一句是结论：
+删除短链走逻辑删（ShortLinkService.java:1006-1018，4.3 课逐行讲），javadoc 第一句是结论：
 
 ```java
     /** Logical delete: the code stays reserved (uk_code) and cannot be reused. ... */
 ```
 
-（ShortLinkService.java:543）
+（ShortLinkService.java:1004-1005）
 
 （本项目实现）三个连锁事实：
 1. 逻辑删只改 `deleted=1`，行还在，`uk_code` 唯一索引照常约束，所以被删的码永远不能被新短链复用。
@@ -283,14 +306,14 @@ UV 是 `COUNT(DISTINCT ip)`，wrapper 表达不了，原生 SQL 一行解决。�
 
 **逻辑删除的通用代价**（框架行为）。所有自动查询都隐式 `AND deleted = 0`；统计「历史总量」必须用原生 SQL 绕过。本项目 ClickLog 等事实表干脆不设 deleted 列（append-only），只有租户/用户/短链三个业务实体才有。
 
-**IdType 三态**（框架行为）。AUTO 数据库自增（本项目 12 个实体）；INPUT 代码赋值（ConsumedEvent）；ASSIGN_ID 雪花 ID（未用）。选 AUTO 的隐含要求：insert 后立刻需要 id 的代码必须把实体对象传进 mapper（MyBatis 回填），4.3 课 recordClick 用 `logRow.getId()` 拼 eventId 正是依赖回填。
+**IdType 三态**（框架行为）。AUTO 数据库自增（本项目 15 个实体）；INPUT 代码赋值（ConsumedEvent）；ASSIGN_ID 雪花 ID（未用）。选 AUTO 的隐含要求：insert 后立刻需要 id 的代码必须把实体对象传进 mapper（MyBatis 回填），4.3 课 recordClick 用 `logRow.getId()` 拼 eventId 正是依赖回填。
 
 **BaseMapper 的 selectOne 语义**（框架行为）。多于一行抛 `TooManyResultsException`。「业务上唯一」必须真的唯一：ApiKey 靠 key_hash 唯一索引，Tenant 靠 uk_tenant_name，代码层不用再判 list.size()。
 
 ## 7. 可视化
 
-- [数据库 ERD](../../diagrams/archify/html/05-database-erd.html)：13 表 121 列与 21 条逻辑外键，本节实体表逐列对应。
-- [包结构图](../../diagrams/archify/html/03-package-map.html)：五个业务包内 entity/mapper 的成对分布。
+- [数据库 ERD](../../diagrams/archify/html/05-database-erd.html)：17 表与逻辑外键，本节实体表逐列对应。
+- [包结构图](../../diagrams/archify/html/03-package-map.html)：六个业务包内 entity/mapper 的成对分布。
 
 阅读顺序：先 ERD 找 lf_short_link，看它的 uk_code 与 lf_link_variant 的连线；再回包结构图确认 ShortLinkMapper 只依赖 ShortLink 一个实体。
 
@@ -298,25 +321,25 @@ UV 是 `COUNT(DISTINCT ip)`，wrapper 表达不了，原生 SQL 一行解决。�
 
 走一遍 `GET /api/links?page=1&size=20`（普通 USER，已有 45 条链接）。
 
-1. Controller 进来（ShortLinkController.java:50-54），调用 `shortLinkService.list(1, 20)`。
-2. list 规整参数（ShortLinkService.java:285-288）：page 至少 1，size 越界回 20，进 pageOwn。
-3. wrapper 组装：`ORDER BY id DESC` 加 `WHERE created_by = ?`（:291-297）。注意不用显式加 `deleted = 0`，MyBatis-Plus 自动追加。
+1. Controller 进来（ShortLinkController.java:50-54），调用 `shortLinkService.list(1, 20, keyword, tag)`。
+2. list 规整参数（ShortLinkService.java:482-484）：page 至少 1，size 越界回 20，进 pageOwn。
+3. wrapper 组装：`ORDER BY id DESC` 加 `WHERE created_by = ?`，再叠 applyFilters 的 keyword/tag 条件。注意不用显式加 `deleted = 0`，MyBatis-Plus 自动追加。
 4. `selectPage` 触发分页拦截器（MybatisPlusConfig.java:15）：先 `SELECT COUNT(*) ... WHERE created_by = ? AND deleted = 0` 得 45，再原查询追加 `LIMIT 0, 20`。
-5. 20 行 ShortLink 实体映射回 Java 对象，`toDetail` 转 DTO（:299）。
-6. 组装 PageResponse{records=20条, total=45, current=1, size=20, pages=3}（:300），套 ApiResponse 返回。
+5. 20 行 ShortLink 实体映射回 Java 对象，`toDetailWithVariants` 转 DTO。
+6. 组装 PageResponse{records=20条, total=45, current=1, size=20, pages=3}，套 ApiResponse 返回。
 
 再看删除后：第 45 条被 `deleteById` 软删（deleted=1），下一页查询自动排除它，但 `selectAllCodes`（Bloom 播种）仍会读出它的码，导致「重建 Bloom 后已删码依旧 404 在库前」——这正是 ShortLinkMapper.java:13-17 注释设计的行为。
 
 ## 9. 为什么这样设计
 
-- 实体直接用 Lombok `@Data` 而不做 DTO 隔离层：13 张表与实体一一对应，字段少且稳定，多一层 BeanUtils 复制只增加出错面。（推断：从 DTO 只在 API 边界存在的模式反推。）
+- 实体直接用 Lombok `@Data` 而不做 DTO 隔离层：表与实体近乎一一对应（唯一的例外是无实体的 flush_state 表），字段少且稳定，多一层 BeanUtils 复制只增加出错面。（推断：从 DTO 只在 API 边界存在的模式反推。）
 - 自定义 SQL 用注解不用 XML：SQL 全部短（1-3 行）、集中在 Mapper 接口里肉眼可读，XML 的动态 SQL 能力本项目用不上。
 - 逻辑删只给三个业务实体（租户/用户/短链）：它们的行有「保留痕迹」的业务诉求（码不可复用、用户可审计）；流水与投递行用状态机（status 列）表达生命周期，删除即物理删（retention 清理，模块 14）。
 - 分页上限纪律（size<=100）：MyBatis-Plus 不会替你限制 size，应用层不设防就是全表下载。（StatsController.java:63 与 list 的 :287 两处都在防。）
 
 ## 10. 本节总结
 
-- 13 实体 13 表：12 个 AUTO 自增主键，ConsumedEvent 用 INPUT；3 个实体带 `@TableLogic`。
+- 16 实体 17 表：15 个 AUTO 自增主键，ConsumedEvent 用 INPUT，lf_webhook_flush_state 无实体；3 个实体带 `@TableLogic`。
 - BaseMapper 覆盖通用 CRUD；绕逻辑删、upsert、join、聚合时写 `@Select/@Insert/@Update` 注解 SQL。
 - `updateById` 跳过 null 字段，清空密码必须 `LambdaUpdateWrapper.set(col, null)`（D-Bw345-32）。
 - 分页插件三行配置，`selectPage` 才真的发 LIMIT；依赖 mybatis-plus-jsqlparser。

@@ -19,13 +19,13 @@
 |------|------|----------|------------|
 | `src/main/java/com/linkforge/common/result/ApiResponse.java`（27 行） | 统一响应壳 | 第 1 | 所有接口的返回外皮 |
 | `src/main/java/com/linkforge/common/result/PageResponse.java`（16 行） | 分页响应壳 | 第 2 | 列表接口专用 |
-| `src/main/java/com/linkforge/common/exception/BizException.java`（18 行） | 业务异常基类 | 第 3 | 业务拒绝的载体 |
+| `src/main/java/com/linkforge/common/exception/BizException.java`（50 行） | 业务异常基类（httpStatus/code 双字段 + cause） | 第 3 | 业务拒绝的载体 |
 | `src/main/java/com/linkforge/common/exception/RateLimitedException.java`（18 行） | 限流异常 | 第 4 | 唯一带响应头的业务异常 |
-| `src/main/java/com/linkforge/common/exception/GlobalExceptionHandler.java`（78 行） | 异常到 HTTP 的全映射 | 第 5 | 本节核心 |
+| `src/main/java/com/linkforge/common/exception/GlobalExceptionHandler.java`（105 行） | 异常到 HTTP 的全映射 | 第 5 | 本节核心 |
 | `src/main/java/com/linkforge/link/dto/CreateShortLinkRequest.java`（看 :16-24） | 校验注解实例 | 第 6 | 校验链路的入口素材 |
 | `src/main/java/com/linkforge/user/controller/AuthController.java`（看 :23-31） | `@Valid` 用法 | 第 7 | 校验链路的触发点 |
 
-common 包只有 9 个文件，本节覆盖其中 5 个，剩下 3 个限流类在模块 09、1 个工具类在 [2.2 日志与工具类](02-logging-utils-clientip.md)。
+common 包现有 11 个文件，本节覆盖其中 5 个，剩下 3 个限流类在模块 09、工具类与 CorrelationIdFilter 在 [2.2 日志与工具类](02-logging-utils-clientip.md)。
 
 ## 4. 类的定位
 
@@ -84,28 +84,54 @@ public class PageResponse<T> {
 
 只有 `@AllArgsConstructor`，没有静态工厂，五个字段全部由调用方填。（本项目实现）这是因为分页数据来自 MyBatis-Plus 的 `Page` 对象，转换处自己算 pages。字段语义：records 当前页数据，total 总条数，current 页码，size 每页条数，pages 总页数。泛型 `List<T>` 对应记录类型。
 
-### 5.3 BizException 家族（BizException.java:5-18 与 RateLimitedException.java:9-18）
+### 5.3 BizException 家族（BizException.java 与 RateLimitedException.java:9-18）
+
+批次 1 把 BizException 从单字段扩成**双字段**（类注释 `:4-14` 是完整的设计说明，必读）：
 
 ```java
 @Getter
 public class BizException extends RuntimeException {
 
+    private final int httpStatus;
     private final int code;
 
     public BizException(String message) {
         this(400, message);
     }
 
+    public BizException(String message, Throwable cause) {
+        this(400, 400, message, cause);
+    }
+
     public BizException(int code, String message) {
-        super(message);
+        this(code, code, message, null);
+    }
+
+    public BizException(int code, String message, Throwable cause) {
+        this(code, code, message, cause);
+    }
+
+    public BizException(int httpStatus, int code, String message) {
+        this(httpStatus, code, message, null);
+    }
+
+    public BizException(int httpStatus, int code, String message, Throwable cause) {
+        super(message, cause);
+        this.httpStatus = httpStatus;
         this.code = code;
     }
 }
 ```
 
-（BizException.java:5-18）
+（BizException.java:16-49）
 
-两个构造器的分工：单参数默认 400（多数业务拒绝是输入问题），双参数自定义状态码。项目里 `throw new BizException(404, "short link not found")`（ShortLinkService.java:759）与 `throw new BizException(410, "short link expired")`（:762）都走双参数。（Java 语言知识）继承 RuntimeException 意味着方法签名不用声明 throws，调用链上任何一层都能抛，由最外层统一接。
+为什么要拆：旧版只有一个 `code` 同时干两件事——既是响应体的业务码，又被 handler 拿去当 HTTP 状态。业务码一旦不是合法的 HTTP 状态语义（比如想用一个自定义的 4xxxx 业务码），两者必然脱节（handler 把状态钳到 400、body 还留着原码）。拆开后：
+
+- **旧构造器双写**：`(code, message)` 把 httpStatus 与 code 都写成 code，全项目既有抛出点行为逐字不变——这是兼容层，不是新用法。
+- **三参构造器** `(httpStatus, code, message)` 给「业务码有自己的编号体系」的新抛出点用：HTTP 状态归状态，body 的 code 归 code。
+- **cause 构造器**：接住并重抛的站点（QR 渲染、Bloom 重建等）以前只能丢掉原始堆栈，现在可以把 cause 链带上——它与 5.4 的日志纪律是配套的：handler 会把带 cause 的异常在服务端记一次全栈（N1）。
+
+项目里 `throw new BizException(404, "short link not found")` 与 `throw new BizException(410, "short link expired")`（ShortLinkService resolveTarget 段）都走双参数旧构造器。（Java 语言知识）继承 RuntimeException 意味着方法签名不用声明 throws，调用链上任何一层都能抛，由最外层统一接。
 
 ```java
 @Getter
@@ -122,7 +148,7 @@ public class RateLimitedException extends BizException {
 
 （RateLimitedException.java:9-18）
 
-子类锁死 429 与固定文案，额外携带 `retryAfterSeconds`。javadoc（:5-8）说明设计意图：响应体与普通 429 完全一致，只是多一个 `Retry-After` 响应头。它由限流器在拒绝时抛出（ShortLinkService.java:137）。
+子类锁死 429 与固定文案，额外携带 `retryAfterSeconds`。javadoc（:5-8）说明设计意图：响应体与普通 429 完全一致，只是多一个 `Retry-After` 响应头。它由各限流点在拒绝时抛出（创建、登录、导入、解锁等，见模块 09）。
 
 ### 5.4 GlobalExceptionHandler 全映射（GlobalExceptionHandler.java:16-77）
 
@@ -130,27 +156,31 @@ public class RateLimitedException extends BizException {
 
 | 异常类型 | HTTP 状态 | 响应体 | 行号 |
 |----------|-----------|--------|------|
-| RateLimitedException | 429 + Retry-After 头 | fail(code, message) | :20-25 |
-| BizException | code 在 [400,599] 用 code，否则 400 | fail(code, message) | :27-31 |
-| MethodArgumentNotValidException / BindException | 400 | 第一个字段错误的 message | :33-43 |
-| HttpMessageNotReadableException | 400 | "malformed request body" | :45-49 |
-| MissingServletRequestParameterException | 400 | "{参数名} is required" | :56-60 |
-| MaxUploadSizeExceededException | 400 | "uploaded file exceeds the size limit" | :66-70 |
-| Exception（兜底） | 500 | "internal error" | :72-77 |
+| RateLimitedException | 429 + Retry-After 头 | fail(code, message) | :27-32 |
+| BizException | httpStatus 在 [400,599] 用它，否则 400；5xx/带 cause 时服务端记一次全栈 | fail(code, message) | :35-56 |
+| MethodArgumentNotValidException / BindException | 400 | 第一个字段错误的 message | :64-73 |
+| HttpMessageNotReadableException | 400 | "malformed request body" | :75-79 |
+| MissingServletRequestParameterException | 400 | "{参数名} is required" | :86-90 |
+| MaxUploadSizeExceededException | 400 | "uploaded file exceeds the size limit" | :96-100 |
+| Exception（兜底） | 500 | "internal error" | :102-105 |
 
-两个分支值得逐行看。BizException 分支（:27-31）：
+两个分支值得逐行看。BizException 分支（:35-56）：
 
 ```java
     @ExceptionHandler(BizException.class)
     public ResponseEntity<ApiResponse<Void>> handleBiz(BizException ex) {
-        int status = ex.getCode() >= 400 && ex.getCode() <= 599 ? ex.getCode() : 400;
+        int status = ex.getHttpStatus() >= 400 && ex.getHttpStatus() <= 599 ? ex.getHttpStatus() : 400;
+        if (status >= 500 || ex.getCause() != null) {
+            log.error("business failure: code={} cid={}", ex.getCode(),
+                    CorrelationIdFilter.currentId(currentRequest()), ex);
+        }
         return ResponseEntity.status(status).body(ApiResponse.fail(ex.getCode(), ex.getMessage()));
     }
 ```
 
-状态码不盲信业务给的 code，先做 [400,599] 区间检查，越界一律 400。（推断）这是防呆：若某处写出 `new BizException(302, ...)`，直接拿去做状态码会发出重定向语义的失败响应，检查把损失压到 400。
+两件事。其一，状态码取 `httpStatus` 字段（不再是 code），区间检查保留作防呆网：旧构造器双写出的怪值（如 httpStatus=200）仍被钳到 400，body 的 code 则原样透传。其二，**日志纪律（S/N 波 N1）**：handler 是 BizException 在服务端的**唯一**全栈记录点——状态 ≥500（服务端故障）或带 cause 的异常，在这里 `log.error` 恰好一次，带上业务 code 与本次请求的 correlation id（2.2 讲 cid 的来路）；普通 4xx 业务拒绝不记栈（刷屏无信息）。配套纪律是抛出点**不许**自己再记一遍同一堆栈：历史上 Bloom 重建失败就是双记的重灾区，现已改成只抛带 cause 的 BizException（wire 文案固定 `bloom rebuild failed`，底层细节只进这行日志）。wire 侧永远只有异常的固定 message：cause 的文本、SQL、连接细节绝不外泄，cid 是客户端与服务端日志唯一的对账键。
 
-兜底分支（:72-77）：
+兜底分支（:102-105）：
 
 ```java
     @ExceptionHandler(Exception.class)
@@ -202,9 +232,9 @@ public class RateLimitedException extends BizException {
 
 `instanceof X manv` 是 Java 17 的模式匹配写法（Java 语言知识），判断类型顺便得到强类型变量。只取第一个字段错误是刻意简化，用户改一处重试再看到下一处。响应体走 5.4 表的第三行。
 
-### 5.6 上传超限分支的前置条件（application.yml:13-17 加 GlobalExceptionHandler.java:62-70）
+### 5.6 上传超限分支的前置条件（application.yml:13-17 加 GlobalExceptionHandler.java:92-100）
 
-yml 侧把上传限制为单文件 256KB、单请求 512KB（注释 D-C3-25：只有 CSV 导入用上传）。handler 侧的 javadoc 写明为什么需要这个专门分支：multipart 解析器在请求进入任何 controller 之前就抛 `MaxUploadSizeExceededException`，没有这个分支时它会掉进兜底变 500，而「文件太大」明明是客户端错误。这是「漏进兜底变 500」的第二个真实案例（第一个见 :51-55 javadoc 里的缺参数案例，曾让 `GET /stats/breakdown` 不带 dim 参数时返回 500）。
+yml 侧把上传限制为单文件 256KB、单请求 512KB（注释 D-C3-25：只有 CSV 导入用上传）。handler 侧的 javadoc 写明为什么需要这个专门分支：multipart 解析器在请求进入任何 controller 之前就抛 `MaxUploadSizeExceededException`，没有这个分支时它会掉进兜底变 500，而「文件太大」明明是客户端错误。这是「漏进兜底变 500」的第二个真实案例（第一个见缺参数分支的 javadoc，曾让 `GET /stats/breakdown` 不带 dim 参数时返回 500）。
 
 ## 6. 技术原理补充
 
@@ -212,7 +242,7 @@ yml 侧把上传限制为单文件 256KB、单请求 512KB（注释 D-C3-25：�
 
 **异常当控制流的适用范围**（本项目实现加推断）。本项目用异常表达两类业务结果：资源不存在（404）、请求不合法（400/429）。路径短、栈不深，代价可控；好处是主流程代码没有层层 if 判断「失败了吗」。高频热路径（跳转）同样用它，说明作者判断异常开销在此流量下可接受（推断，无基准数字支撑，见 progress.md 对性能口径的约束）。
 
-**code 与 HTTP 状态码的双轨**（本项目实现）。body 里的 code 携带业务语义（0 成功，4xx/5xx 对应状态），HTTP 状态码本身用于网关、监控、重试策略。两者大多数时候相等，由 5.4 第二行保证。
+**code 与 HTTP 状态码的双轨**（本项目实现）。body 里的 code 携带业务语义（0 成功，非 0 是业务码），HTTP 状态码用于网关、监控、重试策略。旧版两者是同一个字段、大多数时候相等；批次 1 拆成 httpStatus/code 双字段后，相等只是旧构造器双写的默认结果，新代码可以让它们有意不同（如 HTTP 400 配一个自定义业务码）。handler 的区间检查仍在，防的是双写出的怪值。
 
 ## 7. 可视化
 
@@ -224,51 +254,51 @@ yml 侧把上传限制为单文件 256KB、单请求 512KB（注释 D-C3-25：�
 
 ## 8. 项目中的真实执行过程
 
-走一遍完整的 429（创建短链被限流，代码 ShortLinkService.java:131-138）。
+走一遍完整的 429（创建短链被限流，代码 ShortLinkService.create 的限流段）。
 
-1. 用户 1 分钟内第 31 次调用 `POST /api/links`。
-2. `create()` 开头向限流器申请配额，`decision.allowed()` 为 false。
-3. 代码先给指标 `linkforge.ratelimit.rejected{entry=create}` 加一，再 `throw new RateLimitedException(decision.retryAfterSeconds())`（:136-137）。
+1. 用户 1 分钟内第 31 次调用 `POST /api/links`（且这次没有命中可重放的幂等键——重放先于限流判定，6.2）。
+2. `create()` 向限流器申请配额，`decision.allowed()` 为 false。
+3. 代码先给指标 `linkforge.ratelimit.rejected{entry=create}` 加一，再 `throw new RateLimitedException(decision.retryAfterSeconds())`。
 4. 异常沿调用栈向上冒，controller 没有 try/catch，冒到 DispatcherServlet。
-5. `GlobalExceptionHandler.handleRateLimited`（:20-25）命中，构造 429 响应，`Retry-After` 头填限流器算出的秒数，body 是 `{"code":429,"message":"too many requests, retry later","data":null}`。
+5. `GlobalExceptionHandler.handleRateLimited`（:27-32）命中，构造 429 响应，`Retry-After` 头填限流器算出的秒数，body 是 `{"code":429,"message":"too many requests, retry later","data":null}`。
 6. 用户拿到 429，浏览器或网关可以按 Retry-After 决定何时重试。
 
-再走一遍 400（校验失败）：客户端提交 originalUrl 为空 → `@NotBlank` 失败 → 抛 `MethodArgumentNotValidException` → :33-43 命中 → 400 加 `{"code":400,"message":"originalUrl required",...}`。两条路径业务代码都是一行 throw，响应拼装全部集中在 handler。
+再走一遍 400（校验失败）：客户端提交 originalUrl 为空 → `@NotBlank` 失败 → 抛 `MethodArgumentNotValidException` → 校验分支命中 → 400 加 `{"code":400,"message":"originalUrl required",...}`。两条路径业务代码都是一行 throw，响应拼装全部集中在 handler。
 
 ## 9. 为什么这样设计
 
 - 响应收进两个壳。前端只学一种结构，错误提示只看 message，这是接口稳定性的最低保障。（推断：单一前端配套使用）
 - 业务异常带 code 而不是只带 message。同一个「短链不存在」在详情接口是 404、跳转接口也是 404，code 让 handler 能机械映射，不用为每种消息写分支。
 - 429 单独成类只为一个响应头。普通 BizException 挂不了 Retry-After，为它扩字段会污染所有业务异常，继承是这里的低成本正解。
-- 4xx 不打栈、5xx 打栈、对外只给笼统文案。日志成本花在服务端故障上，客户端错误靠计数指标观察（2.2 课的日志纪律一节）。
+- 4xx 不打栈、5xx 与带 cause 的业务异常在 handler 恰记一次、对外只给固定文案。日志成本花在服务端故障上，客户端错误靠计数指标观察；「恰一次」靠的是抛出点不自记的配套纪律（2.2 课的日志纪律一节）。
 
 ## 10. 本节总结
 
 - `ApiResponse{code,message,data}`，code=0 成功；`PageResponse` 五字段由调用方组装。
-- `BizException(message)` 默认 400，`BizException(code,message)` 自定；`RateLimitedException` 固定 429 加 Retry-After 秒数。
-- 七分支映射表背下来：限流 429、业务码越界回 400、校验与缺参和坏 JSON 和超限上传 400、其余 500。
+- `BizException(message)` 默认 400，旧双参构造器把值双写进 httpStatus 与 code，新三参构造器可让业务码与 HTTP 状态分离，cause 构造器保住重抛时的堆栈链。
+- 七分支映射表背下来：限流 429、业务状态越界回 400、校验与缺参和坏 JSON 和超限上传 400、其余 500。
 - 校验链路：`@Valid` 加约束注解，失败在 controller 前抛出，handler 取第一个字段错误。
-- 只有兜底分支打全栈；catch-all 是「漏网变 500」的最终解释处，两个真实案例都因此加了专门分支。
+- 全栈日志两个出口：兜底分支无条件记，handleBiz 对 5xx/带 cause 记一次；catch-all 是「漏网变 500」的最终解释处，两个真实案例都因此加了专门分支。
 
 ## 11. 课后练习
 
 **练习 1（概念理解）**：`new BizException("名称太长")` 抛出后，HTTP 状态码与响应体各是什么？
 
-答案解析：走单参构造器，code 默认 400（BizException.java:10-12）。handler 第二分支（GlobalExceptionHandler.java:27-31）检查 400 在 [400,599] 内，状态码 400，body `{"code":400,"message":"名称太长","data":null}`。
+答案解析：走单参构造器，httpStatus 与 code 双写为 400（BizException.java:24-26）。handler 的 BizException 分支（GlobalExceptionHandler.java:35-56）检查 httpStatus 400 在 [400,599] 内，状态码 400，body `{"code":400,"message":"名称太长","data":null}`；400 且无 cause，不触发全栈日志。
 
-**练习 2（源码定位）**：业务代码写了 `new BizException(200, "奇怪的成功")`，最终状态码是什么？哪一行保证的？
+**练习 2（源码定位）**：业务代码写了 `new BizException(200, "奇怪的成功")`，最终状态码是什么？哪一行保证的？若改用三参构造器 `new BizException(400, 42001, "...")`，状态码与 body code 又各是什么？
 
-答案解析：状态码 400。GlobalExceptionHandler.java:29 的区间检查把 [400,599] 之外的 code 统一按 400 处理，200 越界。body 里的 code 仍是 200（:30 原样透传），这印证了「状态码不盲信业务码」的设计。
+答案解析：状态码 400。双参构造器把 200 双写进 httpStatus，handleBiz 的区间检查把 [400,599] 之外的 httpStatus 统一按 400 处理；body 里的 code 仍是 200（原样透传）。三参版则是设计内的分离：状态码 400，body code 42001——这正是批次 1 拆字段的目的：业务码可以有自己的编号体系，不必冒充 HTTP 状态。
 
 **练习 3（执行过程）**：限流窗口 60 秒、Redis 返回 retryMs=1500，`Retry-After` 头的值是多少？给出计算式与源码行号。
 
-答案解析：`min(windowSeconds, (retryMs+999)/1000)` = min(60, ceil(1500/1000)) = 2，头为 `Retry-After: 2`。计算在 RedisRateLimiter.java:55-56，使用在 GlobalExceptionHandler.java:23。上取整保证 1 秒内的重试提示不退化为 0。
+答案解析：`min(windowSeconds, (retryMs+999)/1000)` = min(60, ceil(1500/1000)) = 2，头为 `Retry-After: 2`。计算在 RedisRateLimiter 的决策组装处，使用在 GlobalExceptionHandler.java:29-30。上取整保证 1 秒内的重试提示不退化为 0。
 
 **练习 4（调用链）**：上传一个 300KB 的 CSV 走到哪个分支？为什么不是兜底 500？
 
-答案解析：multipart 解析在 controller 之前执行，256KB 上限（application.yml:13-17）触发 `MaxUploadSizeExceededException`，命中 GlobalExceptionHandler.java:66-70，返回 400 与 "uploaded file exceeds the size limit"。这个分支是专门补的，javadoc（:62-65）写明补它之前会掉进兜底变 500。
+答案解析：multipart 解析在 controller 之前执行，256KB 上限（application.yml:13-17）触发 `MaxUploadSizeExceededException`，命中 GlobalExceptionHandler.java:96-100，返回 400 与 "uploaded file exceeds the size limit"。这个分支是专门补的，javadoc 写明补它之前会掉进兜底变 500。
 
-**练习 5（设计分析）**：如果删掉 GlobalExceptionHandler，ShortLinkService.java:759 的 404 会变成什么？说明了该类承担什么职责？
+**练习 5（设计分析）**：如果删掉 GlobalExceptionHandler，ShortLinkService 里 `throw new BizException(404, "short link not found")` 会变成什么？说明了该类承担什么职责？
 
 答案解析：异常冒出 controller 后无人处理，Spring 返回 500 并走容器错误页，前端拿不到统一 JSON，404 语义丢失。该类的职责是「把 Java 异常翻译成 HTTP 契约」，翻译表是 5.4 的七行映射。这也是为什么新增异常类型时第一反应应是来这里登记分支。
 

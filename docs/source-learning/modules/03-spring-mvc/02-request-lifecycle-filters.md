@@ -20,8 +20,9 @@
 | 文件 | 职责 | 阅读顺序 | 为什么读它 |
 |------|------|----------|------------|
 | `security/SecurityConfig.java`（100 行） | 装配过滤器链与授权矩阵 | 第 1 | 顺序与放行清单的权威 |
-| `security/JwtAuthFilter.java`（60 行） | Bearer JWT 认证 | 第 2 | 标准的认证 Filter 模板 |
-| `security/ApiKeyAuthFilter.java`（162 行） | X-API-Key 认证+配额 | 第 3 | Filter 异常边界的自述材料 |
+| `common/web/CorrelationIdFilter.java`（103 行） | cid 注入（安全链之外的第一个 Filter） | 第 2 | 请求的对账键（2.2 深讲） |
+| `security/JwtAuthFilter.java`（160 行） | Bearer JWT 认证 + 令牌回查 | 第 3 | 认证 Filter 的完整形态（5.1/5.2 深讲） |
+| `security/ApiKeyAuthFilter.java`（220 行） | X-API-Key 认证+属主回查+配额 | 第 4 | Filter 异常边界的自述材料 |
 | `security/MetricsScrapeTokenFilter.java`（66 行） | 指标抓取守卫 | 第 4 | fail-closed 的对照样本 |
 | `security/QrShareAuthFilter.java`（73 行） | 签名分享放行 | 第 5 | 最窄的 Filter，只管一个方法+路径 |
 | `link/support/GatePages.java`（84 行） | 三张 HTML 门禁页 | 第 6 | CSP 常量与转义纪律 |
@@ -29,7 +30,7 @@
 
 ## 4. 类的定位
 
-这一课讲的是 Controller 之前的世界。请求路径：Tomcat → 容器级 Filter 链 → springSecurityFilterChain（内部还有一层）→ DispatcherServlet → Controller → Service → Mapper。本项目没有注册任何业务 Filter 在 Security 之外，安全 Filter 就是请求的第一站。位置见[包结构图](../../diagrams/archify/html/03-package-map.html)：security 包 9 个类（含被四链共用的 AuthUser/UserContext），link/support 的 GatePages 是 Filter 与 Controller 共用的视图。
+这一课讲的是 Controller 之前的世界。请求路径：Tomcat → 容器级 Filter 链（第一站是 `CorrelationIdFilter`，`@Order(HIGHEST_PRECEDENCE)`，给请求发 cid，2.2 深讲）→ springSecurityFilterChain（内部还有一层）→ DispatcherServlet → Controller → Service → Mapper。安全 Filter 不再是请求的第一站，但仍是认证的第一站。位置见[包结构图](../../diagrams/archify/html/03-package-map.html)：security 包 10 个类（含被四链共用的 AuthUser/UserContext），link/support 的 GatePages 是 Filter 与 Controller 共用的视图。
 
 ## 5. 核心源码详解
 
@@ -65,28 +66,28 @@ Filter 插入顺序（SecurityConfig.java:89-92）：
 
 授权矩阵（:61-69）值得背：qr.png 三角色；`/api/links/**` 双角色（USER 或 API_KEY）；`/api/keys/**` 与 `/api/webhooks/**` 仅 USER（API Key 摸管理面是 403）；`/actuator/prometheus` 仅 METRICS 且必须排在 `/actuator/**` 前（行内注释 :65-66）；`anyRequest().hasRole("USER")` 兜底。匹配器按声明顺序短路，顺序错了角色矩阵就失效。
 
-### 5.2 一个标准认证 Filter：JwtAuthFilter（JwtAuthFilter.java:22-59）
+### 5.2 认证 Filter 的完整形态：JwtAuthFilter（JwtAuthFilter.java，160 行）
 
 ```java
-@Component
-@RequiredArgsConstructor
-public class JwtAuthFilter extends OncePerRequestFilter {
-
-    private final JwtService jwtService;
-
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         // the scrape token is not a JWT — parsing it would 401 before the metrics
         // filter can grant ROLE_METRICS (D-Bw345-42)
-        return request.getRequestURI().equals("/actuator/prometheus");
+        if (request.getRequestURI().equals("/actuator/prometheus")) {
+            return true;
+        }
+        // Batch 2a: refresh/logout/accept-invitation present their own credentials
+        // (a refresh token or an invitation token) and never need a live access
+        // token ... precise POST paths only, so nothing else slips through.
+        String path = request.getRequestURI();
+        return "POST".equals(request.getMethod()) && (path.equals("/api/auth/refresh")
+                || path.equals("/api/auth/logout") || path.equals("/api/auth/accept-invitation"));
     }
 ```
 
-（JwtAuthFilter.java:20-31）
+（框架行为）`OncePerRequestFilter` 保证同一请求只执行一次（转发/include 不重复）。`shouldNotFilter` 返回 true 即跳过，是 Filter 级的路径白名单——批次 2 后它有两类成员：抓取令牌路径（老成员），与三个「自带凭据」的会话入口（新成员，精确路径 + POST 限定）。
 
-（框架行为）`OncePerRequestFilter` 保证同一请求只执行一次（转发/include 不重复）。`shouldNotFilter` 返回 true 即跳过，是 Filter 级的路径白名单。
-
-主体三步（:36-58）：读 `Authorization: Bearer` 头、解析签名通过后把 `AuthUser` 放进 `UserContext`（ThreadLocal）并把 ROLE_USER 写进 SecurityContext、放行。两个收尾都在 finally（:55-58）：
+主体在批次 2a 后是五步：读 `Authorization: Bearer` 头 → 验签解析 → **回查用户行**（行在、status=1、tv 与令牌一致，任一不过是静默未认证）→ must_change 墙（403 或豁免放行）→ 把以数据库为准的 `AuthUser` 放进 `UserContext` 并授 ROLE_USER。回查失败中的存储故障是唯一会直写响应的分支（503 固定文案）。这五步的逐行拆解在 5.2 课，本课只需记住它在链上的位置与一个结构事实：**Filter 从「无状态验签器」变成了「每请求查一次库的复核器」**，这是短 access 寿命与即时撤销换来的成本。两个收尾仍在 finally：
 
 ```java
         } finally {
@@ -95,7 +96,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         }
 ```
 
-（本项目实现）双清是硬纪律。`UserContext` 是静态 ThreadLocal，Filter 不清则 Tomcat 线程复用时下一个请求可能读到上一个用户的数据。清 SecurityContext 是同一逻辑对 Spring 的复刻。（Java 语言知识）finally 对成功、异常、提前 return 三种路径都执行，所以匿名请求（没带 Bearer，:37-38 直接放行）也会被清，幂等无害。
+（本项目实现）双清是硬纪律。`UserContext` 是静态 ThreadLocal，Filter 不清则 Tomcat 线程复用时下一个请求可能读到上一个用户的数据。清 SecurityContext 是同一逻辑对 Spring 的复刻。（Java 语言知识）finally 对成功、异常、提前 return 三种路径都执行，所以匿名请求（没带 Bearer 直接放行）也会被清，幂等无害。
 
 ### 5.3 Filter 异常到不了 @RestControllerAdvice（ApiKeyAuthFilter.java:32-42）
 
@@ -112,9 +113,9 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
 （ApiKeyAuthFilter.java:32-38，节选）
 
-（框架行为）原因在层级：`@RestControllerAdvice` 由 DispatcherServlet 调用，而 Filter 在 DispatcherServlet 之前。Filter 里抛出的异常不会经过 MVC 的异常解析，只会进入 Spring Boot 的 /error 兜底（ERROR dispatch），响应形态随请求 Accept 而定（JSON 或白标页）。所以 Filter 的每个错误分支必须自己手写响应。数一数本类与 SecurityConfig 里的硬编码 JSON：400 ambiguous（:76）、401 invalid（:82）、401 revoked（:88，对外与 invalid 同文案，只靠 metrics tag 区分）、429 quota（:141）、401 entryPoint（SecurityConfig.java:72-76）、403 denied（:79-83）。六处字面量与 `ApiResponse` 的形状是手工同步的——改 `ApiResponse` 结构必须同步改这些字符串，这是这套架构的真实维护成本（推断：也是课堂讨论「把 Filter 错误统一收敛到 helper」的好起点）。
+（框架行为）原因在层级：`@RestControllerAdvice` 由 DispatcherServlet 调用，而 Filter 在 DispatcherServlet 之前。Filter 里抛出的异常不会经过 MVC 的异常解析，只会进入 Spring Boot 的 /error 兜底（ERROR dispatch），响应形态随请求 Accept 而定（JSON 或白标页）。所以 Filter 的每个错误分支必须自己手写响应。数一数本类与 SecurityConfig 里的硬编码 JSON：400 ambiguous、401 invalid、401 revoked（对外与 invalid 同文案，只靠 metrics tag 区分）、403 forced_change（批次 2 的 M7 墙）、503 存储不可用（S4-5，与 JwtAuthFilter 逐字节共用同一常量）、429 quota、401 entryPoint（SecurityConfig）、403 denied（SecurityConfig）。这些字面量与 `ApiResponse` 的形状是手工同步的——改 `ApiResponse` 结构必须同步改这些字符串，这是这套架构的真实维护成本。其中 503 的共用做对了一半：两个过滤器引用同一个 Java 常量 `STORE_UNAVAILABLE_BODY`，至少字节级一致有编译期保证；其余各处仍是独立字面量。
 
-对照看正确姿势（:80-84）：
+对照看正确姿势（authenticate 返回 null 的分支）：
 
 ```java
             ApiKey key = apiKeyService.authenticate(apiKey);
@@ -125,9 +126,9 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             }
 ```
 
-先打指标再写响应，`writeJson`（:144-148）统一设置状态码与 Content-Type。注意这里没有 throw：Filter 用「写完直接 return」终止请求，不进 filterChain。
+先打指标再写响应，`writeJson` 统一设置状态码与 Content-Type。注意这里没有 throw：Filter 用「写完直接 return」终止请求，不进 filterChain。
 
-配额拒绝还多一个响应头（:139-142）：`Retry-After` 秒数，与 2.1 课的 429 分支同构——因为 429 没有 Retry-After 就丢了客户端重试的依据。
+配额拒绝还多一个响应头：`Retry-After` 秒数，与 2.1 课的 429 分支同构——因为 429 没有 Retry-After 就丢了客户端重试的依据。
 
 ### 5.4 两个窄 Filter：fail-closed 与最小放行
 
@@ -152,7 +153,7 @@ QrShareAuthFilter 只管一件事（QrShareAuthFilter.java:37-43）：GET 且路
 
 ### 5.5 静态控制台与 multipart：两个 profile 两种人生
 
-**静态控制台**。`src/main/resources/static/index.html` 是单文件控制台（1055 行，内联样式与逻辑；写时点注：控制台有独立 FE 波正在改造，本章不钉 DOM 细节）。dev 下 Spring Boot 自动把 static/ 目录映射到 `/`。（本项目实现）prod 下这个映射被关掉（application.yml:251-254）：
+**静态控制台**。`src/main/resources/static/index.html` 是单文件控制台（1,423 行，内联样式与逻辑；S2 收尾后已定型：改密页、邀请接受页、模态口令框、启动恢复会话、登出全部设备，本章不钉 DOM 细节）。dev 下 Spring Boot 自动把 static/ 目录映射到 `/`。（本项目实现）prod 下这个映射被关掉（application.yml 的 spring.web.resources 段）：
 
 ```yaml
   web:
@@ -170,7 +171,7 @@ QrShareAuthFilter 只管一件事（QrShareAuthFilter.java:37-43）：GET 且路
                                 .requestMatchers(consolePaths).denyAll();
 ```
 
-`add-mappings=false` 让 `/` 变成 404 语义的缺失资源，但异常路径走得难看（注释实测会 500）。Filter 链上 `denyAll` 给出干净的 403，并且把 swagger 路径一并挡住。`consolePaths = {"/", "/index.html", "/favicon.ico"}`（:36）。prod 还叠加 `springdoc.api-docs.enabled=false`（application.yml:255-259）——3.1 课讲的三层开关在这里合流。
+`add-mappings=false` 让 `/` 变成 404 语义的缺失资源，但异常路径走得难看（注释实测会 500）。Filter 链上 `denyAll` 给出干净的 403，并且把 swagger 路径一并挡住。`consolePaths = {"/", "/index.html", "/favicon.ico"}`（:36）。prod 还叠加 `springdoc.api-docs.enabled=false`（application.yml:296-301）——3.1 课讲的三层开关在这里合流。
 
 **multipart**。dev/test 下上传映射生效（application.yml:13-17）：
 
@@ -182,9 +183,9 @@ QrShareAuthFilter 只管一件事（QrShareAuthFilter.java:37-43）：GET 且路
       max-request-size: 512KB
 ```
 
-超限时 multipart 解析器在请求进入任何 Controller 之前抛 `MaxUploadSizeExceededException`。GlobalExceptionHandler.java:62-70 专门为它写了 400 分支，javadoc 说明没有这个分支时会掉进兜底变 500。这是 5.3 边界的反面：异常只要发生在 MVC 内部（哪怕在 Controller 之前），advice 就能接住；只有 Filter 层才是 advice 的盲区。
+超限时 multipart 解析器在请求进入任何 Controller 之前抛 `MaxUploadSizeExceededException`。GlobalExceptionHandler 为它写了专门的 400 分支，javadoc 说明没有这个分支时会掉进兜底变 500。这是 5.3 边界的反面：异常只要发生在 MVC 内部（哪怕在 Controller 之前），advice 就能接住；只有 Filter 层才是 advice 的盲区。
 
-Service 层不信解析器（ShortLinkService.java:349-354）：`file.isEmpty()` 与 `file.getSize() > 256 * 1024` 再查一遍。双层校验是纵深防御的日常形态：解析器上限保护容器内存，业务校验给出更精确的报错文案。
+Service 层不信解析器（ShortLinkService.importCsv 开头）：`file.isEmpty()` 与 `file.getSize() > 256 * 1024` 再查一遍。双层校验是纵深防御的日常形态：解析器上限保护容器内存，业务校验给出更精确的报错文案。
 
 ### 5.6 安全响应头与 CSP：HTML 响应的最低装备
 

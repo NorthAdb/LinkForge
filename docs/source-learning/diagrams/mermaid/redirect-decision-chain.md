@@ -2,6 +2,7 @@
 
 > 交互版见 [../archify/html/12-redirect-decision.html](../archify/html/12-redirect-decision.html)。
 > 口径来源：课程 7.1「resolveTarget：12 步判定总顺序」表（源码 `ShortLinkService.java:601-712` 实测，编号以此为准；README 列表把 L1/L2 合并为一步且 B2 排在抽签前）；实现类 `link/controller/RedirectController.java` 与 `link/service/ShortLinkService.java`（resolveTarget/resolveForProbe/resolveForGet）。每步失败语义互不吞并。
+> 3.0.0 修订：第 9 步的 BLOCK 名单已并入恶意主机 feed 快照（批次 3b，开关默认关）；第 12 步抽签前新增 match_rule 候选收窄（批次 3a，含 S4-4 开窗日语义）。
 
 ```mermaid
 flowchart TD
@@ -23,7 +24,7 @@ flowchart TD
     ST -- "过期" --> G410["410(不进空值缓存)"]
     ST -- "正常" --> UV{"8. URL 可渲染校验"}
     UV -- "脏行" --> G410B["410(与缓存无关)"]
-    UV -- "可渲染" --> B9{"9. B9 域名门禁 BLOCK?"}
+    UV -- "可渲染" --> B9{"9. B9 域名门禁 BLOCK?<br/>(静态名单 + 恶意 feed 快照, 3b)"}
     B9 -- "命中" --> P403["403 拦截页(无 Location)"]
     B9 -- "未命中" --> PW{"10. 密码短链且有有效凭证?"}
     PW -- "无凭证" --> UNLOCK["200 解锁页(不计点击; HEAD=401)"]
@@ -31,7 +32,8 @@ flowchart TD
     W -- "命中" --> WARNPAGE["200 警示中间页"]
     W -- "放行" --> VP{"12. 抽签: selectByLinkId(:708), 有 variants?"}
     WARNPAGE -- "用户点继续" --> VP
-    VP -- "有" --> PICK["VariantPicker 按权重抽签"]
+    VP -- "有" --> MR["12(前置). match_rule 收窄候选集<br/>(设备/OS/语言/时间窗; parseLenient 坏规则退化通配;<br/>全落选回退完整集; 跨午夜尾段按开窗日读星期)"]
+    MR --> PICK["VariantPicker 在候选集内按权重抽签"]
     VP -- "无(查空即 null, 抽签已消耗)" --> T302["Redirect: Location=original_url"]
     PICK --> T302V["Redirect: Location=所抽 variant URL"]
     T302 --> B2{"12(续). B2 预取/预览 bot?(resolveForGet :568-572, 抽签返回后)"}
@@ -50,8 +52,9 @@ flowchart TD
 | 3 空值缓存 | `ShortLinkService` absent 分支 |
 | 4/5/6 L1/L2/行读 | `UrlLocalCache`、`ShortLinkRowLoader`、`SingleFlight` |
 | 7/8 状态与校验 | 行状态字段 + `LinkValidations` |
-| 9/11 B9 | `TargetPolicy`/`PhishingPolicy`/`GatePages` |
+| 9/11 B9 | `TargetPolicy`/`PhishingPolicy`/`GatePages`；3b 起 PhishingPolicy 的判定视图并入 `MaliciousHostSnapshot` 的 feed 主机集（开关关时为空集） |
 | 10 密码门 | `LinkAccessTokens`、`/r/{code}/unlock` |
+| 12(前置) 候选收窄 | `MatchRule.filterCandidates`（批次 3a）；时间窗星期语义为 S4-4 开窗日口径 |
 | 12 抽签 | `VariantPicker`、`LinkVariantMapper` |
 | 12(续) B2 | `ClickFilter` |
 | 记账 | `ClickRecordService.recordClick` |

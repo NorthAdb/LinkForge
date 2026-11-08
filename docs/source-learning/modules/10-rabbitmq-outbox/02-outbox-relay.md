@@ -148,18 +148,18 @@ CREATE TABLE lf_outbox (
     @Update("UPDATE lf_outbox SET status = 'SENT', sent_at = NOW() WHERE id = #{id}")
     int markSent(@Param("id") long id);
 
-    @Update("UPDATE lf_outbox SET status = 'FAILED' WHERE id = #{id}")
+    @Update("UPDATE lf_outbox SET status = 'FAILED' WHERE id = #{id} AND status = 'PENDING'")
     int markFailed(@Param("id") long id);
 
     @Update("UPDATE lf_outbox SET attempts = attempts + 1, next_attempt_at = "
-            + "DATE_ADD(NOW(), INTERVAL #{backoffSeconds} SECOND) WHERE id = #{id}")
+            + "DATE_ADD(NOW(), INTERVAL #{backoffSeconds} SECOND) WHERE id = #{id} AND status = 'PENDING'")
     int markRetry(@Param("id") long id, @Param("backoffSeconds") long backoffSeconds);
 ```
-`OutboxMapper.java:14-27`
+（`OutboxMapper.java` 的 mark 三条）
 
 `selectPendingBatch` 三个条件逐个说：`status='PENDING'` 只看待发；`next_attempt_at IS NULL OR <= NOW()` 把「从未失败过的新行」与「退避到期的旧行」都放进来（新行不设 next_attempt_at，NULL 即立即可发）；`ORDER BY id ASC LIMIT #{limit}` 先来先发，天然公平。
 
-注意一个与本课任务书说法相反的事实：**这三条 mark SQL 的 WHERE 条件只有 `id = #{id}`，没有 `AND status = 'PENDING'` 守卫**。对照 webhook 侧的同名方法，那里三条 mark 全部带 `AND status = 'PENDING'`（`WebhookDeliveryMapper.java:27-39`）。outbox 版不守卫是安全的，理由：relay 对某行的「拉取→发布→mark」在同一轮循环内同步完成，中间没有别的写者会改状态（多实例下两个 relay 拿到同一行的窗口见 5.6，markSent 重复执行只是把 SENT 写成 SENT，幂等无害）。webhook 版必须守卫，因为 HTTP 投递最长 7 秒（超时配置 `application.yml:166-167`），远超 2 秒 tick，同一行可能在两个 tick 里各有一份在途尝试，状态守卫让「先到的 markSent」赢（推断：以上差异原因是从 tick 周期与在途时长推出来的，代码注释未明说）。
+三条 mark 的 WHERE 都带 **`AND status = 'PENDING'`**——这是批次 1（T-M3）补上的状态 CAS 守卫，mapper 上方的注释写明了事故模型：旧版只有 `id = #{id}`，单实例下确实无害（拉取→发布→mark 在同一轮内同步完成），但**第二个 relay 实例（或一批陈旧的拉取结果）**能把另一个实例已经标 SENT 的行再标回 FAILED，行会被重发一次。守卫把每次状态迁移变成「仅当行还在 PENDING 时才生效」的单调 CAS：迟到的 mark 影响行数 0，静默无操作。与 webhook 侧 WebhookDeliveryMapper 的同名三条自始就是同一标准——T-M3 的动作本质是把两侧的标准对齐，并把「多实例」从推断变成注释里写明的威胁模型。
 
 `markRetry` 的两个细节：`attempts = attempts + 1` 在 DB 端自增，不吃内存旧值；`DATE_ADD(NOW(), ...)` 用 **DB 时钟**写调度列。这是全项目的时钟规则（webhook 侧注释总结过：调度列用 DB 时钟，业务时间戳用 JVM 时钟，`WebhookDeliveryMapper.java:14-19`），测试 `WebhookRetryClockIT` 曾用 JVM+8 与 DB UTC 的偏差抓过这条规则的违规。
 
@@ -333,9 +333,9 @@ SENT 行的保洁是 `SentRowCleanup.purgeSent`（`SentRowCleanup.java:52-72`）
 
 答案解析：302 的原因是 `recordClick` 根本不碰 RabbitMQ，写库成功事务提交后跳转照常（`ShortLinkService.java:574-582` 的调用与 meter）。明细为 0 是因为 drill 用 `LINKFORGE_SYNC_CLICK_ENABLED=false` 起实例（`outbox-drill.sh:45`），`recordClick` 跳过 ：56-58 的 sync 分支，只走 ：60-74 的 outbox 分支。脚本断言：跳转码 :66-69、`PENDING=M` :70-71、明细 0 :72-73。OutboxDrillIT 的对应用例是 `syncOffBrokerDownStill302AndConvergesWithDetailAndUv`（`OutboxDrillIT.java:102-133`，IT 不断言明细 0 的原因在其 ：112-114 注释）。
 
-**练习 4（设计分析）**：给 `markSent` 补上 `AND status='PENDING'` 是更严谨还是更画蛇添足？对照 webhook 版（`WebhookDeliveryMapper.java:28-29`）说出两边差异的根源。
+**练习 4（设计分析）**：批次 1（T-M3）给 outbox 三条 mark 都补上了 `AND status='PENDING'`。旧分析曾认为这对 outbox 是「无害但多余」，它漏看了什么？
 
-答案解析：outbox 版加守卫是无害但多余的：relay 的拉取-发布-标记是同一轮内的同步序列，多实例重复 markSent 也只是把 SENT 写成 SENT，守卫不改变任何可见行为。webhook 版守卫是必需的：HTTP 投递最长 connect 2s+request 5s（`application.yml:166-167`），跨过 2 秒 tick，同一 PENDING 行可能同时有两份在途尝试，守卫保证只有先完成的那次结算生效。根源差异是**在途时长与 tick 周期的比值**：outbox 的 confirm 等待封顶 5 秒且单线程循环内完成，webhook 的在途窗口天然跨 tick（推断：代码注释未明说，是从配置数值推出的）。
+答案解析：漏看了第二个写者。旧分析的模型里只有一个 relay：「拉取→发布→mark 同轮同步、多实例重复 markSent 只是 SENT 写 SENT」。但竞态不在 markSent 之间，而在**迟到的失败 mark**：实例 A 拉到行 X 后发布缓慢，实例 B 已把 X 投递成功标 SENT；A 随后发布失败，对 X 执行 markRetry/markFailed——无守卫时 SENT 行被拖回 PENDING/FAILED，事件被重发一次（消费者靠 dedup 兜底才没出数据事故，但 outbox 的状态机自此不可信）。守卫把 mark 变成对 PENDING 的 CAS，迟到者影响行数 0。webhook 侧自始有守卫（在途投递天然跨 tick），T-M3 是把同一标准补齐到 outbox，并把威胁模型写进 mapper 注释。
 
 **练习 5（调用链）**：删除 `relay()` 最外层的 catch（:70-72）会发生什么？提示：分「任务会不会停」与「日志会变成什么样」两层答。
 

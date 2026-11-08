@@ -39,6 +39,7 @@ LESSONS: dict[str, int] = {
     "modules/05-security/01-security-filter-chain.md": 150,
     "modules/05-security/02-jwt-auth.md": 150,
     "modules/05-security/03-usercontext-authz.md": 150,
+    "modules/05-security/04-sessions-and-teams.md": 150,
     "modules/06-short-link/01-data-model.md": 150,
     "modules/06-short-link/02-create-flow.md": 200,
     "modules/06-short-link/03-crud-lifecycle-csv.md": 150,
@@ -92,6 +93,9 @@ ADVANCED: dict[str, int] = {
     "advanced/12-dependency-failure-handling.md": 150,
     "advanced/13-performance-and-consistency.md": 150,
     "advanced/14-interview-guide.md": 200,
+    "advanced/15-auth-sessions-and-teams.md": 150,
+    "advanced/16-link-power-features.md": 150,
+    "advanced/17-correctness-waves.md": 150,
 }
 
 REFERENCE: dict[str, int] = {

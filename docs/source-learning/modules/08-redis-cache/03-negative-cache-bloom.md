@@ -234,9 +234,9 @@ private long rebuild(boolean manual) {
             filter = previous;
             ready = previous != null;
             meterRegistry.counter("linkforge.bloom.rebuild", "result", "error").increment();
-            log.warn("bloom rebuild failed; previous filter restored: {}", ex.getMessage(), ex);
+            log.warn("bloom rebuild failed; previous filter restored: {}", ex.getMessage());
             if (manual) {
-                throw new BizException(500, "bloom rebuild failed: " + ex.getMessage());
+                throw new BizException(500, "bloom rebuild failed", ex);
             }
             return 0;
         }
@@ -247,7 +247,9 @@ private long rebuild(boolean manual) {
 ```
 `CodeBloomFilter.java:134-180`
 
-四层设计逐层看。第一层，`AtomicBoolean` 加 `compareAndSet`（:140-146）保证一个进程同时只有一个 rebuild（D-C2-13）：定时任务和管理接口撞车时后者收到 409，定时触发则静默放弃并打点 busy。第二层，「旁路建新再原子替换」：新过滤器在旁路变量 `fresh` 上灌数据，`filter = fresh`（:154）是一次 volatile 写，对读者原子；查询方法（:186-192）先读进局部变量再用，整个替换期间查询要么看旧的要么看新的，没有中间态。第三层，失败恢复旧 filter（:168-169）：rebuild 失败说明 DB 读挂了，但旧 filter 里的内容仍然有效，恢复它而不是降级 fail-open，注释 :166-167 点明「绝不把已加载的过滤器降级成 fail-open」，防止一次 rebuild 失败造成可用性倒退（fail-open 后所有查询都撞 DB）。第四层，`finally` 释放重建锁（:177-179），异常路径也不会卡死后续 rebuild。
+四层设计逐层看。第一层，`AtomicBoolean` 加 `compareAndSet` 保证一个进程同时只有一个 rebuild（D-C2-13）：定时任务和管理接口撞车时后者收到 409，定时触发则静默放弃并打点 busy。第二层，「旁路建新再原子替换」：新过滤器在旁路变量 `fresh` 上灌数据，`filter = fresh` 是一次 volatile 写，对读者原子；查询方法先读进局部变量再用，整个替换期间查询要么看旧的要么看新的，没有中间态。第三层，失败恢复旧 filter：rebuild 失败说明 DB 读挂了，但旧 filter 里的内容仍然有效，恢复它而不是降级 fail-open，注释点明「绝不把已加载的过滤器降级成 fail-open」，防止一次 rebuild 失败造成可用性倒退（fail-open 后所有查询都撞 DB）。第四层，`finally` 释放重建锁，异常路径也不会卡死后续 rebuild。
+
+失败出口的文案在 S/N 波 N1 里收紧过（旧版把 `ex.getMessage()` 拼进异常 message 又在 warn 里打了全栈——双记且泄漏细节）：现行版 warn 只记一行消息不带栈；手动触发失败抛 `BizException(500, "bloom rebuild failed", cause)`——wire 文案是**固定字符串**，底层原因只经 cause 链进 handler 的那一次全栈日志（2.1 的 N1 纪律）。客户端看到的永远是同一句，排障的人拿 cid 去日志里对那一栈。
 
 ### 5.5 查询与写入的 fail-open 语义
 

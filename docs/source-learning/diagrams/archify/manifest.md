@@ -49,3 +49,31 @@
 - **14-click-pipeline-dataflow**（通过，showcase，4 轮）：主链 302→双写→relay→MQ→consume→webhook→endpoint，旁路 reconciler/cleanup/DLQ；同步/异步边界、at-least-once、双时钟口径入卡片与流标签。
 
 - **16-webhook-delivery-lifecycle**（通过，showcase，7 轮 validate 修复）：PENDING→SENT/FAILED 主路 + 自环退避 + master-key 跳过 + AGGREGATE digest 同状态机 + 删除留痕；**偏差**：PENDING→FAILED 的 4 类出口合并为 1 条边（语义与行号移入「4 类出口」与手工重放卡片）；advisory（自环 stretch 3.308，与图 15 同款）保留。
+
+---
+
+## 3.0.0 时效复核（2026-11-08，逐图结论）
+
+> 复核方法：逐图对照 tag `3.0.0` 源码。本轮未运行 Archify 生成链（不在本环境），HTML、源 JSON、finalize 回执全部保持原样；下表只登记时效，不改图。结论三档：**仍准确**（可按现状读）/ **部分过期**（主干仍准，局部细节已被新机制取代，读时对照注记）/ **过期**（核心口径已被批次 1–3 或修复波改写，只作历史读）。
+
+| # | slug | 3.0.0 时效 | 缺什么 / 哪里变了 | 现状出处 |
+|---|------|-----------|------------------|---------|
+| 00 | system-architecture | 部分过期 | 组件主干未变；缺 feed 同步组件（MaliciousHostSyncService）与 auth 包（SessionService） | 专题 15/16 |
+| 01 | runtime-deployment | 仍准确 | 部署形态未变（宿主 JVM + Compose 依赖） | — |
+| 02 | function-map | 过期 | 37 叶为 v2.0.0 能力面：缺团队/邀请、标签搜索、动态路由、恶意 feed、A/B 报告、原始导出等批次 2/3 能力 | 功能覆盖矩阵 F45-F56 |
+| 03 | package-map | 过期 | 120 类 → 150 类：缺整个 auth 包与 30 个新类（清单见类覆盖矩阵 3.0.0 增补核对） | 类覆盖矩阵 |
+| 04 | core-class-relations | 部分过期 | 核心协作主干未变；缺 SessionService、TeamService、MatchRule、AbReport 的关系边 | 专题 15/16 |
+| 05 | database-erd | 过期 | 13 表 → 17 表：缺 V11–V15 的 lf_refresh_token、lf_tenant_invitation、lf_malicious_host、lf_webhook_flush_state 四表，及 tags、match_rule、token_version、must_change_password 四列 | V11–V15 迁移 SQL |
+| 06 | redis-data-flow | 部分过期 | 缓存/限流流未变；幂等流已变（终值信封 v3 + 指纹含密码 HMAC、导入在途租约键），图内仍是两段式旧口径 | 专题 16 |
+| 07 | rabbitmq-topology | 仍准确 | 拓扑与 converter 未变 | — |
+| 08 | scheduled-tasks | 部分过期 | 任务主干未变；缺 MaliciousHostSyncService 的 feed 同步任务（默认关、6 小时） | 专题 16 |
+| 09 | test-ci-pipeline | 部分过期 | 流程结构未变；图内例数 151/166/2 为旧口径，3.0.0 为 226/280/2（共 508） | 功能覆盖矩阵 F39 |
+| 10 | auth-sequence | 过期 | 认证已被批次 2 重写：图中无 refresh 轮换/重用侦测、每请求回查、改密墙、邀请接受四段 | 专题 15 |
+| 11 | shortlink-create | 部分过期 | 创建主干未变；幂等段未含指纹 v3 校验与 409 异体分支，tags 字段不在图内（mermaid 版已更新） | diagrams/mermaid/create-flow.md |
+| 12 | redirect-decision | 部分过期 | 12 步判定主干未变；抽签前缺 match_rule 候选收窄，B9 节点未含 feed 快照名单（mermaid 版已更新） | diagrams/mermaid/redirect-decision-chain.md |
+| 13 | cache-hit-miss-sequence | 仍准确 | 缓存读路径未被批次 1–3 改动 | — |
+| 14 | click-pipeline-dataflow | 部分过期 | 点击主链未变；Webhook AGGREGATE 的 drain 已由快照删行改为事务化 drain（M3），图内未反映（mermaid 版已更新） | diagrams/mermaid/click-pipeline.md |
+| 15 | outbox-lifecycle | 部分过期 | 状态机未变；卡片中「mark 无状态守卫」口径已被批次 1 推翻（mark 已带 status='PENDING' 守卫） | 专题 07 补注、专题 11 节点五 |
+| 16 | webhook-delivery-lifecycle | 部分过期 | 投递状态机未变；digest eventId 已带 flush_seq 段，drain 语义以专题 11 节点六（3.0.0 修订）为准 | 专题 11/17 |
+
+重生成建议（留给未来解冻时）：优先级 05（ERD 缺四表四列，误导性最强）> 10（认证全图重做）> 03（包图全等 diff 会直接报差）> 02（功能叶补全）；其余部分过期图可在原图基础上增补节点，不必重画。

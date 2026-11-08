@@ -38,15 +38,18 @@ key 的行为身份是「创建者的代理」（`ApiKey.java` 类注释，决�
         ④ randomBase62 造 lfk_{8位}_{32位}，SHA-256 hex 落库（:67-81）
         ⑤ Created 回明文一次（:83-93，:87 是全系统唯一出口）
 
-使用（每个带 X-API-Key 的请求）
-  ApiKeyAuthFilter.doFilterInternal（:65-108）
-        无头 → 放行进匿名链（:67-71）
-        混发 Bearer → 400 ambiguous（:73-78）
-        sha256Hex 点查 key_hash → 查无 → 401 invalid（:79-84）
-        revokedAt 非空 → 401 同文案 + metrics revoked（:85-90）
-        withinQuota 双闸 → 不过直写 429（:91-93 → :112-137）
-        ok 打点 + SETNX 节流 touchLastUsed（:94-95 → :151-161）
-        AuthUser(apikey:{prefix}) + ROLE_API_KEY 进链，finally 双清（:97-107）
+使用（每个带 X-API-Key 的请求；行号为 3.0.0 的 ApiKeyAuthFilter.java）
+  ApiKeyAuthFilter.doFilterInternal（:75-171）
+        无头 → 放行进匿名链
+        混发 Bearer → 400 ambiguous（:84-89）
+        sha256Hex 点查 key_hash → 查无 → 401 invalid（:94-99）
+        回查 owner 行（批次 2a 新增，:100-101）：DB 故障 → 503（S4-5，:102-112）
+        revokedAt 非空 → 401 同文案 + metrics revoked（:114-131；owner 处于改密墙内时回 403，M7 墓碑分支）
+        owner 不存在/停用/已移除 → 401 owner_inactive（:136-141，成员移除靠这一条让 key 死亡）
+        owner must_change_password=1 → 403 PASSWORD_CHANGE_REQUIRED（:145-149，M7 改密墙）
+        withinQuota 双闸 → 不过直写 429（:175-199）
+        ok 打点 + SETNX 节流 touchLastUsed（:151-153 → :214-227）
+        AuthUser(apikey:{prefix}) + ROLE_API_KEY 进链，finally 双清（:155-170）
 
 管理（JWT only）
   GET /api/keys → listOwn 只回 View（:96-102）
@@ -98,6 +101,8 @@ public ApiKey authenticate(String plaintextKey) {
 
 **节点四：withinQuota 的双闸分工。** 分钟闸走滑动窗口（`ApiKeyAuthFilter.java:118-124`），键形如 `linkforge:rl:apikey:min:{keyId}`，超限的 Retry-After 按窗口内最老记录算到过期还有几秒；日闸走固定窗口（:125-135），键里编进 Asia/Shanghai 的 `yyyyMMdd`，Retry-After 是距午夜的秒数。两道闸治两种滥用：分钟闸拦突发（脚本失控打满），日闸拦总量（被当免费代理）。key 行存 null 配额时回退 yml 默认 120/10000（:115-116）。两个闸的底层 `RedisRateLimiter` 在 Redis 故障时 fail-open（:44-50 的 catch 与 ：98-104 的 failOpen），配额不因依赖故障把全站 key 拒之门外，代价记进 `linkforge.ratelimit.failopen` 计数器。
 
+**节点六：owner 回查与改密墙（批次 2a / 修复波 M7）。** key 以创建者身份行事，所以创建者的状态就是 key 的状态。批次 2a 给过滤器加了 owner 行回查（`ApiKeyAuthFilter.java:100-101`）：owner 被停用或逻辑移除，下一个请求就 401（metrics `owner_inactive`）——成员移除（[专题 15](15-auth-sessions-and-teams.md)）不逐行碰 key，全靠这一条让 key 自然死亡。修复波 M7 再加一堵与 JWT 侧字节一致的墙（:54-56 的 FORCED_CHANGE_BODY、:145-149）：owner 处于 must_change_password 时活 key 直接 403；已撤销的 key 在这个窗口里也回 403 而非 401（:114-131 的墓碑分支：持有人证明自己持有那把死 key，「先改密」不泄露任何新信息），owner 改完密后同一把死 key 回到统一 401。配套的另一半在管理面：管理员重置会永久撤销该成员全部 key（`TeamService.resetPassword`），且 must-change 期间 ApiKeyService 拒绝铸新 key（`ApiKeyService.java:67`）。回查的 DB 故障不许冒充凭据结论： catch 住 DataAccessException 后回与 JwtAuthFilter 同体的稳定 503（:102-112，S4-5），日志只带 keyId。
+
 **节点五：touchLastUsed 的 SETNX 写放大控制。** 认证通过后（`ApiKeyAuthFilter.java:95`）才走 `touchLastUsed`（:151-161）：先 `setIfAbsent`（即 SET NX EX）抢 `linkforge:apikey:touch:{id}`，60 秒 TTL 内只有抢到的那个请求执行一次 `UPDATE lf_api_key SET last_used_at = ...`（`ApiKeyMapper.java:16-17`）。没有这道闸，每次认证多一次数据库写，高频 key 会把 lf_api_key 写成热点行；用本地内存节流则多实例各写各的，节流失效。整段包在 try/catch 里，失败只打 warn（:158-160），last_used_at 是统计字段，丢一次不影响认证正确性。时区口径也在这里：mapper 注释写明业务列收 JVM 时钟入参（D-Bw2fix-1），与 webhook 的 sent_at 同一规则。
 
 ## 6. 正常流程：一把 key 的一生
@@ -123,7 +128,10 @@ TENANT scope 的视野差在服务层生效：`isTenantWide` 只认 `AuthUser.ge
 | 混发 Bearer + X-API-Key | 400 | `ApiKeyAuthFilter.java:73-78` | 文案 `ambiguous credentials`；metrics result=ambiguous（D-Bw2-2：key 永不走 Authorization 头，避免非 JWT 的 bearer 串被 JwtAuthFilter 误报 401） |
 | 创建时 scope 空白 | 按 USER 处理 | `ApiKeyService.java:40-41` | 归一化而非报错；非 USER/TENANT 的值才 400（:42-44） |
 | 哈希查无（伪造/垃圾串） | 401 | :80-84 | 文案 `invalid api key`；metrics result=invalid |
-| 已吊销 | 401 | :85-90 | 对外与 invalid 完全同文案，metrics result=revoked（Bw2-N3：不泄露「曾有效」清单，排障靠标签） |
+| 已吊销 | 401 | `ApiKeyAuthFilter.java:114-131`（3.0.0 行号） | 对外与 invalid 完全同文案，metrics result=revoked（Bw2-N3：不泄露「曾有效」清单，排障靠标签）；例外：owner 处于改密墙内时回 403（M7 墓碑分支，见节点六） |
+| owner 被停用/移除（批次 2a 回查） | 401 | :136-141 | 对外同文案，metrics result=owner_inactive |
+| owner 处于强制改密（M7） | 403 | :145-149 | `PASSWORD_CHANGE_REQUIRED`，与 JWT 墙字节一致；管理员重置同时永久撤销该成员全部 key，见 [专题 15](15-auth-sessions-and-teams.md) 节点六 |
+| 认证存储 DB 故障（S4-5） | 503 | :102-112 | `authentication store unavailable`，与 JwtAuthFilter 同体；不是凭据结论，不授任何身份 |
 | 分钟配额超 | 429 | :118-124 | Retry-After 为窗口真实剩余秒；metrics quota.rejected window=minute |
 | 日配额超 | 429 | :128-135 | Retry-After 为距午夜秒数（至少 1）；window=day |
 | key 摸 /api/keys、/api/webhooks、actuator | 403 | `SecurityConfig.java:64、:67-68` | 身份有效但角色不符，是授权失败不是认证失败；health 例外保持开放（`ApiKeyAuthFilter.java:55-62`） |

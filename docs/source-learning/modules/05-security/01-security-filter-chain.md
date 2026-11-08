@@ -9,7 +9,7 @@
 1. 说出 4 个自定义 Filter 的执行顺序与各自的 `addFilterBefore/After` 锚点。
 2. 背出 permitAll 放行清单与角色矩阵，并解释顺序为什么敏感。
 3. 解释 `linkforge.docs-enabled` 三层开关在 prod 如何逐层关掉文档与控制台。
-4. 分清 401 与 403 的框架级双来源（entryPoint 与 accessDeniedHandler），以及项目里额外的第三种 401。
+4. 分清 401 与 403 的框架级双来源（entryPoint 与 accessDeniedHandler），以及 Filter 层直写的额外出口（坏 token 401、强制改密 403、认证存储故障 503）。
 
 ## 2. 前置知识
 
@@ -22,8 +22,8 @@
 |----|----|----|----|
 | `src/main/java/com/linkforge/security/SecurityConfig.java` | 100 | 本课主角：装配整条安全链 | 1 |
 | `src/main/java/com/linkforge/security/MetricsScrapeTokenFilter.java` | 66 | 用常量时间比较守卫 /actuator/prometheus | 2 |
-| `src/main/java/com/linkforge/security/JwtAuthFilter.java` | 60 | 解析 Bearer JWT，授予 ROLE_USER | 3（5.2 深讲） |
-| `src/main/java/com/linkforge/security/ApiKeyAuthFilter.java` | 162 | X-API-Key 认证、配额、ROLE_API_KEY | 4（12.1 深讲） |
+| `src/main/java/com/linkforge/security/JwtAuthFilter.java` | 160 | 解析 Bearer JWT + 回查用户行，授予 ROLE_USER | 3（5.2 深讲） |
+| `src/main/java/com/linkforge/security/ApiKeyAuthFilter.java` | 220 | X-API-Key 认证、配额、ROLE_API_KEY | 4（12.1 深讲） |
 | `src/main/java/com/linkforge/security/QrShareAuthFilter.java` | 73 | exp+sig 签名放行 GET qr.png | 5 |
 
 为什么这个顺序读：SecurityConfig 只做「装配」，四个 Filter 是四个待填的槽位，后面两课再逐个打开。
@@ -152,6 +152,8 @@ prod 的 `application.yml` 用三层开关逐层收紧（`src/main/resources/app
 
 两个 handler 都手写 JSON。响应体形状与 `ApiResponse`（`{code,message,data}`）一致，但没有复用那个类，原因见第 9 节。
 
+注意这只是「框架级」的两个出口。3.0.0 的两个认证 Filter 还会自己直写三种响应：JwtAuthFilter 对坏 token 写 401 `invalid token`、对 must_change 用户写 403 `PASSWORD_CHANGE_REQUIRED`、回查存储故障时与 ApiKeyAuthFilter 同写 503 `authentication store unavailable`（详见 5.2 与 12.1）。排障时先看 body 文案再定位层级。
+
 ### 5.8 四个 Filter 的挂载点
 
 ```java
@@ -178,7 +180,7 @@ MetricsScrapeTokenFilter → JwtAuthFilter → ApiKeyAuthFilter → QrShareAuthF
 
 **CSRF 与 STATELESS（框架概念）。** 两者是配套决策。有会话 Cookie 才需要防 CSRF；纯 Header 凭据加 STATELESS 时 CSRF 失去载体。代价是接受「没有记住登录」的能力。若未来引入 Cookie 会话登录，CSRF 必须重开。
 
-**Filter 顺序即语义（本项目实现）。** 先设 SecurityContext 的 Filter 决定这个请求是谁。三个 Filter 都可能设身份，互斥性靠顺序与显式检查：key 过滤器看到 Bearer 头直接 400（`ApiKeyAuthFilter.java:73-78`），JWT 过滤器用 `shouldNotFilter` 躲开 prometheus 路径。
+**Filter 顺序即语义（本项目实现）。** 先设 SecurityContext 的 Filter 决定这个请求是谁。三个 Filter 都可能设身份，互斥性靠顺序与显式检查：key 过滤器看到 Bearer 头直接 400（`ApiKeyAuthFilter.java`），JWT 过滤器用 `shouldNotFilter` 躲开 prometheus 路径与三个自带凭据的 auth 入口（refresh、logout、accept-invitation，5.2）。另注意：`CorrelationIdFilter` 不在这条安全链里装配，它是独立的 Servlet Filter，以最高优先级排在整条链之前（3.2 与 14.1 讲）。
 
 ## 7. 可视化
 
@@ -208,7 +210,7 @@ flowchart LR
 
 以三个请求为例（都在 `DispatcherServlet` 之前）：
 
-1. `GET /api/links/abc123`，带 `Authorization: Bearer eyJ...`。MetricsScrapeTokenFilter 的 `shouldNotFilter` 返回 true（不是 prometheus，`MetricsScrapeTokenFilter.java:34-41`）直接放行；JwtAuthFilter 解析 token 成功，设 SecurityContext 为 ROLE_USER；ApiKeyAuthFilter 看到无 `X-API-Key` 头放行；角色矩阵 `:63` 命中 USER，进入 Controller。
+1. `GET /api/links/abc123`，带 `Authorization: Bearer eyJ...`。MetricsScrapeTokenFilter 的 `shouldNotFilter` 返回 true（不是 prometheus，`MetricsScrapeTokenFilter.java:34-41`）直接放行；JwtAuthFilter 验签成功后再回查用户行（状态/tv/强制改密三复核，5.2），通过才设 SecurityContext 为 ROLE_USER；ApiKeyAuthFilter 看到无 `X-API-Key` 头放行；角色矩阵 `:63` 命中 USER，进入 Controller。
 2. `GET /r/abc123`，匿名。三个自定义 Filter 都放行（跳转路径无凭据），permitAll `:43` 命中，进跳转逻辑。
 3. `GET /actuator/prometheus`，无凭据。JwtAuthFilter 被跳过；MetricsScrapeTokenFilter 发现没配 token 或 token 不匹配，常量时间比较失败后直写 401（`MetricsScrapeTokenFilter.java:49-55`），请求到此为止。这个 401 不经过 `:72-76` 的 entryPoint，401 在本项目有三个来源，5.2 并排列清楚。
 
@@ -241,9 +243,9 @@ SecurityConfig 用约 60 行 DSL 定义了全项目的访问控制：先关 CSRF
 
 参考答案：命中 denyAll 分支（`SecurityConfig.java:50-55`，由 yml `:261` 的 false 驱动）。匿名访问被拒时，Spring Security 的 ExceptionTranslationFilter 会先尝试引导认证，走 entryPoint 返回 401，而不是 403；带有效 JWT 的用户才会收到 403。后半句是框架一般行为（Spring Security 6 默认匿名认证开启），本项目测试未直接断言这一场景，作合理推断标注。
 
-**练习 5（设计分析）。** 如果要在 `/api/auth/**` 下新增一个 `POST /api/auth/logout` 接口，需要改 SecurityConfig 吗？
+**练习 5（设计分析）。** `POST /api/auth/logout`、`/refresh`、`/accept-invitation` 都在 `/api/auth/**` 下，它们在 SecurityConfig 里需要单独声明吗？它们靠什么自证身份？
 
-参考答案：不需要。`:42` 的 `/api/auth/**` 已按前缀放行。反过来说，auth 包的任何新端点都自动匿名可达，必要时用更窄的 matcher 收紧。
+参考答案：不需要单独声明，`:42` 的前缀规则统一放行（这也是为什么「需要调用者」的 auth 端点要在 Controller 里用 `requireUser()` 自查 UserContext，见 `AuthController` 类注释）。三个端点的身份不靠 access token：refresh/logout 靠请求体里的 refresh token，accept-invitation 靠邀请令牌——所以 JwtAuthFilter 还要在 `shouldNotFilter` 里精确跳过这三条路径，免得请求附带的过期 access 把它们挡住（5.2）。
 
 ## 12. 与后续课程的联系
 

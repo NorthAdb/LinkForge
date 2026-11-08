@@ -66,18 +66,19 @@ public RedisMessageListenerContainer redisMessageListenerContainer(RedisConnecti
 
 ### 5.2 键与频道清单表
 
-下表是本项目 Redis 键空间的全量。前缀 `linkforge:rl:` 来自 `linkforge.rate-limit.key-prefix`（默认值在 `LinkForgeProperties.java:237`），表中写作 `{rl}`。
+下表是本项目 Redis 键空间的全量。前缀 `linkforge:rl:` 来自 `linkforge.rate-limit.key-prefix`（默认值在 LinkForgeProperties 的 RateLimit 段），表中写作 `{rl}`。批次 3 的两个新键（idem 信封、idem-import）与 create 的键同前缀不同子空间，刻意分开命名——导入与创建的结算格式不同，混用一键必然互相误读。
 
 | 键或频道 | 类型 | 写入点 | 读取点 | TTL |
 |----|----|----|----|----|
-| `linkforge:code:{code}` | STRING，值为 URL 字符串 | `cacheUrl`，`ShortLinkService.java:971` | 跳转热路径 :635 | 3600 + uniform[0,300] 秒（:967-968） |
-| `linkforge:absent:{code}` | STRING，哨兵值 `"1"` | `markAbsent`，:946 | `absentKnown`，:931 | 60 + uniform[0,30] 秒（:943-944） |
-| `{rl}sw:{logical}` | ZSET，滑动窗口日志 | Lua `ZADD`（9.1 课逐行） | 同一脚本内 `ZCARD` | 窗口秒数，`PEXPIRE` 保活 |
-| `{rl}apikey:sw:min:{keyId}` | ZSET，API Key 分钟配额 | `ApiKeyAuthFilter.java:118-119` | 同左 | 60 秒 |
-| `{rl}apikey:day:{keyId}:{yyyyMMdd}` | STRING，INCR 计数 | `ApiKeyAuthFilter.java:128` | 同左 | 86400 秒 |
-| `{rl}idem:{userId}:{key}` | STRING，`"pending"` 到时变 code | 抢占 :154-155，落定 :271-274 | 重放读取 :185 | pending 5 秒；落定值 86400 秒 |
-| 频道 `linkforge:bloom:put` | pub/sub | `CacheBus.publishBloomPut`，:44 | `CodeBloomFilter` 订阅 | 无（消息不落地） |
-| 频道 `linkforge:l1:invalidate` | pub/sub | `CacheBus.publishL1Invalidate`，:62 | `UrlLocalCache` 订阅 | 无 |
+| `linkforge:code:{code}` | STRING，值为 URL 字符串 | `cacheUrl`（ShortLinkService） | 跳转热路径 | 3600 + uniform[0,300] 秒 |
+| `linkforge:absent:{code}` | STRING，哨兵值 `"1"` | `markAbsent` | `absentKnown` | 60 + uniform[0,30] 秒 |
+| `{rl}sw:{logical}` | ZSET，滑动窗口日志 | Lua `ZADD`（9.1 课逐行；键里含 login/refresh/logout 等新入口） | 同一脚本内 `ZCARD` | 窗口秒数，`PEXPIRE` 保活 |
+| `{rl}apikey:sw:min:{keyId}` | ZSET，API Key 分钟配额 | ApiKeyAuthFilter 的双闸 | 同左 | 60 秒 |
+| `{rl}apikey:day:{keyId}:{yyyyMMdd}` | STRING，INCR 计数 | ApiKeyAuthFilter 的双闸 | 同左 | 86400 秒 |
+| `{rl}idem:{userId}:{key}` | STRING，`"pending"` → 信封 `v3:{指纹}:{code}` | 抢占 SET NX，落定 Lua CAS | 重放读取（先于限流） | pending 5 秒；落定值 86400 秒 |
+| `{rl}idem-import:{userId}:{key}` | STRING，在途 `pending:{owner}:{fileSha}` → 结算 JSON | ImportIdempotencyLease 抢占/结算（Lua CAS） | 导入重放读取 | 在途 120 秒；结算 86400 秒 |
+| 频道 `linkforge:bloom:put` | pub/sub | `CacheBus.publishBloomPut` | `CodeBloomFilter` 订阅 | 无（消息不落地） |
+| 频道 `linkforge:l1:invalidate` | pub/sub | `CacheBus.publishL1Invalidate` | `UrlLocalCache` 订阅 | 无 |
 
 三个键族对应三类读防护，正好是 README「五层读路径」（限流、Bloom、空值缓存、L1/L2、行读）里落在 Redis 上的部分。Bloom 与 L1 是进程内存结构，不在 Redis 里，这正是本课最后要讲的设计立场。
 
@@ -119,7 +120,7 @@ static long jitteredTtlSeconds(long baseSeconds, long jitterSeconds) {
 
 ### 5.5 幂等键两段式（预览）
 
-创建接口支持 `Idempotency-Key` 头。抢占阶段 `setIfAbsent(idemKey, "pending", 5s)`（:154-155），抢到的实例执行创建；落定阶段把值从 `"pending"` 换成短码并续 TTL 86400 秒（:271-274）。同键重试的请求读这个键（:185），拿到 code 就直接返回旧结果。它的 fail-open 不对称性（acquire 放开、settle 认账）是 9.2 课的细讲点，本课只需要知道这个键的形状。
+创建接口支持 `Idempotency-Key` 头。抢占阶段 `setIfAbsent(idemKey, "pending", 5s)`，抢到的实例执行创建；落定阶段经 Lua CAS 把值从 `"pending"` 换成信封 `v3:{请求指纹}:{短码}` 并续 TTL 86400 秒。同键重试的请求先读这个键（且先于限流），验指纹后返回旧结果或 409。导入有它自己的键与租约（`idem-import:`，在途值带 owner 与文件哈希，TTL 120 秒），全套语义在 6.2/6.3 与 9.2 课细讲，本课只需要知道这两个键的形状：**值都是「在途标记 → 结算值」的两段式，导入的在途标记自带所有权与内容指纹，创建的结算值自带请求指纹**。
 
 ## 6. 技术原理补充
 
@@ -143,9 +144,9 @@ Mermaid 备用图 [../../diagrams/mermaid/redirect-decision-chain.md](../../diag
 场景：用户带着 `Idempotency-Key: abc` 创建短链成功，随后一个浏览器访问它。看 Redis 里发生了什么。
 
 1. 限流放行。创建入口先过 `create:user` 滑窗键，Lua 脚本 `ZADD` 一个成员并 `PEXPIRE`（:132-138 调用，算法 9.1 课），用户配额 30/60 秒。
-2. 抢占幂等键。`setIfAbsent("linkforge:rl:idem:1:abc", "pending", 5s)` 成功（:154-155），Redis 里出现第一个键。
-3. DB 提交后立即写穿。`cacheUrl(code, url)` 把 URL 写进 L1 并 `SET linkforge:code:Ab3xK9m <url> EX [3600..3900]`（:269 调用，:971 落地）；`clearAbsent` 顺手 `DEL linkforge:absent:Ab3xK9m`（:268，通常本来就不存在）；`publishBloomPut` 向频道发一条 `Ab3xK9m|i-xxx`（:267）。
-4. 幂等键落定。`SET linkforge:rl:idem:1:abc Ab3xK9m EX 86400`（:271-274），两段式闭合。
+2. 抢占幂等键。`setIfAbsent("linkforge:rl:idem:1:abc", "pending", 5s)` 成功，Redis 里出现第一个键。
+3. DB 提交后立即写穿。`cacheUrl(code, url)` 把 URL 写进 L1 并 `SET linkforge:code:Ab3xK9m <url> EX [3600..3900]`；`clearAbsent` 顺手 `DEL linkforge:absent:Ab3xK9m`（通常本来就不存在）；`publishBloomPut` 向频道发一条 `Ab3xK9m|i-xxx`。
+4. 幂等键落定。Lua CAS 把 `linkforge:rl:idem:1:abc` 从 `pending` 换成 `v3:{指纹}:Ab3xK9m EX 86400`，两段式闭合。
 5. 浏览器请求 `/r/Ab3xK9m`。命中限流键（ZSET 查询），Bloom 是进程内的不碰 Redis，`absentKnown` 查空值缓存未命中（:623-626），L1 命中刚写穿的 URL（:631-632），L2 这次根本没被查询（:633 只在 L1 未命中时走），DB 行照读（8.4 讲为什么）。
 6. 一小时后这条链的 `linkforge:code:Ab3xK9m` 在 `[3600..3900]` 秒之间某个时刻过期消失；下一次跳转走 L2 miss、DB 读、再回填，TTL 重新抖动，过期时刻又错开了。
 
@@ -158,7 +159,7 @@ Mermaid 备用图 [../../diagrams/mermaid/redirect-decision-chain.md](../../diag
 ## 10. 本节总结
 
 - `RedisConfig` 只给两个 bean：`StringRedisTemplate`（全部读写）与监听容器（全部订阅）。
-- 键空间四族：`linkforge:code:{code}` 正缓存、`linkforge:absent:{code}` 空值缓存、`{rl}sw:*` 与 `{rl}apikey:*` 限流配额、`{rl}idem:*` 幂等键；两个频道 `linkforge:bloom:put` 与 `linkforge:l1:invalidate`。
+- 键空间五族：`linkforge:code:{code}` 正缓存、`linkforge:absent:{code}` 空值缓存、`{rl}sw:*` 与 `{rl}apikey:*` 限流配额、`{rl}idem:*` 创建幂等键、`{rl}idem-import:*` 导入幂等键；两个频道 `linkforge:bloom:put` 与 `linkforge:l1:invalidate`。
 - TTL 抖动 `base + uniform[0, jitter]` 只向上（:918-924），治的是同批过期雪崩；幂等键无抖动是合理的单键省略。
 - 写穿让下次读是新值，1 秒延迟双删清迟到的旧值；机制细节在 8.2。
 - 设计立场：没有分布式 L1、没有 RedisBloom，进程内结构加 pub/sub 对齐，README :391-404 是权威出处。

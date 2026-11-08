@@ -268,6 +268,7 @@ MeterFilter httpUriTagFilter() {
 - 三种身份三种结果：抓取令牌 200、JWT 用户可读 metrics 与 health、API Key 一律 403。
 - fail-closed：令牌未配置，端点拒绝所有人（`MetricsScrapeTokenFilter.java:49-55`）；比对用常量时间。
 - 数据形状：公共 tag `application=linkforge`；`http.server.requests` 独享直方图与 SLO 桶；`uri` 白名单外折叠 UNKNOWN；客户端计时器关闭。
+- 日志侧的对应物（S/N 波 N1）：每行日志带请求 cid（`pattern.level` 注入，2.2 课），指标回答「多少、多快」，cid 回答「这一次是谁」——两者在排障时交叉使用：先看指标定位时间窗，再拿客户端报来的 cid（在响应头里）捞出那一栈。
 - 测试兜底：`PrometheusScrapeIT` 钉住 401/403/200 三态、tag 有界与直方图存在性。
 
 ## 11. 课后练习

@@ -3,14 +3,14 @@
 ## 1. 本节学习目标
 
 1. 说清 Flyway 的版本化迁移模型：V 前缀文件、flyway_schema_history、baseline 机制。
-2. 逐版本讲出 V1–V10 各自改了什么、对应哪个功能波次。
+2. 逐版本讲出 V1–V15 各自改了什么、对应哪个功能波次（含批次 2/3 与审计修复波的五次迁移）。
 3. 完整复述 V4 的排序规则选型：为什么是 `utf8mb4_0900_bin` 而不是 `utf8mb4_bin`。
 4. 记住快照列纪律：跨表比较必须走 `link_id`，直连 code 会 ERROR 1267。
 5. 会读迁移文件里的决策注释，把「这条 DDL 为什么长这样」讲给面试官。
 
 ## 2. 前置知识
 
-- [4.1 Entity、Mapper 与 CRUD](01-entities-mappers-crud.md)：13 张表的实体侧，本章讲它们的来路。
+- [4.1 Entity、Mapper 与 CRUD](01-entities-mappers-crud.md)：17 张表的实体侧，本章讲它们的来路。
 - [1.3 配置体系与 Profile](../01-spring-boot/03-configuration-profiles.md)：`spring.flyway:` 配置段的位置。
 - MySQL 基础（框架无关常识）：`ALTER TABLE`、唯一索引、字符集（charset）与排序规则（collation）的区别。字符集决定能存什么字符，排序规则决定怎么比较与排序。
 
@@ -28,11 +28,16 @@
 | `V8__api_key_scope.sql`（6 行） | 两列 ALTER | 第 8 | 默认值回填旧行 |
 | `V9__webhook_aggregate.sql`（28 行） | 三列 + 聚合缓冲表 | 第 9 | 数值范围进列注释 |
 | `V10__link_variant.sql`（29 行） | 变体表 + click_log.variant | 第 10 | 内联 COLLATE 的对照 |
-| `application.yml`（:18-24） | flyway 配置 | 第 11 | baseline 开关 |
+| `V11__auth_token_version_and_refresh.sql`（34 行） | lf_user 两列 + refresh 表 | 第 11 | 会话撤销的数据地基 |
+| `V12__tenant_invitation_and_role_backfill.sql`（36 行） | 邀请表 + 角色回填 | 第 12 | 「不加列」的移除设计 |
+| `V13__link_tags_and_variant_match_rule.sql`（10 行） | tags 列 + match_rule 列 | 第 13 | 单列 vs 关联表的取舍 |
+| `V14__malicious_host.sql`（14 行） | 恶意主机表 | 第 14 | feed 落表、判定不查表 |
+| `V15__webhook_flush_state.sql`（12 行） | 冲刷序列表 | 第 15 | 序号为什么要随事务回滚 |
+| `application.yml`（:18-24） | flyway 配置 | 第 16 | baseline 开关 |
 
 ## 4. 类的定位（机制视角）
 
-Flyway 是「SQL 文件的版本控制器」：把 DDL 按版本号排进 `classpath:db/migration`，启动时对比 `flyway_schema_history` 表逐个补跑。它解决的问题是每支代码都会遇到的：同事 B 拉下代码后，数据库怎么自动长出同事 A 新加的列。本项目 V1–V10 全部是启动时自动执行（application.yml:21 `enabled: true`），没有手工 DDL。表全景见[数据库 ERD](../../diagrams/archify/html/05-database-erd.html)，它逐列录自本章这 10 个文件。
+Flyway 是「SQL 文件的版本控制器」：把 DDL 按版本号排进 `classpath:db/migration`，启动时对比 `flyway_schema_history` 表逐个补跑。它解决的问题是每支代码都会遇到的：同事 B 拉下代码后，数据库怎么自动长出同事 A 新加的列。本项目 V1–V15 全部是启动时自动执行（application.yml:21 `enabled: true`），没有手工 DDL。表全景见[数据库 ERD](../../diagrams/archify/html/05-database-erd.html)，它逐列录自本章这 15 个文件。
 
 ## 5. 核心源码详解
 
@@ -48,7 +53,7 @@ Flyway 是「SQL 文件的版本控制器」：把 DDL 按版本号排进 `class
     baseline-version: 1
 ```
 
-（框架行为）普通情况：空库启动，Flyway 建出 flyway_schema_history 表，依次执行 V1 到 V10，每成功一个记一行。麻烦在「接手存量库」：库里有表但没有历史表，Flyway 不知道从哪开始。`baseline-on-migrate: true` 让它先写一条 version=1 的 BASELINE 记录再继续，于是 V1 被跳过（假设存量库已是 V1 形状），V2 起正常补跑。`baseline-version: 1` 指定基线版本号。
+（框架行为）普通情况：空库启动，Flyway 建出 flyway_schema_history 表，依次执行 V1 到 V15，每成功一个记一行。麻烦在「接手存量库」：库里有表但没有历史表，Flyway 不知道从哪开始。`baseline-on-migrate: true` 让它先写一条 version=1 的 BASELINE 记录再继续，于是 V1 被跳过（假设存量库已是 V1 形状），V2 起正常补跑。`baseline-version: 1` 指定基线版本号。
 
 V1 文件自己的头注释（V1__baseline_schema.sql:1-3）与这个机制呼应：
 
@@ -62,7 +67,7 @@ V1 文件自己的头注释（V1__baseline_schema.sql:1-3）与这个机制呼�
 
 顺带认识 flyway_schema_history 本身：Flyway 自维护，无业务外键，ERD 刻意不画它（manifest 有偏离说明）。
 
-### 5.2 V1–V10 逐版本
+### 5.2 V1–V15 逐版本
 
 | 版本 | 文件主题 | DDL 动作 | 功能波次 |
 |------|----------|----------|----------|
@@ -76,6 +81,11 @@ V1 文件自己的头注释（V1__baseline_schema.sql:1-3）与这个机制呼�
 | V8 | scope/role | ALTER lf_api_key ADD scope；ALTER lf_user ADD tenant_role | C1 双 scope |
 | V9 | 聚合投递 | ALTER endpoint 三列；CREATE lf_webhook_agg_buffer | C1 聚合模式 |
 | V10 | A/B 分流 | CREATE lf_link_variant；ALTER lf_click_log ADD variant | C3 A/B |
+| V11 | 会话地基 | ALTER lf_user ADD token_version / must_change_password；CREATE lf_refresh_token | 批次 2a |
+| V12 | 团队协作 | CREATE lf_tenant_invitation；UPDATE 回填 tenant_role NULL→MEMBER | 批次 2b |
+| V13 | 标签与路由 | ALTER lf_short_link ADD tags；ALTER lf_link_variant ADD match_rule | 批次 3a |
+| V14 | 恶意主机 | CREATE lf_malicious_host | 批次 3b |
+| V15 | 冲刷序号 | CREATE lf_webhook_flush_state | 审计修复波 M3 |
 
 挑五个有教学价值的细看。
 
@@ -94,6 +104,16 @@ V1 文件自己的头注释（V1__baseline_schema.sql:1-3）与这个机制呼�
 ```
 
 后注释（:19-22）点破：在 CREATE TABLE 里内联声明，就不用像 V4 那样对既有列做重建迁移。两次需求同源（键值大小写敏感），一处在改表（贵），一处在建表（免费），对照读。
+
+**V11 的兼容签发**（V11__auth_token_version_and_refresh.sql:1-9 注释）：`token_version INT NOT NULL DEFAULT 0` 与 must_change_password 一起加到 lf_user。注释把升级兼容讲透：V11 之前签发的 token 没有 tv claim，读作 0，恰好等于新列默认值，所以存量会话不会在部署瞬间集体死亡，而是活满（现已缩短到 1 小时的）自然寿命。新表 `lf_refresh_token` 的纪律与 V5 一脉：只存 SHA-256 哈希，`uk_refresh_token_hash` 唯一；family_id 与 replaced_by_id 把轮换链物化成行与行之间的指针（行为面在 5.4）。
+
+**V12 的「不加列」**（V12:23-30 注释）：邀请表本身中规中矩（哈希列 + accepted/revoked 标记 + 一条条件 UPDATE 抢占的单次语义）。真正有教学价值的是它**拒绝加的东西**：成员移除不新增任何列，直接复用 lf_user 既有的逻辑删除标记——因为每个凭据复核点（JWT 过滤器、API Key 属主回查、refresh 查询）都经 mapper 读用户行，逻辑删除行天然不可见，移除即全凭据死亡，而成员建的链接/webhook 作为租户资产留在原地。一个迁移文件用注释论证「为什么这里不需要 DDL」，与 V4 论证「为什么这样 DDL」互为镜像。同文件的角色回填 UPDATE 把 tenant_role 的 null 约定升级为写明的事实（5.3）。
+
+**V13 的单列取舍**（V13:1-9 注释）：tags 不建关联表，直接在 lf_short_link 上加一列 VARCHAR(512) 存规范化逗号串（小写、去重、单 tag `[a-z0-9_-]{1,32}`、至多 10 个），整词查询走 FIND_IN_SET。注释自陈「at this scale」——这个规模下关联表是过度设计，单列 + 应用层规范化（`LinkTags`）更便宜；同文件的 match_rule 是 VARCHAR(1024) 存 JSON 原文，MyBatis 只映射为 String，解析在应用层 `MatchRule`——数据库不理解的字段就不假装理解（6.1/7.3 展开）。
+
+**V14 的落表与不删**（V14:1-7 注释）：`lf_malicious_host` 的 host 唯一索引支撑 feed 的 upsert 幂等。注释钉了一条运营语义：主机从 feed 消失**不自动除名**——行留在表里，只是 last_seen 不再前进，除名是运营决策不是同步的副作用。判定侧不读这张表（读内存快照，7.2），表只是 feed 的落盘与审计面。
+
+**V15 的序号为什么进表**（V15:1-9 注释）：聚合冲刷的 eventId 旧方案只用窗口标识，迟到桶二次冲刷时撞唯一索引被删未发（M3 的两条丢数路径之一）。修法是给每个 endpoint 一个**持久单调序号** flush_seq，eventId 变成 `digest-{endpointId}-{windowStart}-{flushSeq}`。序号必须活在表里且在 drain 事务内递增：回滚的 drain 不消耗序号，重试复现出完全相同的 eventId——进程内计数器（重启归零、多实例打架）与事务外递增（回滚留空洞）都给不了这个性质（13.2 深讲）。
 
 ### 5.3 V4 深读：utf8mb4_0900_bin 的选型论证
 
@@ -133,11 +153,11 @@ lf_click_log.code / lf_click_daily.code 是写入时从权威行复制的快照�
 
 ### 5.4 迁移与功能波次的对应
 
-（本项目实现）从迁移注释里的代号能还原开发史：A 系列（A6/A7/A8/A9/A10）是「deepen」阶段的地基与统计管道；B 系列（B3/B4/B5）是 wave2 的用户可见功能（密码链、API Key、webhook）；C 系列（C1/C3）是双 scope 与 A/B 分流。对应关系见 5.2 表的末列。读法：看到一个类里的决策代号（如 ShortLinkService 注释里的 D-C3-6），就能定位到引入它的迁移与波次。V4 注释尾部的「Chosen by 萧北 2026-10-24」还留下决策人与日期——技术选型留痕的好习惯。
+（本项目实现）从迁移注释里的代号能还原开发史：A 系列（A6/A7/A8/A9/A10）是「deepen」阶段的地基与统计管道；B 系列（B3/B4/B5）是 wave2 的用户可见功能（密码链、API Key、webhook）；C 系列（C1/C3）是双 scope 与 A/B 分流；V11 起改用「批次」叙事：2a/2b（认证与团队）、3a/3b（链接能力与防护）、审计修复波（M3）。对应关系见 5.2 表的末列。读法：看到一个类里的决策代号（如 ShortLinkService 注释里的 D-C3-6、SessionService 注释里的 audit M1），就能定位到引入它的迁移与波次。V4 注释尾部的「Chosen by 萧北 2026-10-24」还留下决策人与日期——技术选型留痕的好习惯。
 
 ## 6. 技术原理补充
 
-**Flyway 的版本号与命名**（框架行为）。`V<version>__<description>.sql`，双下划线分隔；版本号必须递增，跑过的文件内容不能改（校验和会变，启动报错）。要改已发布的 schema 就追加新 V 文件，这是「数据库变更也走 review」的载体。本项目最高 V10，全部符合。
+**Flyway 的版本号与命名**（框架行为）。`V<version>__<description>.sql`，双下划线分隔；版本号必须递增，跑过的文件内容不能改（校验和会变，启动报错）。要改已发布的 schema 就追加新 V 文件，这是「数据库变更也走 review」的载体。本项目最高 V15，全部符合——注意 flyway_schema_history 的「migrations executed」口径：空库全量执行是 15 条（V1–V15），项目 README 的测试口径表里写的就是这个数。
 
 **baseline 与 drop 的取舍**（框架行为）。接存量库除了 baseline 还有「clean + 全量重放」路线，后者要求停机与数据迁移。`baseline-on-migrate` 的适用前提正是 V1 注释声明的：存量库已经与 V1 形状一致。若形状不一致，baseline 会把差异掩盖成「永远无人执行也无人发现」，所以 FlywayBaselineIT 才有价值——用测试锁住「存量库恰好是 V1」这个假设。
 
@@ -150,14 +170,14 @@ lf_click_log.code / lf_click_daily.code 是写入时从权威行复制的快照�
 - [数据库 ERD](../../diagrams/archify/html/05-database-erd.html)：每张表卡片标注了引入它的 V 版本；lf_click_log.event_id 到 lf_outbox.event_id 的虚线逻辑引用对应 V2。
 - [包结构图](../../diagrams/archify/html/03-package-map.html)：db/migration 不在 Java 包里，但每张表都有且只有一个实体类对它负责。
 
-阅读顺序：先 ERD 通览 13 表，回 5.2 表对号入座版本，再进 V4 原文读论证全文。
+阅读顺序：先 ERD 通览 17 表，回 5.2 表对号入座版本，再进 V4 原文读论证全文。
 
 ## 8. 项目中的真实执行过程
 
 场景一：新开发者第一天，空库启动。
 
 1. application.yml 读到 flyway 配置（:18-24），容器启动时 Flyway 先于 MyBatis 初始化。
-2. Flyway 建 flyway_schema_history，依次执行 V1..V10，每个记一行（version、description、checksum、execution_time）。
+2. Flyway 建 flyway_schema_history，依次执行 V1..V15，每个记一行（version、description、checksum、execution_time）。
 3. 实体层开始工作：ShortLink 的 @TableName 找得到 lf_short_link（V1 建，V4 改 code 排序规则，V7 加密码列）。
 4. 全程无人工步骤，`mvn verify` 里的 Testcontainers 每次都重演这条路径（模块 15）。
 
@@ -165,7 +185,7 @@ lf_click_log.code / lf_click_daily.code 是写入时从权威行复制的快照�
 
 1. 启动时 Flyway 发现 lf_short_link 等表存在但 flyway_schema_history 不存在。
 2. baseline-on-migrate 生效：先写 BASELINE@1 记录，跳过 V1。
-3. 从 V2 开始补跑：outbox 表建立，click_log 获得 event_id，依次到 V10。
+3. 从 V2 开始补跑：outbox 表建立，click_log 获得 event_id，依次到 V15。
 4. FlywayBaselineIT 断言的正是这个过程（遗留库恰 1 条 BASELINE、V1 不重跑）。
 
 ## 9. 为什么这样设计
@@ -179,6 +199,7 @@ lf_click_log.code / lf_click_daily.code 是写入时从权威行复制的快照�
 
 - Flyway 按版本号补跑 V 文件，flyway_schema_history 记账；baseline-on-migrate 处理「有表无史」的存量库，FlywayBaselineIT 锁住假设。
 - V1–V10 对应 A6→C3 的功能波次：六基线表、outbox、维度、大小写敏感、API Key、webhook、密码列、scope/role、聚合、A/B 变体。
+- V11–V15 对应批次 2 起的新史：会话撤销地基（tv + refresh 表）、团队（邀请表 + 角色回填 + 「不加列」的移除）、标签/路由两列、恶意主机落表、冲刷序号表。五次迁移里有两次的教学点在注释里论证「为什么不」（V12 不加列、V14 不自动除名）。
 - V4 的选型核心是「与进程内比较语义对齐」：ai_ci 大小写不敏感、utf8mb4_bin PAD SPACE、0900_bin NO PAD 全不敏感，Bloom 只认第三种。
 - 快照列永不参与比较；跨表关联一律走 link_id，直连 code 报 ERROR 1267。
 - 建表能内联 COLLATE 就不留给将来 ALTER（V10 vs V4）。
@@ -187,7 +208,7 @@ lf_click_log.code / lf_click_daily.code 是写入时从权威行复制的快照�
 
 **练习 1（概念理解）**：一个 v1.0.0 存量库首次启动，flyway_schema_history 里会有几条记录？第一条的 version 是多少？
 
-答案解析：10 条。1 条 BASELINE（version=1，由 baseline-on-migrate 写入，不执行任何 SQL）加 V2 到 V10 共 9 条补跑记录。V1 被跳过（存量库已具 V1 形状，重跑会 CREATE TABLE 失败）。FlywayBaselineIT 断言「恰 1 条 BASELINE@1、V1 不重跑」。
+答案解析：15 条。1 条 BASELINE（version=1，由 baseline-on-migrate 写入，不执行任何 SQL）加 V2 到 V15 共 14 条补跑记录。V1 被跳过（存量库已具 V1 形状，重跑会 CREATE TABLE 失败）。FlywayBaselineIT 断言「恰 1 条 BASELINE@1、V1 不重跑」。
 
 **练习 2（源码定位）**：`/r/abc%20` 请求码 abc。分别指出 V1 默认 collation、utf8mb4_bin、utf8mb4_0900_bin 三种情形下，数据库比较 `code = 'abc '` 的结果。
 
@@ -207,4 +228,4 @@ lf_click_log.code / lf_click_daily.code 是写入时从权威行复制的快照�
 
 ## 12. 与后续课程的联系
 
-本章的 DDL 确定了「什么能保证」（唯一索引、NOT NULL），[4.3 事务](03-transactions.md) 讲「怎么一起保证」：recordClick 同事务双写 lf_click_log 与 lf_outbox（V2 引入的两张表在一个事务里各写一行），以及 InnoDB 语句级回滚如何被三个幂等设计反复利用。密码列（V7）与变体表（V10）的行为面分别在模块 07 与 07.3 展开。
+本章的 DDL 确定了「什么能保证」（唯一索引、NOT NULL），[4.3 事务](03-transactions.md) 讲「怎么一起保证」：recordClick 同事务双写 lf_click_log 与 lf_outbox（V2 引入的两张表在一个事务里各写一行），以及 InnoDB 语句级回滚如何被三个幂等设计反复利用。密码列（V7）与变体表（V10）的行为面分别在模块 07 与 07.3 展开；V11/V12 的行为面（轮换、护栏、重置）在 5.4，V15 的序号语义在 13.2。

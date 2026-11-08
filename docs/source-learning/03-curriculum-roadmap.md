@@ -1,6 +1,6 @@
 # 03 · 课程总路线（Curriculum Roadmap）
 
-> 本教材共 15 个模块、42 节课、14 个综合专题。每节课都按统一模板写：学习目标 → 前置知识 → 涉及源码 → 类的定位 → 核心源码详解 → 技术原理补充 → 可视化 → 真实执行过程 → 为什么这样设计 → 总结 → 课后练习（带解析）→ 与后续课程的联系。
+> 本教材共 15 个模块、43 节课、17 个综合专题（专题 15–17 是 3.0.0 附录，专讲批次 2/3 与修复波新增的机制）。每节课都按统一模板写：学习目标 → 前置知识 → 涉及源码 → 类的定位 → 核心源码详解 → 技术原理补充 → 可视化 → 真实执行过程 → 为什么这样设计 → 总结 → 课后练习（带解析）→ 与后续课程的联系。
 > 模块 00（全景认知）由三篇总览文档承担：[01-project-overview.md](01-project-overview.md)、[02-architecture-map.md](02-architecture-map.md) 与本文。
 
 ## 0. 怎么用这份路线
@@ -58,24 +58,25 @@ flowchart TD
 | 课 | 文件 | 内容要点 |
 |----|------|----------|
 | 4.1 Entity/Mapper/CRUD | [modules/04-mybatis-mysql/01-entities-mappers-crud.md](modules/04-mybatis-mysql/01-entities-mappers-crud.md) | 全部实体、BaseMapper、LambdaQueryWrapper、逻辑删除、分页插件 |
-| 4.2 Flyway 与 schema | [modules/04-mybatis-mysql/02-flyway-migrations.md](modules/04-mybatis-mysql/02-flyway-migrations.md) | V1–V10 逐版本、baseline、唯一索引兜底设计 |
+| 4.2 Flyway 与 schema | [modules/04-mybatis-mysql/02-flyway-migrations.md](modules/04-mybatis-mysql/02-flyway-migrations.md) | V1–V15 逐版本（V11–V15：会话/邀请/标签与路由/feed/冲刷序号）、baseline、唯一索引兜底设计 |
 | 4.3 事务 | [modules/04-mybatis-mysql/03-transactions.md](modules/04-mybatis-mysql/03-transactions.md) | `@Transactional`、事务边界、同事务双写的伏笔 |
 
-## 6. 模块 05：用户体系与 Spring Security（3 课）
+## 6. 模块 05：用户体系与 Spring Security（4 课）
 
 | 课 | 文件 | 内容要点 |
 |----|------|----------|
-| 5.1 安全过滤器链 | [modules/05-security/01-security-filter-chain.md](modules/05-security/01-security-filter-chain.md) | `SecurityConfig` 全链、放行清单、CSRF/session、401 JSON |
-| 5.2 JWT 签发与校验 | [modules/05-security/02-jwt-auth.md](modules/05-security/02-jwt-auth.md) | `JwtService`、`JwtAuthFilter`、失败路径 |
+| 5.1 安全过滤器链 | [modules/05-security/01-security-filter-chain.md](modules/05-security/01-security-filter-chain.md) | `SecurityConfig` 全链、放行清单、CSRF/session、401 JSON、认证存储故障 503 |
+| 5.2 JWT 签发与校验 | [modules/05-security/02-jwt-auth.md](modules/05-security/02-jwt-auth.md) | `JwtService`（access 1h + tv claim）、`JwtAuthFilter` 每请求回查、强制改密墙、失败路径 |
 | 5.3 UserContext 与授权 | [modules/05-security/03-usercontext-authz.md](modules/05-security/03-usercontext-authz.md) | ThreadLocal 生命周期、tenant_role（ADMIN/MEMBER）、越权 404 语义 |
+| 5.4 刷新会话与团队协作 | [modules/05-security/04-sessions-and-teams.md](modules/05-security/04-sessions-and-teams.md) | `SessionService` 轮换/重用检测/原子撤销（M1）、邀请链接与成员管理、最后 ADMIN 护栏（M2）、管理员重置（M7） |
 
 ## 7. 模块 06：短链核心业务（4 课）
 
 | 课 | 文件 | 内容要点 |
 |----|------|----------|
-| 6.1 数据模型 | [modules/06-short-link/01-data-model.md](modules/06-short-link/01-data-model.md) | `ShortLink`/`LinkVariant` 实体、DTO 族、大小写敏感短码 |
-| 6.2 创建短链全流程 | [modules/06-short-link/02-create-flow.md](modules/06-short-link/02-create-flow.md) | 校验链、幂等键两段式、撞码重试、门禁 BLOCK、UTM 合并、variants 整表替换 |
-| 6.3 生命周期与 CSV | [modules/06-short-link/03-crud-lifecycle-csv.md](modules/06-short-link/03-crud-lifecycle-csv.md) | list/detail/PATCH/disable/enable/delete、缓存写穿+双删、CSV 导入导出 |
+| 6.1 数据模型 | [modules/06-short-link/01-data-model.md](modules/06-short-link/01-data-model.md) | `ShortLink`/`LinkVariant` 实体（含 tags、match_rule）、DTO 族、大小写敏感短码 |
+| 6.2 创建短链全流程 | [modules/06-short-link/02-create-flow.md](modules/06-short-link/02-create-flow.md) | 校验链、幂等键两段式 + 请求指纹 v3（口令 HMAC，M4）、重放不烧限流、撞码重试、门禁 BLOCK、UTM 合并、variants 整表替换 |
+| 6.3 生命周期与 CSV | [modules/06-short-link/03-crud-lifecycle-csv.md](modules/06-short-link/03-crud-lifecycle-csv.md) | list（keyword/tag 筛选）/detail/PATCH（单事务）/disable/enable/delete、缓存写穿+双删、CSV 导入（在途租约 M5）导出（公式中和 M8） |
 | 6.4 QR 物料与 UTM | [modules/06-short-link/04-qr-utm-materials.md](modules/06-short-link/04-qr-utm-materials.md) | ZXing 渲染、签名分享链、UTM 写时合并 |
 
 ## 8. 模块 07：短链跳转系统（3 课）
@@ -83,8 +84,8 @@ flowchart TD
 | 课 | 文件 | 内容要点 |
 |----|------|----------|
 | 7.1 跳转判定链 | [modules/07-redirection/01-decision-chain.md](modules/07-redirection/01-decision-chain.md) | 12 步总顺序、每步失败语义、GET/HEAD 差异 |
-| 7.2 密码门与域名门禁 | [modules/07-redirection/02-password-and-domain-gates.md](modules/07-redirection/02-password-and-domain-gates.md) | 解锁流程、签名 cookie、B9 BLOCK/WARN、`GatePages` |
-| 7.3 A/B 权重分流 | [modules/07-redirection/03-variants-split.md](modules/07-redirection/03-variants-split.md) | `VariantPicker` 抽签、与门禁的顺序、统计分桶 |
+| 7.2 密码门与域名门禁 | [modules/07-redirection/02-password-and-domain-gates.md](modules/07-redirection/02-password-and-domain-gates.md) | 解锁流程、签名 cookie、B9 BLOCK/WARN、恶意主机 feed 本地判定、`GatePages` |
+| 7.3 A/B 权重分流 | [modules/07-redirection/03-variants-split.md](modules/07-redirection/03-variants-split.md) | `VariantPicker` 抽签、`MatchRule` 动态路由（设备/语言/时间窗、跨午夜开窗日语义）、与门禁的顺序、统计分桶 |
 
 ## 9. 模块 08：Redis 与缓存优化（4 课）
 
@@ -99,8 +100,8 @@ flowchart TD
 
 | 课 | 文件 | 内容要点 |
 |----|------|----------|
-| 9.1 滑动窗口限流 | [modules/09-rate-limit/01-sliding-window-lua.md](modules/09-rate-limit/01-sliding-window-lua.md) | Lua 逐行、Redis TIME、Retry-After、fail-open |
-| 9.2 幂等键与配额 | [modules/09-rate-limit/02-idempotency-and-quotas.md](modules/09-rate-limit/02-idempotency-and-quotas.md) | 创建幂等、API Key 双闸、固定窗口日配额 |
+| 9.1 滑动窗口限流 | [modules/09-rate-limit/01-sliding-window-lua.md](modules/09-rate-limit/01-sliding-window-lua.md) | Lua 逐行、Redis TIME、Retry-After、fail-open、登录双桶（IP + 账号） |
+| 9.2 幂等键与配额 | [modules/09-rate-limit/02-idempotency-and-quotas.md](modules/09-rate-limit/02-idempotency-and-quotas.md) | 创建幂等（指纹与租约）、导入在途租约、API Key 双闸、固定窗口日配额 |
 
 ## 11. 模块 10：RabbitMQ 与 Outbox（3 课）
 
@@ -116,20 +117,20 @@ flowchart TD
 |----|------|----------|
 | 11.1 点击记录管道 | [modules/11-statistics/01-click-record-pipeline.md](modules/11-statistics/01-click-record-pipeline.md) | `ClickRecordService` 同事务双写、B2 过滤、fail-open |
 | 11.2 聚合与维度 | [modules/11-statistics/02-aggregation-dimensions.md](modules/11-statistics/02-aggregation-dimensions.md) | `lf_click_daily`/`lf_click_dim_daily`、UV、`ClickDimensions` 规则 |
-| 11.3 统计 API 与对账 | [modules/11-statistics/03-stats-api-reconciler.md](modules/11-statistics/03-stats-api-reconciler.md) | StatsController 全端点、`ClickLogReconciler`、对账 SQL |
+| 11.3 统计 API 与对账 | [modules/11-statistics/03-stats-api-reconciler.md](modules/11-statistics/03-stats-api-reconciler.md) | StatsController 全端点（stats 同窗同源 + RR 快照读、A/B 诊断与适用性门、原始点击导出）、`ClickLogReconciler`、对账 SQL |
 
 ## 13. 模块 12：API Key 开放能力（1 课）
 
 | 课 | 文件 | 内容要点 |
 |----|------|----------|
-| 12.1 API Key 全流程 | [modules/12-api-key/01-apikey-full.md](modules/12-api-key/01-apikey-full.md) | 明文一次性返回、SHA-256 哈希、`ApiKeyAuthFilter`、双 scope、配额 |
+| 12.1 API Key 全流程 | [modules/12-api-key/01-apikey-full.md](modules/12-api-key/01-apikey-full.md) | 明文一次性返回、SHA-256 哈希、`ApiKeyAuthFilter`、双 scope、配额、改密墙与重置撤销（M7）、存储故障 503 |
 
 ## 14. 模块 13：Webhook（3 课）
 
 | 课 | 文件 | 内容要点 |
 |----|------|----------|
 | 13.1 端点配置与密钥加密 | [modules/13-webhook/01-endpoints-and-cipher.md](modules/13-webhook/01-endpoints-and-cipher.md) | endpoint CRUD、AES-256-GCM `WebhookSecretCipher` |
-| 13.2 投递、签名与重试 | [modules/13-webhook/02-delivery-signing-retry.md](modules/13-webhook/02-delivery-signing-retry.md) | 投递行生成、`WebhookSigner`、退避状态机、DB 时钟、AGGREGATE digest 双模式 |
+| 13.2 投递、签名与重试 | [modules/13-webhook/02-delivery-signing-retry.md](modules/13-webhook/02-delivery-signing-retry.md) | 投递行生成、`WebhookSigner`、退避状态机、DB 时钟、AGGREGATE digest 单事务 drain + flush 序号（M3） |
 | 13.3 SSRF 防护 | [modules/13-webhook/03-ssrf-and-aggregate.md](modules/13-webhook/03-ssrf-and-aggregate.md) | `WebhookTargetGuard`+`PinnedHttpSender` 钉死 rebinding、IPv6 内嵌 IPv4、与 B9 分工 |
 
 ## 15. 模块 14：可观测性与调度任务（3 课）
@@ -138,13 +139,13 @@ flowchart TD
 |----|------|----------|
 | 14.1 Actuator 与 Micrometer | [modules/14-observability/01-actuator-micrometer.md](modules/14-observability/01-actuator-micrometer.md) | 端点暴露、健康组件、tag 白名单 |
 | 14.2 业务指标与 Grafana | [modules/14-observability/02-metrics-gauges-grafana.md](modules/14-observability/02-metrics-gauges-grafana.md) | 指标全表、`BacklogGauges` 采样解耦、看板面板 |
-| 14.3 定时任务地图 | [modules/14-observability/03-scheduled-tasks-map.md](modules/14-observability/03-scheduled-tasks-map.md) | 全部 @Scheduled 任务、线程池隔离、`SentRowCleanup` |
+| 14.3 定时任务地图 | [modules/14-observability/03-scheduled-tasks-map.md](modules/14-observability/03-scheduled-tasks-map.md) | 全部 @Scheduled 任务（含恶意 feed 同步）、线程池隔离、`SentRowCleanup` |
 
 ## 16. 模块 15：测试、CI 与部署（3 课）
 
 | 课 | 文件 | 内容要点 |
 |----|------|----------|
-| 15.1 测试金字塔 | [modules/15-testing-deployment/01-test-pyramid.md](modules/15-testing-deployment/01-test-pyramid.md) | 319 例构成、Testcontainers 基类、红先纪律 |
+| 15.1 测试金字塔 | [modules/15-testing-deployment/01-test-pyramid.md](modules/15-testing-deployment/01-test-pyramid.md) | 508 例构成、Testcontainers 基类、红先纪律 |
 | 15.2 Maven 与 CI | [modules/15-testing-deployment/02-maven-ci.md](modules/15-testing-deployment/02-maven-ci.md) | surefire/failsafe、时区 fork、GitHub Actions |
 | 15.3 Compose 与故障演练 | [modules/15-testing-deployment/03-compose-and-drills.md](modules/15-testing-deployment/03-compose-and-drills.md) | 5 个 service、4 个 drill 脚本、prod profile |
 
@@ -166,10 +167,13 @@ flowchart TD
 12. [依赖故障处理（Redis/MySQL/RabbitMQ）](advanced/12-dependency-failure-handling.md)
 13. [性能与一致性分析](advanced/13-performance-and-consistency.md)
 14. [项目面试讲解指南](advanced/14-interview-guide.md)
+15. [认证会话与团队协作（3.0.0 附录）](advanced/15-auth-sessions-and-teams.md)
+16. [链接能力增强：标签、动态路由、导出与恶意防护（3.0.0 附录）](advanced/16-link-power-features.md)
+17. [正确性波次：审计修复波与 S/N 波（3.0.0 附录）](advanced/17-correctness-waves.md)
 
 ## 18. 参考资料区（reference/）
 
-- [类覆盖矩阵](reference/class-coverage-matrix.md)：120 个主源码类 → 课程去向。
+- [类覆盖矩阵](reference/class-coverage-matrix.md)：150 个主源码类 → 课程去向。
 - [功能覆盖矩阵](reference/feature-coverage-matrix.md)：每个功能 → 课程/类/调用链/配图。
 - [图表覆盖矩阵](reference/diagram-coverage-matrix.md)：每张 Archify 图 → 类型/课程/证据/校验。
 - [术语表](reference/technical-glossary.md)、[代码导航索引](reference/code-navigation-index.md)、[进度](reference/progress.md)、[差异与问题登记](reference/issues-and-discrepancies.md)。

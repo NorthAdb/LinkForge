@@ -53,29 +53,32 @@ cacheBus.publishL1Invalidate(code);
 ### 5.1 list 与 pageOwn：一套查询两种视野
 
 ```java
-public PageResponse<ShortLinkDetail> list(int page, int size) {
-    AuthUser user = requireUser();
-    return pageOwn(user, Math.max(1, page), size < 1 || size > 100 ? 20 : size);
-}
-
-private PageResponse<ShortLinkDetail> pageOwn(AuthUser user, long current, long pageSize) {
-    LambdaQueryWrapper<ShortLink> query = new LambdaQueryWrapper<ShortLink>()
-            .orderByDesc(ShortLink::getId);
-    if (isTenantWide(user)) {
-        query.eq(ShortLink::getTenantId, user.getTenantId());
-    } else {
-        query.eq(ShortLink::getCreatedBy, user.getUserId());
+    public PageResponse<ShortLinkDetail> list(int page, int size, String keyword, String tag) {
+        AuthUser user = requireUser();
+        return pageOwn(user, Math.max(1, page), size < 1 || size > 100 ? 20 : size,
+                keyword, normalizeTagFilter(tag));
     }
-    Page<ShortLink> result = shortLinkMapper.selectPage(new Page<>(current, pageSize), query);
-    List<ShortLinkDetail> records = result.getRecords().stream().map(ShortLinkService::toDetail).toList();
-    return new PageResponse<>(records, result.getTotal(), result.getCurrent(), result.getSize(), result.getPages());
-}
+
+    private PageResponse<ShortLinkDetail> pageOwn(AuthUser user, long current, long pageSize,
+                                                  String keyword, String tag) {
+        LambdaQueryWrapper<ShortLink> query = new LambdaQueryWrapper<ShortLink>()
+                .orderByDesc(ShortLink::getId);
+        if (isTenantWide(user)) {
+            query.eq(ShortLink::getTenantId, user.getTenantId());
+        } else {
+            query.eq(ShortLink::getCreatedBy, user.getUserId());
+        }
+        applyLinkFilters(query, keyword, tag);
+        // …selectPage + toDetail 组装
+    }
 ```
-（`src/main/java/com/linkforge/link/service/ShortLinkService.java:285-301`）
+（`src/main/java/com/linkforge/link/service/ShortLinkService.java` 的 list/pageOwn，节选）
 
-视野由 `isTenantWide`（:906-908）决定：JWT 用户与 USER scope 的 API Key 只见自己创建的行（按 `createdBy` 过滤），TENANT scope 的 API Key 见整个租户（按 `tenantId` 过滤）。两种身份的细节在模块 12.1。分页参数在 :287 收口：page 最小 1，size 限 1..100，默认 20。列表行走 `toDetail`，variants 恒为 null（6.1 课讲过的查询成本取舍）。
+视野由 `isTenantWide` 决定：JWT 用户与 USER scope 的 API Key 只见自己创建的行（按 `createdBy` 过滤），TENANT scope 的 API Key 见整个租户（按 `tenantId` 过滤）。两种身份的细节在模块 12.1。分页参数在 list 收口：page 最小 1，size 限 1..100，默认 20。列表行走 `toDetail`，variants 恒为 null（6.1 课讲过的查询成本取舍）。
 
-越权访问在这里就已经消失：条件拼进 WHERE，别人的行根本不会从数据库出来。而 `getOwnedLink`（:890-903）对查不到的行统一抛 404，不区分「不存在」与「不属于你」，不给枚举者任何信息。
+批次 3a 的 `applyLinkFilters` 在视野之上再叠两个可选过滤（4.1 实例 3 有 SQL 细节）：keyword 对 code/original_url/title 做 LIKE（`%`、`_`、`\` 先转义，用户输入不得变成通配符）；tag 经 `normalizeTagFilter` 规范化（非法标签直接 400）后以 `FIND_IN_SET({0}, tags)` 精确命中——规范串里 "summer" 命中不了 "summer-sale"，这正是单列逗号串方案能成立的前提（标签先规范化、再精确比）。
+
+越权访问在这里就已经消失：条件拼进 WHERE，别人的行根本不会从数据库出来。而 `getOwnedLink` 对查不到的行统一抛 404，不区分「不存在」与「不属于你」，不给枚举者任何信息。
 
 ### 5.2 detail：唯一填充 variants 的读路径
 
@@ -102,28 +105,31 @@ public ShortLinkDetail update(String code, UpdateShortLinkRequest request) {
 
 **合法性段**（:461-471）做四件事，全部在任何读写之前：clearPassword 与 setPassword 互斥、expireAt 必须未来、variants 整组校验（null 则 replacement 也为 null）、取行。注意取行发生在校验之后，校验失败连数据库都不碰。
 
-**字段应用段**（:476-504）有三个容易踩坑的细节。
+**字段应用段**有三个容易踩坑的细节。
 
-细节一：URL 更新是「合并后再验证」。只发 utm 不发 URL 也是合法更新（D-C1-6），此时从存量 URL 出发做合并（:477）。合并结果必须过 `requireHttpUrl` 与 `rejectBlockedTarget`，与创建同规格（:478-479）。
+细节一：URL 更新是「合并后再验证」。只发 utm 不发 URL 也是合法更新（D-C1-6），此时从存量 URL 出发做合并。合并结果必须过 `requireHttpUrl` 与 `rejectBlockedTarget`，与创建同规格——其中 rejectBlockedTarget 现在也查恶意 feed 本地快照（批次 3b，7.2）。
 
-细节二：清密码必须显式 SET NULL。`updateById` 默认跳过 null 字段，直接把 hash 置 null 再 update 什么都不会发生。所以走 `LambdaUpdateWrapper`：
+细节二：清密码必须显式 SET NULL。`updateById` 默认跳过 null 字段，直接把 hash 置 null 再 update 什么都不会发生。所以走 `LambdaUpdateWrapper` 显式 `.set(ShortLink::getAccessPasswordHash, null)`（注释 D-Bw345-32）。tags 的清除同理，第二个 SET NULL。
+
+细节三：**整个字段应用段是一个事务**（批次 1 L-M1 收口）：
 
 ```java
-if (clearPassword) {
-    // MyBatis-Plus's default NOT_NULL update strategy skips null fields in
-    // updateById — the clear must be an explicit SET NULL (D-Bw345-32).
-    shortLinkMapper.update(null, new LambdaUpdateWrapper<ShortLink>()
-            .eq(ShortLink::getId, link.getId())
-            .set(ShortLink::getAccessPasswordHash, null));
-    link.setAccessPasswordHash(null);
-}
-shortLinkMapper.updateById(link);
+        transactionTemplate.executeWithoutResult(status -> {
+            if (clearPassword) { /* SET NULL 清口令 */ }
+            if (clearTags) { /* SET NULL 清 tags */ }
+            shortLinkMapper.updateById(link);
+            if (replacement != null) {
+                variantMapper.delete(new LambdaQueryWrapper<LinkVariant>()
+                        .eq(LinkVariant::getLinkId, link.getId()));
+                insertVariants(link, replacement);
+            }
+        });
 ```
-（`src/main/java/com/linkforge/link/service/ShortLinkService.java:496-504`）
+（`src/main/java/com/linkforge/link/service/ShortLinkService.java` 的 update 事务段）
 
-细节三：variants 整组替换（:505-511）在小事务里先 `DELETE` 再 `insertVariants`，6.1 课的整组语义在这里落地。主行 updateById 不在这个事务里，因为主行更新失败时 variants 根本不会被触碰。
+旧版是三段分离写（清密码一段、主行一段、变体替换一个小事务），中途失败留半截状态；L-M1 之后一次 PATCH 是一个原子单位，形状与 create、delete 对齐（4.3 例 2 有对照分析）。注意校验段还有一个批次 3a 的新增物：变体整组校验现在包含每条 matchRule 的严格解析——规则写错在写入前 400，且「什么都不改」的空更新判定也把 tags 算了进去。
 
-**缓存收尾段**（:512-519）是本课主线，5.6 节专讲。
+**缓存收尾段**是本课主线，5.6 节专讲。
 
 ### 5.4 disable/enable/delete：两个轻写与一个双删
 
@@ -157,7 +163,7 @@ public void delete(String code) {
     cacheBus.publishL1Invalidate(code);
 }
 ```
-（`src/main/java/com/linkforge/link/service/ShortLinkService.java:531-558`）
+（`src/main/java/com/linkforge/link/service/ShortLinkService.java` 的 setStatus 与 delete，现位于文件后段）
 
 setStatus 与 delete 的收尾序列完全一致，差别在中间：delete 是事务内双删（主行逻辑删加 variants 硬删同事务，C3-N3），并且用 `evictCache` 主动删除而不是 `cacheUrl` 写穿。停用后的短链不该再有任何缓存可命中，删干净比预热更符合语义。
 
@@ -179,9 +185,9 @@ List<String> selectAllCodes();
 
 ### 5.5 peek/forget：两参删除的时序纪律
 
-update/setStatus/delete 都在写之前先 `peek`、提交后 `forget(code, priorFlight)`（:495/:512、:535/:537、:548/:554）。要理解这组配合，先知道 `SingleFlight` 是什么：同码并发读的合并器，第一个到的人执行查询，后来的人搭车等结果。模块 8.4 深讲它的实现，本课只讲写路径必须遵守的纪律。
+update/setStatus/delete 都在写之前先 `peek`、提交后 `forget(code, priorFlight)`。要理解这组配合，先知道 `SingleFlight` 是什么：同码并发读的合并器，第一个到的人执行查询，后来的人搭车等结果。模块 8.4 深讲它的实现，本课只讲写路径必须遵守的纪律。
 
-`peek` 返回「此刻正在飞行中的那个读任务」（`SingleFlight.java:103-106`）。`forget(code, priorFlight)` 只删除「仍然是 priorFlight 那一个」的飞行记录（:115-119）。`SingleFlight.java:111-113` 的注释承认了一个残留窗口：peek 之后、提交之前新起飞的读不会被 forget 掉。update 的注释（:492-494）解释了为什么这个窗口可接受：
+`peek` 返回「此刻正在飞行中的那个读任务」。`forget(code, priorFlight)` 只删除「仍然是 priorFlight 那一个」的飞行记录。`SingleFlight` 的注释承认了一个残留窗口：peek 之后、提交之前新起飞的读不会被 forget 掉。update 的注释解释了为什么这个窗口可接受：
 
 ```java
 // Snapshot the in-flight row read BEFORE the commit so the post-write forget
@@ -218,74 +224,51 @@ cacheBus.publishL1Invalidate(code);
 ### 5.7 CSV 导出：BOM、转义、1 万行封顶
 
 ```java
-/** CSV of every own link, capped at 10k rows; BOM keeps Excel happy with UTF-8. */
-public String exportOwnCsv() {
-    AuthUser user = requireUser();
-    StringBuilder sb = new StringBuilder("\uFEFFcode,original_url,title,status,expire_at,created_at\n");
-    int exported = 0;
-    long page = 1;
-    while (exported < 10000) {
-        PageResponse<ShortLinkDetail> chunk = pageOwn(user, page++, 500);
-        for (ShortLinkDetail link : chunk.getRecords()) {
-            sb.append(csvRow(link));
-            exported++;
+    /** CSV of every own link, capped at 10k rows; BOM keeps Excel happy with UTF-8. */
+    public String exportOwnCsv(String keyword, String tag) {
+        AuthUser user = requireUser();
+        String safeTag = normalizeTagFilter(tag);
+        StringBuilder sb = new StringBuilder("\uFEFFcode,original_url,title,status,expire_at,created_at\n");
+        int exported = 0;
+        long page = 1;
+        while (exported < EXPORT_MAX_ROWS) {
+            PageResponse<ShortLinkDetail> chunk = pageOwn(user, page++, 500, keyword, safeTag);
+            // …逐行 csvRow 拼接
         }
-        if (chunk.getRecords().isEmpty() || chunk.getCurrent() >= chunk.getPages()) {
-            break;
-        }
+        return sb.toString();
     }
-    return sb.toString();
-}
 ```
-（`src/main/java/com/linkforge/link/service/ShortLinkService.java:304-320`）
+（`src/main/java/com/linkforge/link/service/ShortLinkService.java` 的 exportOwnCsv，节选）
 
-三个实现要点。表头前的 `\uFEFF` 是 UTF-8 BOM，Excel 看见它才按 UTF-8 解码中文 title。分页复用 `pageOwn`（每页 500），与列表接口同一套视野与过滤，导出的永远是「我能看见的」。10000 行封顶（:309）是内存保护，`StringBuilder` 全量拼完才返回。每行经 `csvRow`（:322-330）逐字段调 `CsvFormat.escape`（`CsvFormat.java:9-17`）：含逗号、引号、换行任一字符的值加引号包裹，内部引号翻倍，这是 RFC4180 的最小转义集。
+三个实现要点。表头前的 `\uFEFF` 是 UTF-8 BOM，Excel 看见它才按 UTF-8 解码中文 title。分页复用 `pageOwn`（每页 500），与列表接口同一套视野与过滤——批次 3 后导出接受与列表相同的 keyword/tag 参数，「看到什么导出什么」。`EXPORT_MAX_ROWS` = 10000 行封顶是内存保护，`StringBuilder` 全量拼完才返回。每行经 `csvRow` 逐字段调 **`CsvFormat.escapeSpreadsheet`**（不再是裸 escape）：先做 RFC4180 结构转义，再把以 `=`、`+`、`-`、`@`、Tab、CR 开头的单元格加单引号前缀中和——标题里躺着一个 `=cmd|...` 时，导出的 CSV 在 Excel 里打开就是一次公式注入，审计 M8 抓的就是这格（机制见 2.2 的 CsvFormat 段；原始点击导出在 11.3 用同一函数）。
 
 ### 5.8 CSV 导入：一个限流桶、两个上限、一条复用纪律
 
 ```java
-public ImportResponse importCsv(MultipartFile file) {
-    AuthUser user = requireUser();
-    LinkForgeProperties.RateLimit rl = properties.getRateLimit();
-    RateLimitDecision decision = rateLimiter.acquire(
-            RateLimitKeys.sw(rl.getKeyPrefix(), "import:user:" + user.getUserId()),
-            rl.getImportMax(), rl.getImportWindowSeconds());
-    if (!decision.allowed()) {
-        meterRegistry.counter("linkforge.ratelimit.rejected", "entry", "import").increment();
-        throw new RateLimitedException(decision.retryAfterSeconds());
-    }
-    if (file == null || file.isEmpty()) {
-        throw new BizException("file is required");
-    }
-    if (file.getSize() > MAX_IMPORT_BYTES) {
-        throw new BizException("file must be at most 256 KiB");
+    public ImportResponse importCsv(MultipartFile file, String idempotencyKey) {
+        AuthUser user = requireUser();
+        LinkForgeProperties.RateLimit rl = properties.getRateLimit();
+        boolean keyed = idempotencyKey != null && !idempotencyKey.isBlank()
+                && file != null && !file.isEmpty();
+        String idemKey = keyed
+                ? rl.getKeyPrefix() + "idem-import:" + user.getUserId() + ":" + idempotencyKey : null;
+        // keyed 时：读字节 → 文件 SHA-256 指纹 → 先查结算重放 → 再抢在途租约（见下）
+        // 然后才是限流桶、文件校验、解析、逐行 doCreate
     }
 ```
-（`src/main/java/com/linkforge/link/service/ShortLinkService.java:339-354`）
+（`src/main/java/com/linkforge/link/service/ShortLinkService.java` 的 importCsv，节选）
 
-方法 javadoc（:332-338）概括了全部设计：专属 `import:user` 限流桶（默认 5 次/60 秒，`application.yml:196-199`），绝不占 create 桶；结构性拒绝先于任何写；然后每条记录独立走 doCreate。三个数字各有出处：256 KiB 是 `MAX_IMPORT_BYTES`（:96），100 行是 `MAX_IMPORT_ROWS`（:97），都写在常量区并带决策编号 D-C3-25/16。
+原有骨架不变：专属 `import:user` 限流桶（默认 5 次/60 秒），绝不占 create 桶；结构性拒绝（空文件、超 256 KiB、超 100 行、缺 original_url 列）先于任何写；然后每条记录独立走 doCreate，坏行只产生一个 `RowFailure` 条目、邻居行照常落库，`rowReason` 把数据库约束异常翻译成固定短句防止 SQL 细节外泄。
 
-行循环（:375-385）是部分成功语义的现场：
+批次 3b 在骨架前面加了**可选的幂等头**（旧教材说「导入刻意不支持幂等键」——已被推翻，本段即现行规则）：
 
-```java
-for (CsvImportParser.CsvRow row : parsed.rows()) {
-    if (row.cells().stream().allMatch(c -> c == null || c.isBlank())) {
-        continue;
-    }
-    try {
-        CreateShortLinkResponse created = doCreate(importRowRequest(row, columns), user, null);
-        successes.add(new ImportResponse.RowSuccess(row.fileLine(), created.getCode()));
-    } catch (BizException | DataIntegrityViolationException ex) {
-        failures.add(new ImportResponse.RowFailure(row.fileLine(), rowReason(ex)));
-    }
-}
-return new ImportResponse(successes.size(), failures.size(), successes, failures);
-```
-（`src/main/java/com/linkforge/link/service/ShortLinkService.java:375-386`）
+1. **文件指纹**：keyed 时先读全部字节算 SHA-256。导入的「请求体」是一个文件，指纹就用文件哈希，不需要 create 那套规范形。
+2. **结算重放先于限流**：键 `idem-import:{userId}:{key}` 已结算 → 存的 JSON 报告里带文件指纹，同文件直接把原报告返回（不烧 import 桶，与 create 同规则）；异文件 → 409 `IDEMPOTENCY_KEY_REUSED`。
+3. **在途租约（修复波 M5）**：结算缓存挡不住并发——两个同 key 请求同时读到未结算、同时执行整份导入，链会建两遍。`ImportIdempotencyLease`（link/support）用同一个键抢在途租约：值 `pending:{ownerToken}:{fileSha256}`，TTL 120 秒（导入比 create 慢一个量级），SET NX 抢。输家按值里的文件指纹分流：同文件 → 409 `IDEMPOTENCY_IN_PROGRESS`（回去等结算后重放）；异文件 → 409 `IDEMPOTENCY_KEY_REUSED`。抢租约时发现键已结算 → 抛内部信号 `LeaseAlreadySettled` 携带报告，importCsv 接住直接返回（结算恰好在两次读之间落地的竞态）。
+4. **释放与结算都是 Lua CAS**：凭 ownerToken 比对才删/才写，绝不误删别人的租约。写行开始后（`writesStarted`）失败不再释放租约——已提交的行回不来，释放只会放第二个执行者进来重复建链；改为等结算或 TTL 过期。Redis 不可用时 fail-open 无租约执行（导入可用性优先，与 create 同立场），并打 `linkforge.cache.failopen{op=idem_import_lease}` 计数。
+5. **范围声明（必读）**：租约类上方有整段 M5 scope 注释——**崩溃恢复明确不在覆盖范围内**：执行者进程在写行中途死掉，租约要等 TTL 到期、结算永不落地，同 key 重试会把已提交的行再建一遍新码。审计合同 §12.4 接受了这个边界（换取不引入操作表与检查点机制），批 4 若重开 M5，第一件事就是补这一格。
 
-一条坏行只产生一个 `RowFailure` 条目，邻居行照常落库。`rowReason`（:439-444）把数据库约束异常翻译成固定短句「row violates a database constraint」，防止 Spring 原生约束消息把 SQL 细节漏给客户端。
-
-**防漂移**是导入设计的核心词。`importRowRequest`（:392-417）把 CSV 行映射成 `CreateShortLinkRequest`，然后**逐行调用 doCreate**，而不是重写一套校验。javadoc :336-337 写明理由：Bloom 播种、广播、缓存预热全部来自 doCreate 的提交后尾部，若导入另写一套，两条入口的行为迟早漂移。坏处也直白：单行失败无法回滚别的行（本来也不打算回滚），且导入不支持幂等键，Controller 注释（`ShortLinkController.java:63-64`）写明这是刻意的，响应本身就是逐行报告。
+**防漂移**仍是导入设计的核心词。`importRowRequest` 把 CSV 行映射成 `CreateShortLinkRequest`，然后**逐行调用 doCreate**，而不是重写一套校验：Bloom 播种、广播、缓存预热全部来自 doCreate 的提交后尾部，若导入另写一套，两条入口的行为迟早漂移。
 
 **密码列永不回显**有两处防线。`importRowRequest` 把 `access_password` 列读进请求（:402）交给 doCreate 正常加密。成功行只回 `row` 与 `code` 两个字段（`ImportResponse.java:13-14`），失败行的 reason 是固定短句，javadoc（:389-391）写明「Values are never logged (the access_password column especially, D-C3-25)」。单元格内容在任何路径上都不会回到客户端或日志。
 
@@ -301,7 +284,7 @@ return new ImportResponse(successes.size(), failures.size(), successes, failures
 
 **pub/sub 广播失效**。是什么：写操作通过 Redis 频道通知所有实例删本地缓存。为什么需要：L1 是进程内的，多实例部署下别的进程看不见本进程的写。不用会怎样：用户在实例 A 改链，跳转打到实例 B，B 的 L1 还在用旧值直到 TTL。
 
-**部分成功语义**。是什么：批量操作逐项独立提交，失败项进入报告而不是拖垮全批。为什么需要：100 行的导入第 87 行 URL 非法，前 86 行已合法，全部回滚等于惩罚正确的行。不用会怎样：要么整批成功要么整批失败，用户为一条错行重传整个文件，且重传的行全部重建（无幂等键）。代价：客户端必须解析逐行报告，这正是 `ImportResponse` 存在的原因。
+**部分成功语义**。是什么：批量操作逐项独立提交，失败项进入报告而不是拖垮全批。为什么需要：100 行的导入第 87 行 URL 非法，前 86 行已合法，全部回滚等于惩罚正确的行。不用会怎样：要么整批成功要么整批失败，用户为一条错行重传整个文件，且不带幂等键重传时已成功的行全部重建。代价：客户端必须解析逐行报告，这正是 `ImportResponse` 存在的原因；带幂等键时整份报告被结算缓存（5.8），重传同文件直接回放报告。
 
 ## 7. 可视化
 
