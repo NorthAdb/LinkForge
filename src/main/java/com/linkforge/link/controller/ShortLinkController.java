@@ -49,15 +49,18 @@ public class ShortLinkController {
 
     @GetMapping
     public ApiResponse<PageResponse<ShortLinkDetail>> list(@RequestParam(defaultValue = "1") int page,
-                                                           @RequestParam(defaultValue = "20") int size) {
-        return ApiResponse.ok(shortLinkService.list(page, size));
+                                                           @RequestParam(defaultValue = "20") int size,
+                                                           @RequestParam(required = false) String keyword,
+                                                           @RequestParam(required = false) String tag) {
+        return ApiResponse.ok(shortLinkService.list(page, size, keyword, tag));
     }
 
     @GetMapping(value = "/export", produces = "text/csv;charset=UTF-8")
-    public ResponseEntity<String> export() {
+    public ResponseEntity<String> export(@RequestParam(required = false) String keyword,
+                                         @RequestParam(required = false) String tag) {
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=links.csv")
-                .body(shortLinkService.exportOwnCsv());
+                .body(shortLinkService.exportOwnCsv(keyword, tag));
     }
 
     /** C3 (D-C3-14): synchronous CSV import. D-C3-23: the Idempotency-Key header is

@@ -21,6 +21,9 @@ public class LinkVariant {
     private String variantKey;
     private String targetUrl;
     private Integer weight;
+    /** Batch 3a: optional dynamic-routing match rule as JSON text (see MatchRule);
+     * null = wildcard, the variant joins every candidate set. */
+    private String matchRule;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

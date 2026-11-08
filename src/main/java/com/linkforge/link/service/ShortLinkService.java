@@ -27,7 +27,9 @@ import com.linkforge.link.support.ClickFilter;
 import com.linkforge.link.support.CsvFormat;
 import com.linkforge.link.support.CsvImportParser;
 import com.linkforge.link.support.LinkAccessTokens;
+import com.linkforge.link.support.LinkTags;
 import com.linkforge.link.support.LinkValidations;
+import com.linkforge.link.support.MatchRule;
 import com.linkforge.link.support.PhishingPolicy;
 import com.linkforge.link.support.ShortCodes;
 import com.linkforge.link.support.ShortLinkRowLoader;
@@ -39,6 +41,7 @@ import com.linkforge.link.support.VariantPicker;
 import com.linkforge.security.AuthUser;
 import com.linkforge.security.UserContext;
 import com.linkforge.stats.service.ClickRecordService;
+import com.linkforge.stats.support.ClickDimensions;
 import jakarta.annotation.PreDestroy;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -56,6 +59,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
@@ -216,11 +220,14 @@ public class ShortLinkService {
             LinkValidations.requireValidCustomCode(customCode);
         }
         String passwordHash = encodeAccessPassword(request.getAccessPassword());
+        // Batch 3a: tags normalize (and 400 on a bad tag) before any write, like variants.
+        String tags = LinkTags.normalize(request.getTags());
 
         ShortLink link = new ShortLink();
         link.setTenantId(user.getTenantId());
         link.setOriginalUrl(url);
         link.setTitle(request.getTitle());
+        link.setTags(tags);
         link.setStatus(1);
         link.setExpireAt(request.getExpireAt());
         link.setCreatedBy(user.getUserId());
@@ -282,12 +289,13 @@ public class ShortLinkService {
         return new CreateShortLinkResponse(link.getId(), link.getCode(), url, "/r/" + link.getCode());
     }
 
-    public PageResponse<ShortLinkDetail> list(int page, int size) {
+    public PageResponse<ShortLinkDetail> list(int page, int size, String keyword, String tag) {
         AuthUser user = requireUser();
-        return pageOwn(user, Math.max(1, page), size < 1 || size > 100 ? 20 : size);
+        return pageOwn(user, Math.max(1, page), size < 1 || size > 100 ? 20 : size, keyword, tag);
     }
 
-    private PageResponse<ShortLinkDetail> pageOwn(AuthUser user, long current, long pageSize) {
+    private PageResponse<ShortLinkDetail> pageOwn(AuthUser user, long current, long pageSize,
+                                                  String keyword, String tag) {
         LambdaQueryWrapper<ShortLink> query = new LambdaQueryWrapper<ShortLink>()
                 .orderByDesc(ShortLink::getId);
         if (isTenantWide(user)) {
@@ -295,19 +303,55 @@ public class ShortLinkService {
         } else {
             query.eq(ShortLink::getCreatedBy, user.getUserId());
         }
+        applyFilters(query, keyword, tag);
         Page<ShortLink> result = shortLinkMapper.selectPage(new Page<>(current, pageSize), query);
         List<ShortLinkDetail> records = result.getRecords().stream().map(ShortLinkService::toDetail).toList();
         return new PageResponse<>(records, result.getTotal(), result.getCurrent(), result.getSize(), result.getPages());
     }
 
-    /** CSV of every own link, capped at 10k rows; BOM keeps Excel happy with UTF-8. */
-    public String exportOwnCsv() {
+    /**
+     * Batch 3a list/export filters (both feed pageOwn, so the export's row set is
+     * the list's row set). keyword: case rules follow each column's collation
+     * (code stays case-sensitive per V4); LIKE wildcards in the input are escaped
+     * so a search for "50%" means the literal text. tag: whole-word FIND_IN_SET
+     * over the normalized stored string — a substring ("dev" in "devops") never
+     * matches; an out-of-vocabulary tag value simply matches nothing.
+     */
+    private static void applyFilters(LambdaQueryWrapper<ShortLink> query, String keyword, String tag) {
+        if (keyword != null && !keyword.isBlank()) {
+            String trimmed = keyword.trim();
+            if (trimmed.length() > 64) {
+                throw new BizException(400, "keyword must be at most 64 characters");
+            }
+            String pattern = escapeLike(trimmed);
+            query.and(w -> w.like(ShortLink::getCode, pattern)
+                    .or().like(ShortLink::getTitle, pattern)
+                    .or().like(ShortLink::getOriginalUrl, pattern));
+        }
+        if (tag != null && !tag.isBlank()) {
+            String normalized = tag.trim().toLowerCase(Locale.ROOT);
+            if (!LinkTags.isValidTag(normalized)) {
+                query.apply("1 = 0");
+            } else {
+                query.apply("FIND_IN_SET({0}, tags)", normalized);
+            }
+        }
+    }
+
+    /** Backslash is MySQL's default LIKE escape; it must escape itself first. */
+    private static String escapeLike(String value) {
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+    }
+
+    /** CSV of every own link (optionally keyword/tag filtered), capped at 10k rows;
+     * BOM keeps Excel happy with UTF-8. */
+    public String exportOwnCsv(String keyword, String tag) {
         AuthUser user = requireUser();
         StringBuilder sb = new StringBuilder("\uFEFFcode,original_url,title,status,expire_at,created_at\n");
         int exported = 0;
         long page = 1;
         while (exported < 10000) {
-            PageResponse<ShortLinkDetail> chunk = pageOwn(user, page++, 500);
+            PageResponse<ShortLinkDetail> chunk = pageOwn(user, page++, 500, keyword, tag);
             for (ShortLinkDetail link : chunk.getRecords()) {
                 sb.append(csvRow(link));
                 exported++;
@@ -455,7 +499,8 @@ public class ShortLinkService {
         Map<String, String> utm = UtmMerger.canonical(request.getUtmSource(), request.getUtmMedium(),
                 request.getUtmCampaign(), request.getUtmTerm(), request.getUtmContent());
         if (!hasUrl && request.getTitle() == null && request.getExpireAt() == null
-                && !clearPassword && !setPassword && utm.isEmpty() && request.getVariants() == null) {
+                && !clearPassword && !setPassword && utm.isEmpty() && request.getVariants() == null
+                && request.getTags() == null) {
             throw new BizException("nothing to update");
         }
         if (clearPassword && setPassword) {
@@ -468,6 +513,10 @@ public class ShortLinkService {
         // D-C3-6: null = untouched, [] = clear back to single-target).
         List<LinkVariant> replacement = request.getVariants() == null
                 ? null : validateVariants(request.getVariants());
+        // Batch 3a: tags share the variants three-state shape — null = untouched,
+        // [] (or all-blank) normalizes to null = clear, otherwise replace.
+        String normalizedTags = request.getTags() == null ? null : LinkTags.normalize(request.getTags());
+        boolean clearTags = request.getTags() != null && normalizedTags == null;
         ShortLink link = getOwnedLink(code);
         String effectiveUrl = link.getOriginalUrl();
         // D-C1-6: utm fields alone are a valid update; merge into the provided or the
@@ -481,6 +530,9 @@ public class ShortLinkService {
         }
         if (request.getTitle() != null) {
             link.setTitle(request.getTitle());
+        }
+        if (normalizedTags != null) {
+            link.setTags(normalizedTags);
         }
         if (request.getExpireAt() != null) {
             link.setExpireAt(request.getExpireAt());
@@ -507,6 +559,15 @@ public class ShortLinkService {
                         .eq(ShortLink::getId, link.getId())
                         .set(ShortLink::getAccessPasswordHash, null));
                 link.setAccessPasswordHash(null);
+            }
+            if (clearTags) {
+                // Same NOT_NULL trap as the password clear: explicit SET NULL, and the
+                // in-memory row is nulled BEFORE updateById so it cannot write the old
+                // value back.
+                shortLinkMapper.update(null, new LambdaUpdateWrapper<ShortLink>()
+                        .eq(ShortLink::getId, link.getId())
+                        .set(ShortLink::getTags, null));
+                link.setTags(null);
             }
             shortLinkMapper.updateById(link);
             if (replacement != null) {
@@ -711,19 +772,33 @@ public class ShortLinkService {
         // D-C3-8/10: the draw happens only after every gate passed, and a non-empty
         // variant set always wins over the cached originalUrl (the cache stays a
         // single-URL hint, never the Location truth for a split link).
-        LinkVariant picked = pickVariant(link.getId());
+        LinkVariant picked = pickVariant(link.getId(), request);
         return new RedirectOutcome.Redirect(link,
                 picked != null ? picked.getTargetUrl() : originalUrl,
                 picked != null ? picked.getVariantKey() : null);
     }
 
-    /** D-C3-8: weighted draw over the link's variants; null = single-target link. */
-    private LinkVariant pickVariant(Long linkId) {
+    /**
+     * D-C3-8: weighted draw over the link's variants; null = single-target link.
+     * Batch 3a: match rules narrow the candidate set first (device/os from the
+     * SAME ClickDimensions classification the stats pipeline buckets by,
+     * language from the Accept-Language primary tag); when no rule matches, the
+     * draw falls back to the full set. Variants ride the per-request DB read
+     * (selectByLinkId) — only URL strings are cached — so a rule change needs no
+     * extra invalidation beyond the existing write path.
+     */
+    private LinkVariant pickVariant(Long linkId, HttpServletRequest request) {
         List<LinkVariant> variants = variantMapper.selectByLinkId(linkId);
         if (variants.isEmpty()) {
             return null;
         }
-        return VariantPicker.pick(variants, ThreadLocalRandom.current()::nextDouble);
+        String userAgent = request.getHeader("User-Agent");
+        List<LinkVariant> candidates = MatchRule.filterCandidates(variants,
+                ClickDimensions.device(userAgent),
+                ClickDimensions.os(userAgent),
+                MatchRule.primaryTag(request.getHeader("Accept-Language")),
+                Instant.now());
+        return VariantPicker.pick(candidates, ThreadLocalRandom.current()::nextDouble);
     }
 
     /** B3: the unlock cookie for this code, or null when the request carries none. */
@@ -843,6 +918,9 @@ public class ShortLinkService {
             row.setVariantKey(spec.getKey());
             row.setTargetUrl(url);
             row.setWeight(spec.getWeight());
+            // Batch 3a: the match rule is parsed + domain-validated here (400 on any
+            // defect) and stored verbatim; the redirect re-parses it leniently.
+            row.setMatchRule(MatchRule.validate(spec.getMatchRule()));
             rows.add(row);
         }
         return rows;
@@ -861,7 +939,8 @@ public class ShortLinkService {
 
     private static List<ShortLinkDetail.VariantView> toViews(List<LinkVariant> variants) {
         return variants.stream()
-                .map(v -> new ShortLinkDetail.VariantView(v.getVariantKey(), v.getTargetUrl(), v.getWeight()))
+                .map(v -> new ShortLinkDetail.VariantView(v.getVariantKey(), v.getTargetUrl(),
+                        v.getWeight(), v.getMatchRule()))
                 .toList();
     }
 
@@ -1026,6 +1105,6 @@ public class ShortLinkService {
     private static ShortLinkDetail toDetail(ShortLink link) {
         return new ShortLinkDetail(link.getId(), link.getCode(), link.getOriginalUrl(), link.getTitle(),
                 link.getStatus(), link.getExpireAt(), link.getCreatedAt(), link.getUpdatedAt(),
-                link.getAccessPasswordHash() != null, null);
+                link.getAccessPasswordHash() != null, null, LinkTags.split(link.getTags()));
     }
 }

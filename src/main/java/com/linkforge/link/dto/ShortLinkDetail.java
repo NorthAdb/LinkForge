@@ -21,7 +21,9 @@ public class ShortLinkDetail {
     private boolean passwordProtected;
     /** C3 (D-C3-13): the link's A/B variants, or null on single-target links and list rows. */
     private List<VariantView> variants;
+    /** Batch 3a: the link's tags as an array (empty when untagged). */
+    private List<String> tags;
 
-    public record VariantView(String key, String url, Integer weight) {
+    public record VariantView(String key, String url, Integer weight, String matchRule) {
     }
 }
