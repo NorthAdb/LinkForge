@@ -15,4 +15,11 @@ public interface ApiKeyMapper extends BaseMapper<ApiKey> {
      * filter). Business column -> JVM clock passed in (B-wave2-fix D-Bw2fix-1). */
     @Update("UPDATE lf_api_key SET last_used_at = #{now} WHERE id = #{id}")
     void touchLastUsed(@Param("id") long id, @Param("now") LocalDateTime now);
+
+    /** Audit M7: an admin password reset is compromise recovery — every still-live
+     * key of the user (USER and TENANT scope alike) is revoked with the password,
+     * permanently. Rows are kept (revoked_at is the tombstone the auth filter
+     * uses to tell a known-but-dead key from an unknown one). */
+    @Update("UPDATE lf_api_key SET revoked_at = #{now} WHERE user_id = #{userId} AND revoked_at IS NULL")
+    int revokeAllForUser(@Param("userId") Long userId, @Param("now") LocalDateTime now);
 }

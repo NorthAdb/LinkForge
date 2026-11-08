@@ -4,12 +4,22 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.linkforge.auth.RefreshToken;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 import java.time.LocalDateTime;
 
 @Mapper
 public interface RefreshTokenMapper extends BaseMapper<RefreshToken> {
+
+    /**
+     * Locking current read of the presented token's row (audit M1): inside the
+     * refresh transaction the row is re-read FOR UPDATE after the owning
+     * user's row lock is held, so the revoked/rotated state validated here is
+     * the state the rotation then acts on — no read/act gap.
+     */
+    @Select("SELECT * FROM lf_refresh_token WHERE token_hash = #{tokenHash} FOR UPDATE")
+    RefreshToken selectByHashForUpdate(@Param("tokenHash") String tokenHash);
 
     /**
      * The rotation itself: a single conditional UPDATE so two concurrent refreshes

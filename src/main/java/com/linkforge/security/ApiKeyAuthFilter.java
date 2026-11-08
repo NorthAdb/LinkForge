@@ -45,6 +45,10 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 
     public static final String API_KEY_HEADER = "X-API-Key";
     private static final String TOUCH_KEY_PREFIX = "linkforge:apikey:touch:";
+    /** Byte-identical to the JWT forced-change wall in JwtAuthFilter (audit M7):
+     * one wall, one body, whichever credential type knocked. */
+    private static final String FORCED_CHANGE_BODY =
+            "{\"code\":403,\"message\":\"PASSWORD_CHANGE_REQUIRED\",\"data\":null}";
 
     private final ApiKeyService apiKeyService;
     private final UserAccountMapper userAccountMapper;
@@ -85,8 +89,21 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
                 writeJson(response, 401, "{\"code\":401,\"message\":\"invalid api key\",\"data\":null}");
                 return;
             }
+            // The owner row decides both the tombstone distinction below and
+            // the live-key rechecks; selectById hides logically deleted owners.
+            UserAccount owner = userAccountMapper.selectById(key.getUserId());
             if (key.getRevokedAt() != null) {
-                // still a uniform 401 outside; the tag just separates the reasons (Bw2-N3)
+                // Audit M7 tombstone: a KNOWN revoked key whose owner is still
+                // behind the forced-change wall earns the wall's 403 — the
+                // holder demonstrably possesses the (dead) key, so telling them
+                // "change the password first" leaks nothing. Once the owner has
+                // changed the password the same key is back to a uniform 401,
+                // exactly like any other revoked key (Bw2-N3 tag separation).
+                if (owner != null && isMustChange(owner)) {
+                    meterRegistry.counter("linkforge.apikey.auth", "result", "forced_change").increment();
+                    writeJson(response, 403, FORCED_CHANGE_BODY);
+                    return;
+                }
                 meterRegistry.counter("linkforge.apikey.auth", "result", "revoked").increment();
                 writeJson(response, 401, "{\"code\":401,\"message\":\"invalid api key\",\"data\":null}");
                 return;
@@ -95,10 +112,17 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
             // acts as its owning user, so a disabled/removed owner kills the key
             // on the very next request. Member removal relies on this alone —
             // key rows are never touched by member management (plan A5/A7).
-            UserAccount owner = userAccountMapper.selectById(key.getUserId());
             if (owner == null || owner.getStatus() == null || owner.getStatus() != 1) {
                 meterRegistry.counter("linkforge.apikey.auth", "result", "owner_inactive").increment();
                 writeJson(response, 401, "{\"code\":401,\"message\":\"invalid api key\",\"data\":null}");
+                return;
+            }
+            // Audit M7: the forced-change wall covers API keys too, not just
+            // JWT sessions — an admin reset must not leave a working credential
+            // behind just because it authenticates with a key instead of a token.
+            if (isMustChange(owner)) {
+                meterRegistry.counter("linkforge.apikey.auth", "result", "forced_change").increment();
+                writeJson(response, 403, FORCED_CHANGE_BODY);
                 return;
             }
             if (!withinQuota(key, response)) {
@@ -118,6 +142,10 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
             UserContext.clear();
             SecurityContextHolder.clearContext();
         }
+    }
+
+    private static boolean isMustChange(UserAccount owner) {
+        return owner.getMustChangePassword() != null && owner.getMustChangePassword() == 1;
     }
 
     /** Sliding minute window first, then the Asia/Shanghai calendar day (a fixed counter);

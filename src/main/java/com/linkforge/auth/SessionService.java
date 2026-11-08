@@ -1,6 +1,7 @@
 package com.linkforge.auth;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.linkforge.auth.mapper.RefreshTokenMapper;
 import com.linkforge.common.exception.BizException;
 import com.linkforge.common.exception.RateLimitedException;
@@ -17,10 +18,10 @@ import com.linkforge.user.mapper.TenantMapper;
 import com.linkforge.user.mapper.UserAccountMapper;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.servlet.http.HttpServletRequest;
-import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -38,9 +39,19 @@ import java.util.UUID;
  * <p>Every refresh failure answers the same 401 with the same message — unknown,
  * expired, revoked and reused tokens are indistinguishable from the outside
  * (no enumeration oracle), mirroring the login failure posture.
+ *
+ * <p><b>Audit M1 serialization:</b> every mint/revoke critical section runs in
+ * one transaction whose first credential statement locks the user's row
+ * ({@code UserAccountMapper.selectForUpdate}); the global lock order is
+ * tenant row → user row → refresh rows. A rotation therefore commits
+ * atomically with its successor insert (an insert failure rolls the rotation
+ * back — the old token is NOT consumed), and a logout-all / password change /
+ * admin reset that queues behind an in-flight refresh revokes the successor
+ * the refresh just minted: once a revocation returns, no session it covered
+ * can still be alive. token_version only ever moves through the atomic SQL
+ * increment, never a read-modify-write of the whole row.
  */
 @Service
-@RequiredArgsConstructor
 public class SessionService {
 
     /** A just-rotated token re-presented within this window is a benign client
@@ -57,15 +68,48 @@ public class SessionService {
     private final RedisRateLimiter rateLimiter;
     private final LinkForgeProperties properties;
     private final MeterRegistry meterRegistry;
+    private final TransactionTemplate tx;
     private final SecureRandom random = new SecureRandom();
+
+    public SessionService(RefreshTokenMapper refreshTokenMapper,
+                          UserAccountMapper userAccountMapper,
+                          TenantMapper tenantMapper,
+                          JwtService jwtService,
+                          PasswordEncoder passwordEncoder,
+                          RedisRateLimiter rateLimiter,
+                          LinkForgeProperties properties,
+                          MeterRegistry meterRegistry,
+                          PlatformTransactionManager transactionManager) {
+        this.refreshTokenMapper = refreshTokenMapper;
+        this.userAccountMapper = userAccountMapper;
+        this.tenantMapper = tenantMapper;
+        this.jwtService = jwtService;
+        this.passwordEncoder = passwordEncoder;
+        this.rateLimiter = rateLimiter;
+        this.properties = properties;
+        this.meterRegistry = meterRegistry;
+        this.tx = new TransactionTemplate(transactionManager);
+    }
 
     /**
      * Starts a NEW family for a fresh login/register and returns the raw refresh
      * token (the only place the raw value ever exists server-side). Every login
      * is its own family, so logging out one device never disturbs another.
+     *
+     * <p>The mint runs under the user's row lock and re-verifies the account is
+     * still active: an account disabled or removed between credential
+     * verification (AuthService) and this call never gets a session minted.
      */
     public String startSession(Long userId, HttpServletRequest request) {
-        return issue(userId, UUID.randomUUID().toString(), request).raw();
+        return tx.execute(status -> {
+            UserAccount user = userAccountMapper.selectForUpdate(userId);
+            if (!isActive(user)) {
+                throw new BizException(401, "invalid credentials");
+            }
+            Minted minted = prepare(userId, UUID.randomUUID().toString(), request);
+            refreshTokenMapper.insert(minted.row());
+            return minted.raw();
+        });
     }
 
     /**
@@ -78,63 +122,88 @@ public class SessionService {
     }
 
     /**
-     * Rotates a refresh token into a fresh access + refresh pair.
-     *
-     * <p>Deliberately NOT transactional: the reuse path must COMMIT its family
-     * kill and token_version bump before the 401 propagates — a surrounding
-     * transaction would roll the kill back with the exception. Every write here
-     * is a single statement, and the rotation itself is one conditional UPDATE,
-     * so no multi-statement atomicity is needed.
+     * Rotates a refresh token into a fresh access + refresh pair, atomically
+     * under the owning user's row lock (audit M1): validate → rotate → insert
+     * successor → link {@code replaced_by} commit together, and the access
+     * token is built from the token_version read under that lock. A revocation
+     * (logout-all, password change, admin reset/disable) either commits before
+     * this transaction takes the lock — and this rotation then sees the revoked
+     * row and refuses — or queues behind it and revokes the successor too.
      */
     public LoginResponse refresh(String rawToken, HttpServletRequest httpRequest) {
         checkRateLimit("refresh", httpRequest,
                 properties.getRateLimit().getRefreshMax(),
                 properties.getRateLimit().getRefreshWindowSeconds());
-        LocalDateTime now = LocalDateTime.now();
-        RefreshToken row = rawToken == null || rawToken.isBlank() ? null
-                : refreshTokenMapper.selectOne(new LambdaQueryWrapper<RefreshToken>()
-                        .eq(RefreshToken::getTokenHash, sha256Hex(rawToken)));
-        if (row == null) {
+        if (rawToken == null || rawToken.isBlank()) {
             throw new BizException(401, INVALID_REFRESH);
         }
-        if (row.getRevokedAt() != null) {
-            handleRevoked(row, now);
-        }
-        if (!row.getExpiresAt().isAfter(now)) {
+        String hash = sha256Hex(rawToken);
+        // Lock-free peek: it only decides WHOSE row lock serializes this call.
+        // It takes no lock and its result is never trusted — the transaction
+        // re-reads the row FOR UPDATE once the user lock is held.
+        RefreshToken peek = refreshTokenMapper.selectOne(new LambdaQueryWrapper<RefreshToken>()
+                .eq(RefreshToken::getTokenHash, hash));
+        if (peek == null) {
             throw new BizException(401, INVALID_REFRESH);
         }
-        UserAccount user = userAccountMapper.selectById(row.getUserId());
-        if (user == null || user.getStatus() == null || user.getStatus() != 1) {
-            throw new BizException(401, INVALID_REFRESH);
-        }
-        if (refreshTokenMapper.rotate(row.getId(), now) == 0) {
-            // a concurrent refresh won the row between our read and the UPDATE
-            RefreshToken reread = refreshTokenMapper.selectById(row.getId());
-            if (reread != null && reread.getRevokedAt() != null) {
-                handleRevoked(reread, now);
+        LoginResponse[] result = new LoginResponse[1];
+        boolean[] reuseKilled = new boolean[1];
+        tx.executeWithoutResult(status -> {
+            LocalDateTime now = LocalDateTime.now();
+            UserAccount user = userAccountMapper.selectForUpdate(peek.getUserId());
+            RefreshToken row = refreshTokenMapper.selectByHashForUpdate(hash);
+            if (row == null) {
+                throw new BizException(401, INVALID_REFRESH);
             }
+            if (row.getRevokedAt() != null) {
+                if (isReuseKill(row, now)) {
+                    // The kill must COMMIT before the 401 propagates, so it is
+                    // performed here and the exception is raised only after
+                    // execute() returns — throwing inside would roll it back.
+                    refreshTokenMapper.revokeFamily(row.getFamilyId(),
+                            RefreshToken.CAUSE_REUSE_KILL, now);
+                    userAccountMapper.incrementTokenVersion(row.getUserId());
+                    reuseKilled[0] = true;
+                    return;
+                }
+                throw new BizException(401, INVALID_REFRESH);
+            }
+            if (!row.getExpiresAt().isAfter(now)) {
+                throw new BizException(401, INVALID_REFRESH);
+            }
+            if (!isActive(user)) {
+                throw new BizException(401, INVALID_REFRESH);
+            }
+            if (refreshTokenMapper.rotate(row.getId(), now) == 0) {
+                // defensive: under the row lock this should be unreachable,
+                // but a lost rotation is a refusal, never a second successor
+                throw new BizException(401, INVALID_REFRESH);
+            }
+            Minted minted = prepare(user.getId(), row.getFamilyId(), httpRequest);
+            insertSuccessor(minted.row());
+            RefreshToken link = new RefreshToken();
+            link.setId(row.getId());
+            link.setReplacedById(minted.row().getId());
+            refreshTokenMapper.updateById(link);
+            result[0] = buildResponse(user, minted.raw());
+        });
+        if (reuseKilled[0]) {
+            meterRegistry.counter("linkforge.refresh.reuse_kill").increment();
             throw new BizException(401, INVALID_REFRESH);
         }
-        Issued issued = issue(user.getId(), row.getFamilyId(), httpRequest);
-        RefreshToken link = new RefreshToken();
-        link.setId(row.getId());
-        link.setReplacedById(issued.rowId());
-        refreshTokenMapper.updateById(link);
-        return buildResponse(user, issued.raw());
+        return result[0];
     }
 
     /**
-     * A revoked token was presented. Always 401; the only question is whether
-     * the presentation itself is a theft signal worth escalating:
+     * Whether presenting this revoked row is the RFC 9700 theft signal:
      *
      * <ul>
      *   <li>ROTATED within the grace window — benign client race (concurrent
      *       refresh / retry), family untouched.</li>
-     *   <li>ROTATED past the grace window — the RFC 9700 reuse case: the token
-     *       was retired by a legitimate rotation, so whoever presents it now is
-     *       either a thief or a client holding a stolen copy. The whole family
-     *       dies and token_version bumps, killing every outstanding access
-     *       token on its next request.</li>
+     *   <li>ROTATED past the grace window — the token was retired by a
+     *       legitimate rotation, so whoever presents it now is either a thief
+     *       or a client holding a stolen copy: escalate (family kill + version
+     *       bump).</li>
      *   <li>LOGOUT / ADMIN / PASSWORD / REUSE_KILL — a deliberate revocation.
      *       Re-presentation is most plausibly a stale honest client that has
      *       not learned of the revocation yet (e.g. a refresh racing the
@@ -143,20 +212,13 @@ public class SessionService {
      *       Escalating here would let a single logout log the user out on
      *       every device the moment any stale client retries — and would make
      *       "is the logged-out refresh really dead?" untestable, since the
-     *       probe itself would trip the alarm.</li>
+     *       probe itself would trip the alarm. (Batch-2a amendment, kept.)</li>
      * </ul>
      */
-    private void handleRevoked(RefreshToken row, LocalDateTime now) {
-        if (RefreshToken.CAUSE_ROTATED.equals(row.getRevokeCause())) {
-            boolean withinGrace = row.getRevokedAt() != null
-                    && !row.getRevokedAt().plusSeconds(REUSE_GRACE_SECONDS).isBefore(now);
-            if (!withinGrace) {
-                refreshTokenMapper.revokeFamily(row.getFamilyId(), RefreshToken.CAUSE_REUSE_KILL, now);
-                bumpTokenVersion(row.getUserId());
-                meterRegistry.counter("linkforge.refresh.reuse_kill").increment();
-            }
-        }
-        throw new BizException(401, INVALID_REFRESH);
+    private boolean isReuseKill(RefreshToken row, LocalDateTime now) {
+        return RefreshToken.CAUSE_ROTATED.equals(row.getRevokeCause())
+                && row.getRevokedAt() != null
+                && row.getRevokedAt().plusSeconds(REUSE_GRACE_SECONDS).isBefore(now);
     }
 
     /**
@@ -165,6 +227,8 @@ public class SessionService {
      * the asymmetry: the family's ACCESS token stays valid until its natural
      * expiry (at most the configured JWT lifetime) — only logout-all and
      * password change bump token_version and kill access tokens immediately.
+     * The revocation itself takes the owner's row lock first (audit M1), so it
+     * cannot interleave with an in-flight rotation of the same family.
      */
     public void logout(String rawToken, HttpServletRequest httpRequest) {
         checkRateLimit("logout", httpRequest,
@@ -176,17 +240,24 @@ public class SessionService {
         RefreshToken row = refreshTokenMapper.selectOne(new LambdaQueryWrapper<RefreshToken>()
                 .eq(RefreshToken::getTokenHash, sha256Hex(rawToken)));
         if (row != null) {
-            refreshTokenMapper.revokeFamily(row.getFamilyId(),
-                    RefreshToken.CAUSE_LOGOUT, LocalDateTime.now());
+            tx.executeWithoutResult(status -> {
+                userAccountMapper.selectForUpdate(row.getUserId());
+                refreshTokenMapper.revokeFamily(row.getFamilyId(),
+                        RefreshToken.CAUSE_LOGOUT, LocalDateTime.now());
+            });
         }
     }
 
     /** Every session ends now: all refresh rows revoked and token_version bumped,
-     * so outstanding access tokens die on their next request too. */
-    @Transactional
+     * so outstanding access tokens die on their next request too. One locked
+     * transaction (audit M1) — a rotation in flight either commits first and
+     * its successor is revoked here, or starts after and sees revoked rows. */
     public void logoutAll(Long userId) {
-        refreshTokenMapper.revokeAllForUser(userId, RefreshToken.CAUSE_LOGOUT, LocalDateTime.now());
-        bumpTokenVersion(userId);
+        tx.executeWithoutResult(status -> {
+            userAccountMapper.selectForUpdate(userId);
+            refreshTokenMapper.revokeAllForUser(userId, RefreshToken.CAUSE_LOGOUT, LocalDateTime.now());
+            userAccountMapper.incrementTokenVersion(userId);
+        });
     }
 
     /**
@@ -194,29 +265,35 @@ public class SessionService {
      * replaced, the forced-change flag clears, token_version bumps and every
      * refresh row is revoked — including the caller's own session, which must
      * log in again with the new password. Nothing survives a credential change.
+     * Runs under the user's row lock with column-scoped writes (audit M1), so
+     * it can neither lose a concurrent revocation's version bump nor overwrite
+     * one with a stale entity.
      */
-    @Transactional
     public void changePassword(Long userId, String currentPassword, String newPassword) {
-        UserAccount user = userAccountMapper.selectById(userId);
-        if (user == null) {
-            throw new BizException(401, "invalid credentials");
-        }
-        if (!passwordEncoder.matches(currentPassword, user.getPasswordHash())) {
-            throw new BizException(401, "invalid credentials");
-        }
-        user.setPasswordHash(passwordEncoder.encode(newPassword));
-        user.setMustChangePassword(0);
-        user.setTokenVersion(tokenVersionOf(user) + 1);
-        user.setUpdatedAt(LocalDateTime.now());
-        userAccountMapper.updateById(user);
-        refreshTokenMapper.revokeAllForUser(userId, RefreshToken.CAUSE_PASSWORD, LocalDateTime.now());
+        tx.executeWithoutResult(status -> {
+            UserAccount user = userAccountMapper.selectForUpdate(userId);
+            if (user == null || isDeleted(user)) {
+                throw new BizException(401, "invalid credentials");
+            }
+            if (!passwordEncoder.matches(currentPassword, user.getPasswordHash())) {
+                throw new BizException(401, "invalid credentials");
+            }
+            userAccountMapper.update(null, new LambdaUpdateWrapper<UserAccount>()
+                    .eq(UserAccount::getId, userId)
+                    .set(UserAccount::getPasswordHash, passwordEncoder.encode(newPassword))
+                    .set(UserAccount::getMustChangePassword, 0)
+                    .set(UserAccount::getUpdatedAt, LocalDateTime.now()));
+            userAccountMapper.incrementTokenVersion(userId);
+            refreshTokenMapper.revokeAllForUser(userId, RefreshToken.CAUSE_PASSWORD, LocalDateTime.now());
+        });
     }
 
-    private record Issued(String raw, Long rowId) {
+    private record Minted(String raw, RefreshToken row) {
     }
 
-    /** Mints a raw token (32 random bytes, Base64URL) and stores only its hash. */
-    private Issued issue(Long userId, String familyId, HttpServletRequest request) {
+    /** Builds (but does not insert) a refresh row plus its raw token: 32 random
+     * bytes, Base64URL; only the hash is ever stored. */
+    private Minted prepare(Long userId, String familyId, HttpServletRequest request) {
         byte[] bytes = new byte[32];
         random.nextBytes(bytes);
         String raw = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
@@ -235,8 +312,19 @@ public class SessionService {
             }
             row.setUserAgent(ua);
         }
+        return new Minted(raw, row);
+    }
+
+    /**
+     * The successor insert of a rotation — the ONE seam tests may override to
+     * pause or fail a rotation mid-transaction (audit M1 contract tests). The
+     * default is the plain mapper insert, which populates {@code row.id}; an
+     * override must do the same (or delegate here) on its success path. If it
+     * throws, the whole rotation transaction rolls back and the presented
+     * token stays un-rotated and usable.
+     */
+    protected void insertSuccessor(RefreshToken row) {
         refreshTokenMapper.insert(row);
-        return new Issued(raw, row.getId());
     }
 
     private LoginResponse buildResponse(UserAccount user, String rawRefresh) {
@@ -250,14 +338,16 @@ public class SessionService {
         return response;
     }
 
-    private void bumpTokenVersion(Long userId) {
-        UserAccount user = userAccountMapper.selectById(userId);
-        if (user == null) {
-            return;
-        }
-        user.setTokenVersion(tokenVersionOf(user) + 1);
-        user.setUpdatedAt(LocalDateTime.now());
-        userAccountMapper.updateById(user);
+    /** Active = present, not logically deleted, status flag 1. The locking read
+     * behind selectForUpdate bypasses MyBatis-Plus logic-delete, so the deleted
+     * flag is checked explicitly here. */
+    private static boolean isActive(UserAccount user) {
+        return user != null && !isDeleted(user)
+                && user.getStatus() != null && user.getStatus() == 1;
+    }
+
+    private static boolean isDeleted(UserAccount user) {
+        return user.getDeleted() != null && user.getDeleted() == 1;
     }
 
     private void checkRateLimit(String entry, HttpServletRequest request, int max, int windowSeconds) {
