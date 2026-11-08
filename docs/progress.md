@@ -1747,7 +1747,7 @@ grep 复查确认：仓库无 AI/向量/LLM/pgvector/Supabase 依赖（pom 无�
 | #22 | 修复波收尾文档对账 | `9de2156` |
 | #25 | S/N 波 PR-α：S1 A/B 适用性门、S4-4 开窗日、S4-1 stats 快照读、N1 日志与 correlationId、S4-5 认证 503、S3 feed 应用口径（head `32a1ba2`） | `5909dbe` |
 | #24 | S/N 波 PR-γ：S2 控制台闭环小件组（强制改密页、邀请接受、设密 modal、启动会话恢复、导入 refresh 重试、logout-all 按钮、列表筛选；head `e31ae28`） | `ed69514` |
-| 本收尾 PR | S/N 波文档对账 + 本索引章（N2） | 号待合并后补 |
+| #26 | S/N 波文档对账 + 本索引章（N2） | head `a108f1a` → 合并 `88870db4` |
 
 ### 测试计数台阶
 
