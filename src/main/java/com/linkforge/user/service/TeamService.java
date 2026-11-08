@@ -1,6 +1,8 @@
 package com.linkforge.user.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.linkforge.apikey.mapper.ApiKeyMapper;
 import com.linkforge.auth.RefreshToken;
 import com.linkforge.auth.SessionService;
 import com.linkforge.auth.mapper.RefreshTokenMapper;
@@ -56,6 +58,16 @@ import java.util.Locale;
  * MyBatis-Plus logical-delete flag, which is what makes the member's API keys
  * die too (the key filter re-reads the owner row per request). The member's
  * links and webhooks are tenant assets and are never touched.
+ *
+ * <p><b>Audit M2/M7 locking:</b> the member write paths (update / remove /
+ * reset) take the tenant row lock as the FIRST statement of their transaction
+ * and only then re-authorize the caller, re-read the target and count the
+ * active ADMINs — all as locking current reads, never a REPEATABLE READ
+ * snapshot established before the lock. Session effects on the target then
+ * happen under the target's own user row lock (global order: tenant → user →
+ * refresh rows, the same order SessionService uses), with token_version moved
+ * only by the atomic SQL increment. A reset is compromise recovery (M7): it
+ * also permanently revokes every API key the member holds.
  */
 @Service
 @RequiredArgsConstructor
@@ -77,6 +89,7 @@ public class TeamService {
     private final UserAccountMapper userAccountMapper;
     private final TenantMapper tenantMapper;
     private final RefreshTokenMapper refreshTokenMapper;
+    private final ApiKeyMapper apiKeyMapper;
     private final PasswordEncoder passwordEncoder;
     private final RedisRateLimiter rateLimiter;
     private final LinkForgeProperties properties;
@@ -199,17 +212,24 @@ public class TeamService {
     }
 
     /**
-     * Role and/or status change. The guard is evaluated inside this
-     * transaction with the tenant row locked, so concurrent demotions cannot
-     * both pass the last-ADMIN check. A role change alone revokes nothing —
-     * the filters read the role from the row per request, so the new role
-     * simply takes effect on the next request. Disabling is a session kill.
+     * Role and/or status change. Audit M2: the tenant row lock is the FIRST
+     * statement of this transaction; the caller's authority, the target row
+     * and the active-ADMIN set are all (re-)read after it as locking current
+     * reads, so concurrent demotions queue on the lock and the second one
+     * evaluates the guard against the world the first one left behind — a
+     * REPEATABLE READ snapshot taken before the lock can no longer smuggle
+     * a stale "two ADMINs" view into the check. A role change alone revokes
+     * nothing — the filters read the role from the row per request, so the
+     * new role simply takes effect on the next request. Disabling is a
+     * session kill (atomic version increment + refresh revocation, under the
+     * target's user row lock taken by the re-read above).
      */
     @Transactional
     public MemberView updateMember(Long targetId, UpdateMemberRequest request) {
-        UserAccount admin = requireAdmin();
-        tenantMapper.selectForUpdate(admin.getTenantId());
-        UserAccount target = requireTenantMember(admin, targetId);
+        AuthUser caller = requireCaller();
+        tenantMapper.selectForUpdate(caller.getTenantId());
+        requireAdminUnderLock(caller);
+        UserAccount target = requireTenantMemberUnderLock(caller.getTenantId(), targetId);
 
         String newRole = target.getTenantRole();
         if (request.getRole() != null) {
@@ -225,24 +245,31 @@ public class TeamService {
 
         boolean losesActiveAdmin = isActiveAdmin(target)
                 && (!ROLE_ADMIN.equals(newRole) || !Integer.valueOf(1).equals(newStatus));
-        if (losesActiveAdmin && countActiveAdmins(admin.getTenantId()) <= 1) {
+        if (losesActiveAdmin
+                && userAccountMapper.selectActiveAdminIdsForUpdate(caller.getTenantId()).size() <= 1) {
             throw new BizException(400, "the tenant's last ADMIN cannot be demoted or disabled");
         }
 
         boolean disabling = Integer.valueOf(1).equals(target.getStatus())
                 && Integer.valueOf(0).equals(newStatus);
-        target.setTenantRole(newRole);
-        target.setStatus(newStatus);
+        LocalDateTime now = LocalDateTime.now();
+        userAccountMapper.update(null, new LambdaUpdateWrapper<UserAccount>()
+                .eq(UserAccount::getId, target.getId())
+                .set(UserAccount::getTenantRole, newRole)
+                .set(UserAccount::getStatus, newStatus)
+                .set(UserAccount::getUpdatedAt, now));
         if (disabling) {
-            target.setTokenVersion(tokenVersionOf(target) + 1);
-        }
-        target.setUpdatedAt(LocalDateTime.now());
-        userAccountMapper.updateById(target);
-        if (disabling) {
+            userAccountMapper.incrementTokenVersion(target.getId());
             refreshTokenMapper.revokeAllForUser(target.getId(),
-                    RefreshToken.CAUSE_ADMIN, LocalDateTime.now());
+                    RefreshToken.CAUSE_ADMIN, now);
         }
-        return toMemberView(target);
+        UserAccount after = new UserAccount();
+        after.setId(target.getId());
+        after.setUsername(target.getUsername());
+        after.setTenantRole(newRole);
+        after.setStatus(newStatus);
+        after.setCreatedAt(target.getCreatedAt());
+        return toMemberView(after);
     }
 
     /**
@@ -253,18 +280,21 @@ public class TeamService {
      */
     @Transactional
     public void removeMember(Long targetId) {
-        UserAccount admin = requireAdmin();
-        tenantMapper.selectForUpdate(admin.getTenantId());
-        UserAccount target = requireTenantMember(admin, targetId);
-        if (target.getId().equals(admin.getId())) {
+        AuthUser caller = requireCaller();
+        tenantMapper.selectForUpdate(caller.getTenantId());
+        requireAdminUnderLock(caller);
+        UserAccount target = requireTenantMemberUnderLock(caller.getTenantId(), targetId);
+        if (target.getId().equals(caller.getUserId())) {
             throw new BizException(400, "you cannot remove yourself");
         }
-        if (isActiveAdmin(target) && countActiveAdmins(admin.getTenantId()) <= 1) {
+        if (isActiveAdmin(target)
+                && userAccountMapper.selectActiveAdminIdsForUpdate(caller.getTenantId()).size() <= 1) {
             throw new BizException(400, "the tenant's last ADMIN cannot be removed");
         }
-        target.setTokenVersion(tokenVersionOf(target) + 1);
-        target.setUpdatedAt(LocalDateTime.now());
-        userAccountMapper.updateById(target);
+        userAccountMapper.incrementTokenVersion(target.getId());
+        userAccountMapper.update(null, new LambdaUpdateWrapper<UserAccount>()
+                .eq(UserAccount::getId, target.getId())
+                .set(UserAccount::getUpdatedAt, LocalDateTime.now()));
         refreshTokenMapper.revokeAllForUser(target.getId(),
                 RefreshToken.CAUSE_ADMIN, LocalDateTime.now());
         userAccountMapper.deleteById(target.getId());
@@ -275,19 +305,32 @@ public class TeamService {
      * password, shown once in this response and never logged, with the
      * forced-change flag set so the member must replace it before doing
      * anything else. Every existing session of the member dies with it.
+     *
+     * <p>Audit M7: a reset is compromise recovery, not a courtesy unlock —
+     * in the same locked transaction (tenant lock → caller re-authorized →
+     * target user lock) it also permanently revokes EVERY API key the member
+     * holds, USER and TENANT scope alike. Old keys never come back; the
+     * member mints fresh ones only after the forced password change, and
+     * ApiKeyService refuses creation while the flag is set, so a key created
+     * in a race with this reset is either revoked by it or rejected after it.
      */
     @Transactional
     public ResetPasswordResponse resetPassword(Long targetId) {
-        UserAccount admin = requireAdmin();
-        UserAccount target = requireTenantMember(admin, targetId);
+        AuthUser caller = requireCaller();
+        tenantMapper.selectForUpdate(caller.getTenantId());
+        requireAdminUnderLock(caller);
+        UserAccount target = requireTenantMemberUnderLock(caller.getTenantId(), targetId);
         String temporary = newTemporaryPassword();
-        target.setPasswordHash(passwordEncoder.encode(temporary));
-        target.setMustChangePassword(1);
-        target.setTokenVersion(tokenVersionOf(target) + 1);
-        target.setUpdatedAt(LocalDateTime.now());
-        userAccountMapper.updateById(target);
+        LocalDateTime now = LocalDateTime.now();
+        userAccountMapper.update(null, new LambdaUpdateWrapper<UserAccount>()
+                .eq(UserAccount::getId, target.getId())
+                .set(UserAccount::getPasswordHash, passwordEncoder.encode(temporary))
+                .set(UserAccount::getMustChangePassword, 1)
+                .set(UserAccount::getUpdatedAt, now));
+        userAccountMapper.incrementTokenVersion(target.getId());
         refreshTokenMapper.revokeAllForUser(target.getId(),
-                RefreshToken.CAUSE_PASSWORD, LocalDateTime.now());
+                RefreshToken.CAUSE_PASSWORD, now);
+        apiKeyMapper.revokeAllForUser(target.getId(), now);
         return new ResetPasswordResponse(temporary);
     }
 
@@ -309,17 +352,49 @@ public class TeamService {
         return account;
     }
 
-    /** Tenant-scoped member load: another tenant's id is indistinguishable
-     * from a nonexistent one. Removed members are already invisible to the
-     * mapper (logical delete), so they land here as 404 too. */
-    private UserAccount requireTenantMember(UserAccount admin, Long targetId) {
-        UserAccount target = userAccountMapper.selectOne(new LambdaQueryWrapper<UserAccount>()
-                .eq(UserAccount::getId, targetId)
-                .eq(UserAccount::getTenantId, admin.getTenantId()));
-        if (target == null) {
+    /** The authenticated principal, before any database statement. Identity
+     * and tenant come from the principal (never from a pre-lock DB read); the
+     * AUTHORITY is then re-established under the tenant lock by
+     * {@link #requireAdminUnderLock}. */
+    private AuthUser requireCaller() {
+        AuthUser caller = UserContext.get();
+        if (caller == null) {
+            throw new BizException(401, "unauthorized");
+        }
+        return caller;
+    }
+
+    /**
+     * Audit M2 re-authorization: called ONLY after the tenant row lock is
+     * held. The caller's row is re-read as a locking current read and must be
+     * an active ADMIN of the principal's tenant right now — a caller demoted
+     * or disabled while its request queued on the lock is refused here, at
+     * execution time, not on the strength of a stale pre-lock snapshot.
+     */
+    private void requireAdminUnderLock(AuthUser caller) {
+        UserAccount account = userAccountMapper.selectForUpdate(caller.getUserId());
+        if (account == null || isDeleted(account)
+                || !account.getTenantId().equals(caller.getTenantId())
+                || !isActiveAdmin(account)) {
+            throw new BizException(403, "only a tenant ADMIN can manage invitations and members");
+        }
+    }
+
+    /** Tenant-scoped member load under the tenant lock: a locking current
+     * read, so the row the guard evaluates is the row the write then acts on.
+     * Another tenant's id is indistinguishable from a nonexistent one, and a
+     * removed member (the raw locking read bypasses logic-delete) lands here
+     * as 404 too. */
+    private UserAccount requireTenantMemberUnderLock(Long tenantId, Long targetId) {
+        UserAccount target = userAccountMapper.selectForUpdate(targetId);
+        if (target == null || isDeleted(target) || !target.getTenantId().equals(tenantId)) {
             throw new BizException(404, "member not found");
         }
         return target;
+    }
+
+    private static boolean isDeleted(UserAccount user) {
+        return user.getDeleted() != null && user.getDeleted() == 1;
     }
 
     private static MemberView toMemberView(UserAccount user) {
@@ -338,23 +413,12 @@ public class TeamService {
                 && user.getStatus() != null && user.getStatus() == 1;
     }
 
-    private long countActiveAdmins(Long tenantId) {
-        return userAccountMapper.selectCount(new LambdaQueryWrapper<UserAccount>()
-                .eq(UserAccount::getTenantId, tenantId)
-                .eq(UserAccount::getTenantRole, ROLE_ADMIN)
-                .eq(UserAccount::getStatus, 1));
-    }
-
     private static String normalizeRole(String role) {
         String normalized = role.trim().toUpperCase(Locale.ROOT);
         if (!ROLE_ADMIN.equals(normalized) && !ROLE_MEMBER.equals(normalized)) {
             throw new BizException(400, "role must be ADMIN or MEMBER");
         }
         return normalized;
-    }
-
-    private static int tokenVersionOf(UserAccount user) {
-        return user.getTokenVersion() == null ? 0 : user.getTokenVersion();
     }
 
     /** 32 random bytes, Base64URL — the same token shape as refresh tokens. */

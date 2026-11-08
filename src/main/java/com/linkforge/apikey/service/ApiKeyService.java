@@ -9,8 +9,9 @@ import com.linkforge.config.LinkForgeProperties;
 import com.linkforge.security.AuthUser;
 import com.linkforge.user.entity.UserAccount;
 import com.linkforge.user.mapper.UserAccountMapper;
-import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -19,7 +20,6 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
-@RequiredArgsConstructor
 public class ApiKeyService {
 
     private static final String KEY_PREFIX_TAG = "lfk_";
@@ -30,22 +30,52 @@ public class ApiKeyService {
     private final ApiKeyMapper apiKeyMapper;
     private final UserAccountMapper userAccountMapper;
     private final LinkForgeProperties properties;
+    private final TransactionTemplate tx;
     private final SecureRandom random = new SecureRandom();
+
+    public ApiKeyService(ApiKeyMapper apiKeyMapper,
+                         UserAccountMapper userAccountMapper,
+                         LinkForgeProperties properties,
+                         PlatformTransactionManager transactionManager) {
+        this.apiKeyMapper = apiKeyMapper;
+        this.userAccountMapper = userAccountMapper;
+        this.properties = properties;
+        this.tx = new TransactionTemplate(transactionManager);
+    }
 
     /**
      * Mints lfk_{prefix8}_{secret}; only the SHA-256 hex of the whole plaintext is
      * stored. The plaintext is returned once in the response and never logged.
+     *
+     * <p>Audit M7: creation is serialized with admin resets on the creator's
+     * user row. The owner is re-read under that lock and must be active and
+     * clear of the forced-change flag — so a creation racing a reset either
+     * lands BEFORE it (and is revoked by the reset, in the same transaction
+     * that sets the flag) or is rejected AFTER it with the wall's own error.
+     * No ordering leaves a live key behind a pending forced change.
      */
     public ApiKeyDtos.Created create(ApiKeyDtos.CreateRequest request, AuthUser user) {
+        return tx.execute(status -> createUnderLock(request, user));
+    }
+
+    private ApiKeyDtos.Created createUnderLock(ApiKeyDtos.CreateRequest request, AuthUser user) {
+        UserAccount owner = userAccountMapper.selectForUpdate(user.getUserId());
+        if (owner == null || (owner.getDeleted() != null && owner.getDeleted() == 1)
+                || owner.getStatus() == null || owner.getStatus() != 1) {
+            throw new BizException(401, "unauthorized");
+        }
+        if (owner.getMustChangePassword() != null && owner.getMustChangePassword() == 1) {
+            // the same error the JWT wall and the key filter answer with
+            throw new BizException(403, "PASSWORD_CHANGE_REQUIRED");
+        }
         String scope = request.getScope() == null || request.getScope().isBlank()
                 ? "USER" : request.getScope().trim().toUpperCase();
         if (!"USER".equals(scope) && !"TENANT".equals(scope)) {
             throw new BizException(400, "scope must be USER or TENANT");
         }
         if ("TENANT".equals(scope)) {
-            UserAccount creator = userAccountMapper.selectById(user.getUserId());
             // pre-V8 rows have a null role, which reads as MEMBER
-            if (creator == null || !"ADMIN".equals(creator.getTenantRole())) {
+            if (!"ADMIN".equals(owner.getTenantRole())) {
                 throw new BizException(403, "only a tenant ADMIN can mint a TENANT-scope api key");
             }
         }
