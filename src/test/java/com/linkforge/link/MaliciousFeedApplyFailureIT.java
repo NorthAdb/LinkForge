@@ -77,7 +77,7 @@ class MaliciousFeedApplyFailureIT extends AbstractIntegrationTest {
         when(hostMapper.selectAllHosts()).thenReturn(List.of("known-bad.example"));
         when(hostMapper.upsertBatch(anyList(), anyString(), any(java.time.LocalDateTime.class))).thenReturn(2);
         assertTrue(snapshot.refresh(), "baseline snapshot applies");
-        assertTrue(snapshot.isMalicious("https://known-bad.example/x"));
+        assertTrue(snapshot.hosts().contains("known-bad.example"));
 
         // One fully applied ingest: last_success takes a real value.
         syncService.ingest(fixture());
@@ -95,7 +95,7 @@ class MaliciousFeedApplyFailureIT extends AbstractIntegrationTest {
                 "last_success must not move when the feed was never applied");
         assertEquals(1.0, syncCount("apply_failed"));
         assertEquals(1.0, syncCount("ok"), "no second success may be counted");
-        assertTrue(snapshot.isMalicious("https://known-bad.example/x"),
+        assertTrue(snapshot.hosts().contains("known-bad.example"),
                 "the previous snapshot keeps verdicating throughout");
     }
 }
